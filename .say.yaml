@@ -1,0 +1,39 @@
+# sayt verbs for bayt development.
+#
+# bayt is a CUE schema + nushell runtime; it does not bayt-onboard
+# itself (bayt's #project assumes a project; bayt is the framework).
+# Instead these verbs wire the standard sayt commands to bayt's own
+# dev workflow so the sayt:sayt-dev-loop TDD skill can drive iteration.
+#
+#   just sayt doctor    — tools-on-PATH check
+#   just sayt build     — full CUE positive + negative suite
+#                         (CUE has no compile step; "build" = "schema valid").
+#   just sayt test      — same as build, plus the cache.nu nu test suite.
+#   just sayt integrate — same suites as test today (a docker-based
+#                         variant would catch container-only regressions
+#                         like BAYT_CACHE_DIR resolution / mise-musl,
+#                         but our ./bayt/integrate is exercised
+#                         transitively whenever any onboarded project
+#                         runs `just sayt integrate`, so we get that
+#                         coverage for free without a separate image).
+#   just sayt lint      — default auto-cue (cue fmt) handles it.
+#
+# launch / release / verify don't apply to bayt-the-framework: there's
+# no dev-server (it's a library), no shippable image (rides with the
+# monorepo), no e2e against deployed (no deployed surface). They use
+# the do: "true" no-op so the dev loop doesn't error if invoked.
+say:
+  doctor:
+    do: "which cue ; which nu ; cue version"
+  build:
+    do: "nu tests/test-bayt.nu"
+  test:
+    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu"
+  integrate:
+    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu"
+  launch:
+    do: "true"
+  release:
+    do: "true"
+  verify:
+    do: "true"
