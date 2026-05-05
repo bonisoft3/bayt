@@ -46,12 +46,23 @@ _lazyboxOverlay: {
 // nubox — leap-based, includes lazybox + mise + nushell. Use for
 // build / test / integrate. Lazybox self-bootstraps with posix sh
 // as the only dep — it ships busybox, static-curl, ca-certs, and a
-// mise shim under /root/.local/share/lazybox/. No zypper/apk/curl
-// installs needed.
+// mise shim under /root/.local/share/lazybox/.
+//
+// Installs GNU findutils + which (absent in leap 16.0's slim base);
+// gradle's gradlew probes for both at startup and dies otherwise. No
+// `zypper clean -a` — chained re-runs are no-ops ("Nothing to do");
+// clearing the metadata cache would make them fail with "no provider".
 nubox: {
-	from: name: *lock.images.leap | string
+	// `from` is bound to the leaf disjunct, so `bayt.nubox & {from: ref: ...}`
+	// fails CUE evaluation. Chained-FROM consumers don't compose the
+	// preset; they set `dockerfile: from: ref:` directly.
+	from: close({
+		name:    *lock.images.leap | string
+		context: *"docker-image://\(name)" | string
+	})
 	defaultPreamble: _lazyboxOverlay & {
-		"mise-trusted": {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
+		"mise-trusted":  {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
+		"gnu-shell-utils": {priority: -7, line: "RUN zypper -n install findutils=4.10.0-160000.2.2 which=2.23-160000.2.2"}
 	}
 }
 
@@ -68,14 +79,17 @@ nubox: {
 // place dind's lines after nubox's at #MapToList sort time.
 dind: nubox & {
 	defaultPreamble: {
-		"socat-install": {priority: 10, line: "RUN zypper -n install socat"}
+		"socat-install": {priority: 10, line: "RUN zypper -n install socat=1.8.0.2-160000.2.3"}
 		"docker-smoke":  {priority: 11, line: "RUN docker --help"}
 	}
 }
 
 // busybox — minimal musl runner, scratch-adjacent. Use for release.
 busybox: {
-	from: name: *lock.images.busybox | string
+	from: close({
+		name:    *lock.images.busybox | string
+		context: *"docker-image://\(name)" | string
+	})
 }
 
 // staging — busybox + lazybox overlay for ops shells in running pods.
@@ -89,7 +103,10 @@ staging: {
 // needing a local daemon. Stages that need a daemon should use `dind`
 // + dind.sh.
 docker: {
-	from: name: *lock.images.docker | string
+	from: close({
+		name:    *lock.images.docker | string
+		context: *"docker-image://\(name)" | string
+	})
 }
 
 // scratch — explicit "no FROM" preset. Sets `from: null` so the

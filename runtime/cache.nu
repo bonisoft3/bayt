@@ -142,7 +142,9 @@ def local-root []: nothing -> path {
 	if ($xdg | is-not-empty) { return ($xdg | path join "bayt") }
 	let lad = ($env.LOCALAPPDATA? | default "")
 	if ($lad | is-not-empty) { return ($lad | path join "bayt") }
-	$nu.home-dir | path join ".cache" "bayt"
+	# Use $env.HOME (not $nu.home-dir) for stability across nu versions.
+	# Windows path is handled by $LOCALAPPDATA above.
+	$env.HOME | path join ".cache" "bayt"
 }
 
 # Local entry path, sharded by first 2 hash chars.

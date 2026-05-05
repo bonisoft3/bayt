@@ -19,8 +19,8 @@ import "strings"
 //
 // Two decoration axes:
 //   - OS:             cmd.windows / cmd.linux / cmd.darwin  (picked at runtime)
-//   - output-format:  cmd.dockerfile / cmd.taskfile / cmd.vscode / cmd.bake
-//                     (picked at emission time by each generator)
+//   - output-format:  cmd.dockerfile / cmd.vscode (picked at emission
+//                     time by the corresponding generator)
 //
 // Far-away unification: a dockerfile block can decorate a cmd by setting
 //   cmd: "builtin": dockerfile: mounts: [...]
@@ -82,25 +82,10 @@ import "strings"
 		secrets?: [...string]
 		network?: *"default" | "none" | "host"
 	}
-	taskfile?: {
-		interactive?: bool
-		silent?:      bool
-	}
 	vscode?: {
-		problemMatcher?: [...string]
-		presentation?: {
-			reveal?: string
-			panel?:  string
-			...
-		}
 		windows?: {
 			command?: string
-			args?:    [...string]
 		}
-	}
-	bake?: {
-		cacheFrom?: [...string]
-		cacheTo?:   [...string]
 	}
 }
 
@@ -224,10 +209,14 @@ noop: #cmd & {
 	// WORKDIR. Defaults to /monorepo/<projectDir> in the emitter.
 	workdir?: string
 
-	// Lines emitted between WORKDIR and the dep/src COPY block. The
-	// verbatim escape hatch for stage setup (lazybox COPY, ENVs,
-	// package installs, smoke tests). Use `epilogue` for lines after
-	// the cmd RUN.
+	// Lines emitted between the base-image setup (FROM + WORKDIR +
+	// COPY-from from `dockerfile.copy`) and the project's source COPYs.
+	// preamble runs after the base image is fully assembled and before
+	// any user code lands, so RUN steps here can rely on COPY-from
+	// sources being on PATH/disk (e.g. warming lazybox stubs with
+	// `RUN <tool> --version > /dev/null`). The verbatim escape hatch
+	// for stage setup (ENVs, package installs, smoke tests). Use
+	// `epilogue` for lines after the cmd RUN.
 	//
 	// Same two-position pattern as `srcs.globs` / `srcs.defaultGlobs`:
 	//
@@ -253,6 +242,68 @@ noop: #cmd & {
 
 	// Lines emitted after the cmd RUN, before EXPOSE.
 	epilogue: [...string]
+
+	// Structured COPY directives. Maps directly to Dockerfile COPY
+	// grammar; emitted after the primary FROM, before user preamble.
+	//
+	// `from` reuses the same shape as the stage's primary `from`:
+	// either an external image ref (`name`) or a bayt target ref
+	// (`ref`, with `:<target>` or `<project>:<target>` syntax). When
+	// `from.ref` is set, the emitter also adds a compose
+	// additional_contexts entry so bake resolves the cross-target
+	// reference. When `from` is unset, it's an in-context COPY from
+	// the build context.
+	//
+	// `--link` defaults on (BuildKit overlay copies are almost always
+	// desirable: faster cache, less invalidation cascade). Other
+	// BuildKit flags map directly: --chmod, --chown, --parents,
+	// --exclude.
+	copy: [...{
+		from: *null | close({
+			name:    string & !~"^scratch$"
+			context: "docker-image://\(name)"
+		}) | close({
+			ref: string
+			let _parts = strings.Split(ref, ":")
+			let _proj = [
+				if _parts[0] == "" {D._project},
+				if _parts[0] != "" {_parts[0]},
+			][0]
+			name:    "\(_proj)-\(_parts[1])"
+			context: "service:\(_proj)-\(_parts[1])"
+		})
+		srcs:    [...string]
+		dst:     string
+		chmod?:  string
+		chown?:  string
+		link:    *true  | bool
+		parents: *false | bool
+		exclude: [...string]
+	}]
+
+	// Structured HEALTHCHECK directive. Maps directly to Dockerfile
+	// HEALTHCHECK grammar. `test` follows compose-spec convention:
+	//   ["NONE"]                       — disable inherited HEALTHCHECK
+	//   ["CMD", arg, ...]              — exec form
+	//   ["CMD-SHELL", "shell string"]  — shell form
+	// Bayt also emits the same data into compose's healthcheck override
+	// (with the additional `start_interval` compose-spec extension), so
+	// the directive applies in both `docker run` and `docker compose up`.
+	//
+	// Authored either directly or via the `bayt.healthcheck.<template>`
+	// fragments (http, tcp, postgres, redis, ollama) which set this
+	// field plus dockerfile.copy + compose.healthcheck in one
+	// declaration.
+	//
+	// `*null` default makes the field always-defined for guarded reads
+	// in the gen pass (matches the `from` pattern).
+	healthcheck: *null | close({
+		test:          [...string]
+		interval?:     string
+		timeout?:      string
+		retries?:      int
+		start_period?: string
+	})
 
 	// Ports the runtime listens on. EXPOSE in the Dockerfile.
 	expose: [...int]
@@ -283,6 +334,14 @@ noop: #cmd & {
 	// .task/. Taskfiles are COPY'd into the image automatically.
 	// Enable via the `bayt.incremental` capability (capabilities.cue).
 	incremental: *false | bool
+
+	// Dockerfile CMD instruction. Same three-form schema as `entrypoint`
+	// above. Distinct from `compose.command` (service-level runtime
+	// override). Docker's standard ENTRYPOINT/CMD combination applies.
+	//   null         → no CMD instruction. Default.
+	//   [...string]  → exec form: CMD ["a", "b", "c"].
+	//   string       → shell form: wraps in `/bin/sh -c` at runtime.
+	cmd: *null | [...string] | string
 }
 
 #compose: {
@@ -306,21 +365,28 @@ noop: #cmd & {
 		secrets:             [...string]
 		args: [string]:      string
 	}
-	runtime?: {
-		image?: string
-		// Same `null | list | string` shape as docker-compose's spec —
-		// list = exec form (no shell wrapping), string = shell form
-		// (`/bin/sh -c …`), null explicitly clears the image's baked-in
-		// value. Omit the field entirely to inherit it.
-		command?:    null | [...string] | string
-		entrypoint?: null | [...string] | string
-		environment:  [string]: string
-		ports:        [...string]
-		volumes:      [...string]
-		depends_on:   [...string]
-		network_mode?: string
-		healthcheck?: {...}
-	}
+	// Compose-spec passthrough — fields here are emitted verbatim onto
+	// the compose service. Shape mirrors the actual compose-spec service
+	// schema (no synthetic `runtime:` wrapper) so authoring matches the
+	// generated YAML.
+	image?: string
+	// Same `null | list | string` shape as docker-compose's spec —
+	// list = exec form (no shell wrapping), string = shell form
+	// (`/bin/sh -c …`), null explicitly clears the image's baked-in
+	// value. Omit the field entirely to inherit it.
+	command?:    null | [...string] | string
+	entrypoint?: null | [...string] | string
+	environment:  [string]: string
+	ports:        [...string]
+	volumes:      [...string]
+	// Compose-spec long form: map keyed by service name with per-dep
+	// config (typically `{condition: "service_healthy"}`). Bayt
+	// passes this through verbatim and auto-mirrors keys as
+	// additional_contexts entries (see gen_compose.cue) so consumers
+	// don't have to write the build-tree mirror by hand.
+	depends_on:   {[string]: _}
+	network_mode?: string
+	healthcheck?: {...}
 	develop?: {
 		watch: [...#watch]
 	}
@@ -436,7 +502,13 @@ noop: #cmd & {
 	// image. The emitter skips a profile entirely when image is unset
 	// or empty — it's the project's opt-in lever for cluster-side dev.
 	image?:  string
-	context: *"../" | string
+	// Skaffold resolves `context` relative to its INVOCATION cwd
+	// (sayt verbs invoke from the project root), not the config-file
+	// location. Default `.` lands customBuild's cwd at the project
+	// root — what consumers expect for `-f .bayt/<config>` paths and
+	// project-relative `docker compose config`. Targets needing a
+	// different context (e.g. workspace root) override per-target.
+	context: *"." | string
 	sync: {
 		manual: *[] | [...{src: string, dest: string}]
 		auto:   *false | bool
@@ -455,14 +527,13 @@ noop: #cmd & {
 }
 
 #bake: {
-	target?: string
 	// Registry image; becomes `variable "IMAGE" { default = ... }` so the
 	// skaffold custom-command contract can override via $IMAGE env var.
 	image?: string
 	// Toggle push-to-registry vs load-to-daemon. Becomes `variable
-	// "PUSH_IMAGE" { default = "false" }`; emitter writes the conditional
+	// "PUSH_IMAGE" { default = ... }`; emitter writes the conditional
 	// `output = PUSH_IMAGE == "true" ? ["type=registry"] : ["type=docker"]`.
-	// Skaffold sets PUSH_IMAGE=true on the production profile.
+	// Skaffold / CI override via env. Default false.
 	push: *false | bool
 	// Optional GHA cache scope. Non-empty enables `cache-from` / `cache-to`
 	// referencing the CACHE_SCOPE variable plus a hard-coded `main` scope.
@@ -581,6 +652,34 @@ noop: #cmd & {
 	skaffold?:   #skaffold
 	vscode?:     #vscode
 	bake?:       #bake
+
+	// healthcheck — parameter holder for the bayt.healthcheck.<template>
+	// fragments. The fragments unify into the target, reading their
+	// inputs from this field and setting dockerfile.copy +
+	// dockerfile.healthcheck + compose.healthcheck. Open-typed because
+	// each template defines its own input schema.
+	healthcheck?: _
+
+	// hmr — destination-side classification of srcs entries for the
+	// dev loop. Each kind maps to a compose.develop.watch action:
+	//   code    → sync (framework HMR if `native: true`, else watchexec --restart)
+	//   configs → sync + SIGHUP (watchexec wraps cmd to signal-reload)
+	//   assets  → sync+restart (compose-managed full container restart)
+	//   tools   → rebuild (compose-managed image rebuild)
+	//   docs    → ignored everywhere (no sync, no rebuild)
+	// `native` is set by the stack (Pnpm.dev sets it to true since Vite/Next
+	// handle their own watching internally). When false, bayt wraps the
+	// launch cmd in nested watchexec layers for code-restart and configs-
+	// SIGHUP. The watchexec binary comes from lazybox via the standard
+	// nubox overlay (no extra dockerfile.copy needed for nubox-based stages).
+	hmr?: {
+		native:  *false | bool
+		code:    [...string]
+		configs: [...string]
+		assets:  [...string]
+		tools:   [...string]
+		docs:    [...string]
+	}
 
 	// Resolved cmd list (priority-sorted, nulls removed).
 	cmds: (#MapToList & {in: cmd}).out

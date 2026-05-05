@@ -78,42 +78,50 @@ _expandLines: {
 		]}).out
 	}
 
-	// Per-target direct cross-project deps (precomputed once). Bazel-
-	// style refs: same-project deps look like ":<target>", cross-project
-	// deps look like "<project>:<target>". The cross-project filter is
-	// "ref does NOT start with `:`" — i.e. has a non-empty project
-	// prefix. Values come from G.depManifests (injected by the nushell
-	// second pass), keyed by the full ref string. Produces {name,
-	// project, dir} objects matching the shape that Dockerfile/compose/
-	// taskfile emitters consume.
+	// Per-target direct cross-project refs (precomputed once). Sources:
+	//   - `t.deps` strings (Bazel-style: ":X" same-project, "P:X" cross)
+	//   - `t.dockerfile.from.ref` (same syntax)
+	// Cross-project refs (no leading `:`) are kept; same-project refs
+	// drop. Values come from G.depManifests (injected by the nushell
+	// second pass via cross-dep-strings, which collects from BOTH sources
+	// too). Visibility gate fires uniformly: a cross-project dep or
+	// FROM-ref to an internal target fails CUE evaluation with
+	// `conflicting values "internal" and "public"`.
+	//
+	// Deduped by "<project>-<name>" so the established
+	// `deps + dockerfile.from.ref` pattern doesn't double-count.
+	_buildCrossEntry: {
+		ref: string
+		out: {
+			_visibility: G.depManifests[ref].visibility & "public"
+			name:    G.depManifests[ref].name
+			project: G.depManifests[ref].project
+			dir:     G.depManifests[ref].dir
+			outs: {
+				globs:   G.depManifests[ref].outs.globs
+				exclude: G.depManifests[ref].outs.exclude
+			}
+		}
+	}
 	_targetCrossDeps: {
 		for n, t in G.project.targets if t != null {
-			(n): [
+			let _depEntries = [
 				for d in t.deps
 				if !strings.HasPrefix(d, ":") {
-					{
-						// Visibility gate: cross-project deps may only
-						// reference targets marked public. CUE unification
-						// fails with `conflicting values "internal" and
-						// "public"` when the producer is internal —
-						// surfaces at generation time with a clear
-						// message including the offending dep path.
-						_visibility: G.depManifests[d].visibility & "public"
-
-						name:    G.depManifests[d].name
-						project: G.depManifests[d].project
-						dir:     G.depManifests[d].dir
-						// outs come along so the consumer's Dockerfile can
-						// COPY exactly the producer's declared interface
-						// (one COPY per glob, restricted to outs.globs and
-						// honoring outs.exclude).
-						outs: {
-							globs:   G.depManifests[d].outs.globs
-							exclude: G.depManifests[d].outs.exclude
-						}
-					}
-				}
+					(_buildCrossEntry & {ref: d}).out
+				},
 			]
+			let _fromEntries = [
+				if t.dockerfile != _|_
+					if t.dockerfile.from != null
+					if t.dockerfile.from.ref != _|_
+					if !strings.HasPrefix(t.dockerfile.from.ref, ":") {
+					(_buildCrossEntry & {ref: t.dockerfile.from.ref}).out
+				},
+			]
+			let _all  = list.Concat([_depEntries, _fromEntries])
+			let _keys = [for x in _all {"\(x.project)-\(x.name)"}]
+			(n): [for i, x in _all if !list.Contains(list.Slice(_keys, 0, i), _keys[i]) {x}]
 		}
 	}
 
@@ -282,6 +290,7 @@ _expandLines: {
 				if t.skaffold != _|_ {skaffold: t.skaffold}
 				if t.vscode != _|_ {vscode: t.vscode}
 				if t.bake != _|_ {bake: t.bake}
+				if t.hmr != _|_ {hmr: t.hmr}
 				// cache.nu reads outs from the manifest at runtime; the
 				// `cache` block here records the per-target wrap policy
 				// (full / similar) that gen_taskfile.cue used when

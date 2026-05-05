@@ -66,13 +66,18 @@ def build-project-index [ws_root: string] {
 	# defining schemas, not projects), plus generated outputs and
 	# common ignored dirs. A bayt-project file has a top-level
 	# `project: <#project>` field; package files don't.
-	for path in (glob $"($ws_root)/**/bayt.cue" --no-dir --exclude [
+	# `cd` into ws_root inside a `do` block so the glob pattern stays
+	# relative; nu's glob parser rejects Windows absolute paths whose
+	# backslashes embed in the pattern. Relative results are re-anchored
+	# against ws_root in the loop body.
+	let rel_paths = (do { cd $ws_root; glob "**/bayt.cue" --no-dir --exclude [
 		"**/.bayt/**"
 		"**/node_modules/**"
 		"**/.git/**"
 		"plugins/bayt/bayt/**"
 		"plugins/bayt/stacks/**"
-	]) {
+	] })
+	for path in $rel_paths {
 		let r = (do { ^cue export $path -e '{name: project.name, dir: project.dir}' --out json } | complete)
 		if $r.exit_code != 0 {
 			print -e $"bayt: project-index scan failed for ($path)"
@@ -141,6 +146,7 @@ def write-bundle [bundle: record, base: string] {
 	# --- compose
 	atomic-write $"($prefix).bayt/compose.yaml" ($bundle.docker.compose.root | to yaml)
 	atomic-write $"($prefix).bayt/compose.bayt.yaml" ($bundle.docker.compose.bayt_root | to yaml)
+	atomic-write $"($prefix).bayt/compose.bayt.deps.yaml" ($bundle.docker.compose.bayt_deps_root | to yaml)
 	for entry in ($bundle.docker.compose.files | transpose name data) {
 		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" ($entry.data | to yaml)
 	}
@@ -229,15 +235,25 @@ def pass2 [bayt_cue: string, dep_manifests: record] {
 	$r.stdout | from json
 }
 
-# cross-dep-strings returns the unique cross-project dep refs from a
-# targets record. Bazel-style: same-project refs start with `:`, cross-
-# project refs have a non-empty project prefix — we keep the latter.
+# cross-dep-strings returns the unique cross-project refs from a targets
+# record — collected from both `t.deps` and `t.dockerfile.from.ref`.
+# Bazel-style: same-project refs start with `:`, cross-project refs
+# have a non-empty project prefix — we keep the latter. From-refs flow
+# through the same federation pipeline as deps so a consumer chaining
+# `dockerfile: from: ref: "X:Y"` doesn't also need to declare `deps: ["X:Y"]`.
 def cross-dep-strings [targets: record] {
-	$targets
+	let dep_refs = ($targets
 		| values
 		| each {|t| ($t.deps? | default []) | where {|d| not ($d | str starts-with ":")}}
-		| flatten
-		| uniq
+		| flatten)
+	let from_refs = ($targets
+		| values
+		| each {|t|
+			let r = ($t.dockerfile?.from?.ref? | default "")
+			if ($r | is-not-empty) and not ($r | str starts-with ":") { [$r] } else { [] }
+		}
+		| flatten)
+	$dep_refs | append $from_refs | uniq
 }
 
 # load-dep-manifests loads .bayt/bayt.<target>.json for each cross-project

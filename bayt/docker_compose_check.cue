@@ -152,7 +152,7 @@ _d8: #project & {
 		"launch": {
 			cmd: "builtin": do: "envoy -c /etc/envoy.yaml"
 			dockerfile: nubox
-			compose: runtime: healthcheck: {
+			compose: healthcheck: {
 				test:     "curl http://localhost:18080/"
 				interval: "40s"
 				retries:  3

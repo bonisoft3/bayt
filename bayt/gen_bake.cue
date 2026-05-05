@@ -56,7 +56,7 @@ import (
 			if _hasImage {"  default = \"\(t.bake.image)\""},
 			if _hasImage {"}"},
 			"variable \"PUSH_IMAGE\" {",
-			"  default = \"false\"",
+			"  default = \"\(t.bake.push)\"",
 			"}",
 			if _hasScope {"variable \"CACHE_SCOPE\" {"},
 			if _hasScope {"  default = \"\(t.bake.cacheScope)\""},

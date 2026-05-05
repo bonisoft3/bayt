@@ -22,7 +22,7 @@ package bayt
 //     "integrate": bayt.hostenv & {
 //         // Wrap with sayt's dind.sh (which sources host.env internally).
 //         cmd: "builtin": dockerfile: wrap: "/monorepo/plugins/devserver/dind.sh"
-//         compose: runtime: {
+//         compose: {
 //             entrypoint: ["/monorepo/plugins/devserver/dind.sh"]
 //             volumes: [
 //                 "//var/run/docker.sock:/var/run/docker.sock",

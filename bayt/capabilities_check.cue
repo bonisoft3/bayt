@@ -36,7 +36,7 @@ _cap2: #project & {
 				do: "./gradlew integrationTest"
 				dockerfile: wrap: "/monorepo/plugins/devserver/dind.sh"
 			}
-			compose: runtime: {
+			compose: {
 				entrypoint:   ["/monorepo/plugins/devserver/dind.sh"]
 				network_mode: "host"
 				volumes: [
@@ -47,7 +47,7 @@ _cap2: #project & {
 	}
 }
 _cap2: targets: integrate: cmd: "builtin": dockerfile: wrap: "/monorepo/plugins/devserver/dind.sh"
-_cap2: targets: integrate: compose: runtime: network_mode:    "host"
+_cap2: targets: integrate: compose: network_mode:    "host"
 _cap2: targets: integrate: dockerfile: secrets:               ["host.env"]
 
 // --- CAP3: incremental flips the dockerfile.incremental flag. The

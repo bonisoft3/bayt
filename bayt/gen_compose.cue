@@ -30,6 +30,7 @@
 package bayt
 
 import (
+	"encoding/json"
 	"list"
 	"strings"
 )
@@ -55,6 +56,21 @@ import (
 		pn: string
 		tn: string
 		out: "\(pn)-\(tn)"
+	}
+
+	// Helper: strip the common trailing glob suffix from an hmr entry
+	// so the result is a literal directory (or single file) compose's
+	// develop.watch can use as `path` / `target`. compose recurses
+	// into directories automatically — `app/**/*` and `app` watch the
+	// same set, but only the latter is a valid `target` value.
+	_hmrBase: {
+		g: string
+		out: [
+			if strings.HasSuffix(g, "/**/*") {strings.TrimSuffix(g, "/**/*")},
+			if strings.HasSuffix(g, "/**")   {strings.TrimSuffix(g, "/**")},
+			if strings.HasSuffix(g, "/*")    {strings.TrimSuffix(g, "/*")},
+			g,
+		][0]
 	}
 
 	// Helper: format one mount directive. Emits
@@ -536,6 +552,43 @@ import (
 			},
 		]
 
+		// CMD — three-form schema mirroring _entrypoint above. Pure
+		// pass-through; Docker handles the ENTRYPOINT/CMD combination
+		// per its standard semantics.
+		let _cm = t.dockerfile.cmd
+		let _cmStr = [
+			if _cm != null && (_cm & string) != _|_ {_cm},
+			"",
+		][0]
+		let _cmList = [
+			if _cm != null && (_cm & [...string]) != _|_ && (_cm & string) == _|_ {_cm},
+			[],
+		][0]
+		// Prepend the project's activate tokens (e.g. `mise x --`) to
+		// the CMD so the launch container's PATH carries the same
+		// toolchain wrap that build-time RUNs already get. Same shape
+		// for both forms: shell-form gets a string prefix, exec-form
+		// gets activate split into argv tokens. Empty activate → no
+		// prefix, no extra tokens.
+		let _activatePrefix = [
+			if len(t.activate) > 0 {"\(t.activate) "},
+			"",
+		][0]
+		let _activateTokens = [
+			if len(t.activate) > 0 {[for tk in strings.Split(t.activate, " ") if tk != "" {tk}]},
+			[],
+		][0]
+		_cmdLine: [
+			if len(_cmStr) > 0 {
+				"CMD \(_activatePrefix)\(_cmStr)"
+			},
+			if len(_cmList) > 0 {
+				let _full = list.Concat([_activateTokens, _cmList])
+				let quoted = [for a in _full {"\"\(a)\""}]
+				"CMD [\(strings.Join(quoted, ", "))]"
+			},
+		]
+
 		// Layer ordering: for incremental targets the RUN is
 		// `task -t .bayt/Taskfile.yml <n>:<n>`, which needs .bayt/
 		// state + bayt-runtime present BEFORE the RUN to resolve
@@ -548,10 +601,67 @@ import (
 		_preRun:  [if t.dockerfile.incremental  {list.Concat([_selfTaskfileCopies, _incrementalCopies])}, []][0]
 		_postRun: [if !t.dockerfile.incremental {_selfTaskfileCopies},                                   []][0]
 
+		// Structured COPY directives from t.dockerfile.copy. Each entry
+		// renders to one COPY line. --link defaults on (BuildKit overlay
+		// copies). For from-COPYs, the alias is computed from the entry:
+		// external uses from.name directly; internal uses the bayt
+		// target's qualified name (matching deps' aliasing).
+		_copyLine: {
+			c: _
+			out: string
+			let _cLink    = [if c.link {"--link "}, ""][0]
+			let _cChmod   = [if c.chmod != _|_ {"--chmod=\(c.chmod) "}, ""][0]
+			let _cChown   = [if c.chown != _|_ {"--chown=\(c.chown) "}, ""][0]
+			let _cParents = [if c.parents {"--parents "}, ""][0]
+			let _cExclude = strings.Join([for e in c.exclude {"--exclude=\(e) "}], "")
+			let _cFrom    = [
+				if c.from == null {""},
+				if c.from != null {"--from=\(c.from.name) "},
+			][0]
+			let _cSrcs    = strings.Join(c.srcs, " ")
+			out: "COPY \(_cLink)\(_cChmod)\(_cChown)\(_cParents)\(_cExclude)\(_cFrom)\(_cSrcs) \(c.dst)"
+		}
+		_copyLines: [
+			for c in t.dockerfile.copy {
+				(_copyLine & {"c": c}).out
+			},
+		]
+
+		// Structured HEALTHCHECK directive from t.dockerfile.healthcheck.
+		// `test` follows compose-spec prefix convention:
+		//   ["NONE"]                       → HEALTHCHECK NONE (disable)
+		//   ["CMD", arg, arg, ...]         → exec form, JSON array
+		//   ["CMD-SHELL", "shell string"]  → shell form, raw string
+		// Nested guard: outer `if != null` keeps `.test` access in a
+		// scope where healthcheck is guaranteed struct. CUE's `&&` does
+		// not short-circuit, so we can't gate `.test[0]` on the same
+		// `if` line as the null check.
+		_healthcheckLine: [
+			if t.dockerfile.healthcheck == null {[]},
+			if t.dockerfile.healthcheck != null {
+				let hc = t.dockerfile.healthcheck
+				[
+					if hc.test[0] == "NONE" {["HEALTHCHECK NONE"]},
+					if hc.test[0] != "NONE" {
+						let _interval     = [if hc.interval     != _|_ {"--interval=\(hc.interval) "},         ""][0]
+						let _timeout      = [if hc.timeout      != _|_ {"--timeout=\(hc.timeout) "},           ""][0]
+						let _retries      = [if hc.retries      != _|_ {"--retries=\(hc.retries) "},           ""][0]
+						let _start_period = [if hc.start_period != _|_ {"--start-period=\(hc.start_period) "}, ""][0]
+						let _cmd = [
+							if hc.test[0] == "CMD"       {json.Marshal(hc.test[1:])},
+							if hc.test[0] == "CMD-SHELL" {hc.test[1]},
+						][0]
+						["HEALTHCHECK \(_interval)\(_timeout)\(_retries)\(_start_period)CMD \(_cmd)"]
+					},
+				][0]
+			},
+		][0]
+
 		_lines: [
 			_syntax,
 			_from,
 			"WORKDIR \(_workdir)",
+			for p in _copyLines {p},
 			for p in t.dockerfile.preamble {p},
 			for l in _depCopies {l},
 			for l in _srcCopies {l},
@@ -561,7 +671,9 @@ import (
 			for l in _postRun {l},
 			for l in _exposes {l},
 			for l in _entrypoint {l},
+			for l in _cmdLine {l},
 			for l in t.dockerfile.epilogue {l},
+			for l in _healthcheckLine {l},
 		]
 		out: string
 		out: strings.Join(_lines, "\n") + "\n"
@@ -633,7 +745,28 @@ import (
 				// upward, so the stub publishes plugins/bayt/runtime as
 				// a buildable context and incremental stages COPY from
 				// service:bayt-runtime-stub.
-				if t.dockerfile.incremental || len(_depEntries) > 0 || t.dockerfile.from != null {
+				// Auto-mirror compose.runtime.depends_on as additional_contexts:
+				// service:X on the same target. depends_on is the runtime
+				// tree; additional_contexts is the build tree. Docker
+				// compose's COMPOSE_BAKE serializer walks ONLY the build
+				// tree when a service is reached transitively (i.e. when
+				// the requested service depends_on this one). Without the
+				// mirror, this service's depends_on entries appear as
+				// dangling `target:` (empty) refs in the bake JSON for the
+				// transitive case and bake errors with `failed to find
+				// target`. Bake walks additional_contexts transitively,
+				// so mirroring direct depends_on is sufficient — each
+				// service self-extends the chain. Same discipline applies
+				// in hand-maintained compose.yaml.
+				let _runtimeDeps = [
+					if t.compose == _|_ {[]},
+					if t.compose != _|_ {[for k, _ in t.compose.depends_on {k}]},
+				][0]
+				let _copyContextEntries = [
+					for c in t.dockerfile.copy
+					if c.from != null {c.from},
+				]
+				if t.dockerfile.incremental || len(_depEntries) > 0 || t.dockerfile.from != null || len(_runtimeDeps) > 0 || len(_copyContextEntries) > 0 {
 					additional_contexts: {
 						for e in _depEntries {
 							(e): "service:\(e)"
@@ -643,6 +776,18 @@ import (
 						}
 						if t.dockerfile.from != null {
 							(t.dockerfile.from.name): t.dockerfile.from.context
+						}
+						for k in _runtimeDeps {
+							(k): "service:\(k)"
+						}
+						// Each `dockerfile.copy` entry with `from` set adds
+						// an additional_contexts entry so bake resolves the
+						// COPY --from=<alias> reference. External (from.name)
+						// entries get docker-image://<name>; internal
+						// (from.ref) entries get service:<qualified-name>.
+						// from.context already carries the right prefix.
+						for f in _copyContextEntries {
+							(f.name): f.context
 						}
 					}
 				}
@@ -656,8 +801,8 @@ import (
 				secrets: t.dockerfile.secrets
 			}
 
-			if t.compose != _|_ && t.compose.runtime != _|_ {
-				let r = t.compose.runtime
+			if t.compose != _|_ {
+				let r = t.compose
 				if r.image != _|_ {image:   r.image}
 				if r.command != _|_ {command: r.command}
 				if r.entrypoint != _|_ {entrypoint: r.entrypoint}
@@ -674,6 +819,40 @@ import (
 
 			if t.compose != _|_ && t.compose.develop != _|_ {
 				develop: t.compose.develop
+			}
+
+			// HMR: derive compose.develop.watch entries from
+			// t.hmr.{code, configs, assets, tools, docs}. compose's
+			// develop.watch wants directory paths, not globs — strip
+			// trailing glob suffix from each entry so e.g. `app/**/*`
+			// becomes `app` (compose recurses into directories
+			// automatically). docs is excluded from emission.
+			//
+			// configs uses `sync` (not sync+restart) so the container
+			// stays alive for an in-container watchexec wrapper to
+			// SIGHUP the process. assets uses sync+restart for processes
+			// that load at startup. tools rebuilds the image since the
+			// change usually affects the build (lockfiles, manifests).
+			let _hmrWorkdir = [
+				if t.dockerfile != _|_ && t.dockerfile.workdir != _|_ {t.dockerfile.workdir},
+				if t.dir == ""                                        {"/monorepo"},
+				"/monorepo/\(t.dir)",
+			][0]
+			// Watch paths use `../` to point at the project root from
+			// the bayt-emitted compose file's location (.bayt/). Compose
+			// resolves develop.watch's `path` relative to the source
+			// file's directory, so a bare `./app` would land inside
+			// .bayt/ — wrong both standalone and when an outer
+			// compose.yaml extends this service. `../<glob>` resolves
+			// to the project root in both cases (build context is the
+			// same `..`).
+			if t.hmr != _|_ {
+				develop: watch: list.Concat([
+					[for g in t.hmr.code    {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
+					[for g in t.hmr.configs {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
+					[for g in t.hmr.assets  {let b = (_hmrBase & {"g": g}).out, {action: "sync+restart", path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
+					[for g in t.hmr.tools   {let b = (_hmrBase & {"g": g}).out, {action: "rebuild",      path: "../\(b)"}}],
+				])
 			}
 		}
 	}
@@ -739,12 +918,12 @@ import (
 			let _crossIncludes = [
 				for dep in G._m.projectManifest.crossProjectDirs {
 					let _dp = [if dep != "" {"\(dep)/"}, ""][0]
-					// Cross-project deps target the OTHER project's
-					// federation root (compose.bayt.yaml), never its
-					// user root (compose.yaml) — that's what keeps
-					// alias services from colliding when projects
-					// federate.
-					{path: "\(G._rootFromBayt)\(_dp).bayt/compose.bayt.yaml", required: false}
+					// Cross-project deps include the OTHER project's
+					// dep-only root (compose.bayt.deps.yaml). Integrate
+					// composes carry top-level secrets/networks/volumes
+					// that would collide across federated graphs — they
+					// stay out of the deps chain.
+					{path: "\(G._rootFromBayt)\(_dp).bayt/compose.bayt.deps.yaml", required: false}
 				},
 			]
 			let _allIncludes = list.Concat([_localIncludes, _crossIncludes])
@@ -763,6 +942,41 @@ import (
 			// rather than per-target so the service is defined exactly
 			// once per project. Lives in the federation root (not the
 			// user root) so cross-project includes pick it up.
+			let _hasIncremental = [for _, t in _emit if t.dockerfile.incremental {true}]
+			if len(_hasIncremental) > 0 {
+				services: "bayt-runtime-stub": {
+					build: {
+						context:          "\(G._rootFromBayt)plugins/bayt/runtime"
+						dockerfile_inline: "FROM scratch\nCOPY . /\n"
+					}
+				}
+			}
+		}
+
+		// bayt_deps_root: dep-only federation entry point that other
+		// projects include. Mirrors bayt_root minus `integrate` (whose
+		// top-level secrets/volumes would collide across federated
+		// graphs). Cross-project includes also use the deps variant.
+		bayt_deps_root: {
+			let _localIncludes = [
+				for n, _ in _emit
+				if n != "integrate" {
+					{path: "./compose.\(n).yaml", required: false}
+				},
+			]
+			let _crossIncludes = [
+				for dep in G._m.projectManifest.crossProjectDirs {
+					let _dp = [if dep != "" {"\(dep)/"}, ""][0]
+					{path: "\(G._rootFromBayt)\(_dp).bayt/compose.bayt.deps.yaml", required: false}
+				},
+			]
+			let _allIncludes = list.Concat([_localIncludes, _crossIncludes])
+			if len(_allIncludes) > 0 {
+				include: _allIncludes
+			}
+
+			// bayt-runtime-stub still needs to flow through the deps
+			// chain for incremental targets in upstream consumers.
 			let _hasIncremental = [for _, t in _emit if t.dockerfile.incremental {true}]
 			if len(_hasIncremental) > 0 {
 				services: "bayt-runtime-stub": {

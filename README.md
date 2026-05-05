@@ -94,7 +94,7 @@ Every `#target` is described by a small, fixed set of fields. Declare them once,
 | `cmd`            | The action to run. Shorthand `do: "cmd"` or the full rulemap.       | `cmd` / `exec`      |
 | `env`            | Environment variables passed to cmd.                                | `env` (via `--action_env`) |
 | `activate`       | Toolchain prefix (usually `mise x --`). Defaults from `#project`.   | `toolchains`        |
-| `dockerfile.from`| FROM source for this target's Dockerfile stage. Either a fresh image (`from: name: ...`, typically via an image preset like `bayt.nubox`) or a chain to another target (`from: ref: ":<target>"`). Default: scratch (when no preset). | — |
+| `dockerfile.from`| FROM source for this target's Dockerfile stage. Either a fresh image (`from: name: ...`, typically via an image preset like `bayt.nubox`) or a chain to another target (`from: ref: ":<target>"` for same-project, `"<project>:<target>"` for cross-project). Cross-project `from: ref:` automatically wires federation (compose include + additional_contexts + visibility check) — no separate `deps:` entry needed for the from-ref alone. Default: scratch (when no preset). | — |
 | `cache.full`     | When true, on EXACT cache hit restore outs and skip cmd entirely. Default false (restore + run cmd, letting its own incremental engine no-op on warm outputs). Use `bayt.cache.full` capability to set. | — |
 | `cache.similar`  | When true, on EXACT-match miss look for the closest cached entry (weighted intersection over inputs + user/branch/day) and restore as warm starting state. Default false. Use `bayt.cache.similar` capability to set. | — |
 
@@ -137,11 +137,14 @@ Each emitted Dockerfile stage's FROM is the producer's choice. Bazel-style refs:
 // project tree). Stack defaults already do this for build/test/integrate.
 "build": dockerfile: from: ref: ":setup"
 
-// Cross-project chain (rare; for shared toolchains across projects).
-"build": dockerfile: from: ref: "other_project:base"
+// Cross-project chain — common pattern for stacks that want to inherit
+// a shared base (workspace-root setup, JVM toolchain stage, etc.).
+"setup": dockerfile: from: ref: "workspaceroot:setup"
 ```
 
 The chain form means the build stage *is* the setup stage extended — no `mise install` re-run inside build, and `task bayt:build`'s `::bayt:setup` dep correctly short-circuits on the inherited stamp.
+
+**Cross-project from-refs federate automatically.** A `from: ref: "X:Y"` is enough — bayt wires the compose include for X, the `additional_contexts` entry for the FROM alias, and the visibility check on Y in one go. You only add `deps: ["X:Y", ...]` when you also need the dep's `outs` COPY'd in (the explicit-data path), separate from the FROM-chain inheritance.
 
 ## Stacks: toolchain knowledge, reusable
 
@@ -177,6 +180,45 @@ _xproto: sayt.gradle & {
     targets: "build": visibility: "public"   // tracker can deps: ["libraries_xproto:build"]
 }
 ```
+
+## Healthcheck templates
+
+`bayt.healthcheck.*` are composable fragments that wire a target's
+Dockerfile HEALTHCHECK + compose healthcheck override + any required
+tool COPY (`microcheck`'s `httpcheck` / `portcheck` static binaries) in
+one declaration. Five templates ship today:
+
+| Fragment | Probe | Tool source |
+|----------|-------|-------------|
+| `bayt.healthcheck.http`     | HTTP GET 2xx           | `httpcheck` from microcheck (auto COPY) |
+| `bayt.healthcheck.tcp`      | TCP listener up        | `portcheck` from microcheck (auto COPY) |
+| `bayt.healthcheck.postgres` | `pg_isready`           | bundled in postgres image |
+| `bayt.healthcheck.redis`    | `redis-cli ping` PONG  | bundled in redis image |
+| `bayt.healthcheck.ollama`   | model listed via `ollama list` | bundled in ollama image |
+
+Defaults follow "probe aggressively, fail leniently" (1s interval,
+30 retries, 200ms start_interval, 30s start_period). Override per-target
+inline only when needed — postgres/ollama typically bump `start_period`
+for slow cold-starts.
+
+```cue
+"release-proxy": sayt.release & bayt.healthcheck.http & {
+    healthcheck: url: "http://127.0.0.1:8081/health"
+    dockerfile: from: name: "caddy:..."
+}
+
+"release-cdc": sayt.release & bayt.healthcheck.http & {
+    healthcheck: {
+        url:          "http://127.0.0.1:8080/healthz"
+        start_period: "120s"   // conduit's slot-init dance
+    }
+    ...
+}
+```
+
+`compose.healthcheck` carries the compose-spec extension `start_interval`
+(probe rapidly during the start_period window) which Dockerfile
+HEALTHCHECK doesn't model.
 
 ## Merkle-chain invalidation, in one diagram
 
@@ -264,7 +306,8 @@ The `.bayt/` directory is generated but committed. A single `sayt generate` (or 
 4. **No path math in CUE.** Repo-relative `../` computation lives in nushell, which has a proper path library. CUE carries structured data (`{name, projectDir}`), nushell joins it.
 5. **Fragments via unification, not inheritance.** Verbs (`setup`, `build`, …) and base presets (`nubox`, `busybox`, …) are plain structs, not closed `#`-prefixed definitions — CUE's closed conjunction rejects cross-def fields. See the closedness note in `bayt/bayt.cue`.
 6. **Version intent vs. version lock.** Base image tags go in `bayt.cue`; digests live in `bases.lock.cue`. `pin-bases.nu` refreshes the lock.
-7. **Never swallow errors.** fingerprint.nu and cache.nu fail fast on missing inputs, malformed manifests, git-hash-object errors. A misconfigured target surfaces immediately instead of poisoning the cache with silent defaults.
+7. **Pin every layer ingredient.** Image presets and consumer preambles pin OS-package versions inline (`zypper -n install findutils=4.10.0-160000.2.2 which=2.23-160000.2.2`). The base image is digest-pinned, so an unpinned package install is the one remaining drift surface — pinning closes it. Reproducibility holds across registry-side base updates.
+8. **Never swallow errors.** fingerprint.nu and cache.nu fail fast on missing inputs, malformed manifests, git-hash-object errors. A misconfigured target surfaces immediately instead of poisoning the cache with silent defaults.
 
 ## Claude Code plugin
 

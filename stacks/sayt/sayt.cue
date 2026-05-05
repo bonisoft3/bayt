@@ -109,7 +109,7 @@ test: {
 // supports it (compose develop.watch).
 launch: {
 	deps: *[":build"] | [...string]
-	compose: runtime: {}
+	compose: {}
 	dockerfile: {}
 	// bayt-dev profile auto-fires on `skaffold dev`. Projects opt
 	// into cluster-side dev by including .bayt/skaffold.launch.yaml
@@ -252,8 +252,10 @@ gradle: bayt.#project & {
 			// Whole-tree `**/*` here would balloon BuildKit's per-COPY
 			// cache key.
 			outs: globs: list.Concat([Gradle.setupSrcs.globs, Mise.installFiles.globs, [".task/bayt/setup.hash"]])
-			taskfile:   setup.taskfile
-			dockerfile: bayt.nubox
+			taskfile: setup.taskfile
+			// Image preset is a per-target choice. Leaf setups compose
+			// `bayt.nubox` explicitly; chained setups set `dockerfile:
+			// from: ref: ...` and inherit the preset via FROM.
 		}) | null
 		"doctor": *(doctor & Mise.doctor) | null
 		// build defaults to bayt.incremental so the Dockerfile RUN
@@ -267,9 +269,7 @@ gradle: bayt.#project & {
 			dockerfile: from: ref: ":setup"
 		}) | null
 		"test": *(test & Mise.exec & Gradle.test) | null
-		"launch": *(launch & Mise.exec & Gradle.run & {
-			dockerfile: bayt.nubox
-		}) | null
+		"launch": *(launch & Mise.exec & Gradle.run) | null
 		// integrate defaults `dockerfile.from.ref: ":build"` — the
 		// canonical FROM-chain for gradle projects. Brings in the
 		// build stage's compiled classes + .task/bayt/build.hash so
@@ -335,10 +335,10 @@ pnpm: bayt.#project & {
 			// Forcing the bundled libvips makes prebuild-install pick
 			// the napi-v7 binary that works on any modern node.
 			env: SHARP_IGNORE_GLOBAL_LIBVIPS: "1"
-			// Nubox base so downstream targets can
-			// COPY --from=<project>-setup to inherit the pnpm store
-			// + node tools mise installed.
-			dockerfile: bayt.nubox
+			// Image preset is a per-target choice. Leaf setups compose
+			// `bayt.nubox` explicitly so downstream targets can
+			// COPY --from=<project>-setup to inherit the pnpm store +
+			// node tools mise installed. Chained setups inherit via FROM.
 			taskfile: setup.taskfile
 		}) | null
 		"doctor": *(doctor & Mise.doctor) | null
@@ -359,8 +359,15 @@ pnpm: bayt.#project & {
 			]
 		}) | null
 		"launch": *(launch & Mise.exec & Pnpm.dev & {
-			dockerfile: bayt.nubox
-			compose: develop: watch: Pnpm.devWatch
+			// Baseline hmr: sync the whole project tree, rebuild on
+			// manifest/lockfile change. Projects refine by setting
+			// their own hmr block (granular code/configs/assets/tools
+			// /docs) — those defaults are concrete defaults so consumer
+			// values fully replace them.
+			hmr: {
+				code:  *["./"] | [...string]
+				tools: *["package.json", "pnpm-lock.yaml"] | [...string]
+			}
 		}) | null
 		"integrate": *(integrate & Mise.exec & Pnpm.testInt & {
 			srcs: Pnpm.srcsIntegrate
@@ -427,6 +434,19 @@ pnpmWorkspace: bayt.#project & {
 					// without an extra explicit dep on a devserver
 					// project.
 					"plugins/devserver/dind.sh",
+					// Every workspace member's package.json. pnpm with
+					// --frozen-lockfile validates the entire workspace
+					// topology against the lockfile, even with --filter,
+					// so every member listed in pnpm-workspace.yaml must
+					// exist on disk. Staging them here means consumer
+					// projects' setup targets get them via the FROM
+					// chain — no per-project preamble COPYs needed
+					// (which would fail anyway, since each project's
+					// build context is its own dir, not the monorepo
+					// root). node_modules and similar build-output
+					// directories are filtered by the root .dockerignore,
+					// so this glob only picks up source-tree manifests.
+					"**/package.json",
 				],
 			])
 			// Outs = srcs (so consumers get the exact files staged

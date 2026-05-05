@@ -43,10 +43,19 @@ install: {
 // when unified.
 build:   _exec & {_sub: "build"}
 test:    _exec & {_sub: "test"}
-dev:     _exec & {_sub: "dev"}
 testInt: _exec & {_sub: "test:int"}
 testE2E: _exec & {_sub: "test:e2e"}
 lint:    _exec & {_sub: "lint"}
+
+// pnpm.dev — runtime dev server for launch verbs. Bakes `pnpm dev`
+// into the Dockerfile CMD (build-time RUN would hang the builder).
+// The renderer prepends the project's activate tokens, so pnpm here
+// stays toolchain-agnostic. hmr.native: true — pnpm-managed
+// frameworks (Next, Vite, Nuxt) handle file watching internally.
+dev: {
+	hmr: native: true
+	dockerfile: cmd: ["pnpm", "dev"]
+}
 
 // _exec — internal template that the subcommand fragments above
 // instantiate. Hidden so it doesn't pollute the package's public
@@ -142,14 +151,4 @@ srcsIntegrate: {
 		"coverage/**",
 	]
 }
-
-// pnpm.devWatch — compose `develop.watch` entries for pnpm's
-// dev-server HMR loop. Sync the project tree (with the standard
-// node_modules/.nuxt/.output ignores) and rebuild on lockfile or
-// package.json edits.
-devWatch: [
-	{action: "sync", path: "./", target: "/app", ignore: ["node_modules", ".nuxt", ".output"]},
-	{action: "rebuild", path:    "./package.json", target: "/app/package.json"},
-	{action: "rebuild", path:    "./pnpm-lock.yaml", target: "/app/pnpm-lock.yaml"},
-]
 
