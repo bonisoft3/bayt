@@ -91,7 +91,7 @@ import "strings"
 				tasks: [{
 					label: [
 						if t.vscode.label != _|_ {t.vscode.label},
-						if t.vscode.label == _|_ {"\(t.project) \(n)"},
+						if t.vscode.label == _|_ {n},
 					][0]
 					type:    "shell"
 					command: _cmd
