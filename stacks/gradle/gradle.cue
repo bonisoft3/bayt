@@ -14,32 +14,14 @@ import (
 // Toolchain concept library.
 // =============================================================================
 
-// Shared cache mount for the gradle dependency + build cache.
-// `sharing=shared` lets parallel sibling stages (libs_logs:build,
-// libs_xproto:build, ...) under COMPOSE_BAKE actually run concurrently
-// instead of serializing on the lock — the realized parallelism win is
-// substantial. gradle's own cache directories
-// (~/.gradle/caches/modules-2/, ~/.gradle/caches/build-cache-1/) are
-// concurrent-safe per gradle docs (per-key file locks + atomic writes).
-//
-// Caveat: if you ever observe mysterious gradle cache corruption,
-// classpath-snapshot inconsistencies, or "lock acquisition failed"
-// errors that BuildKit's lock would have prevented, switch back to
-// `sharing=locked` and file an issue against the offending plugin.
-_cacheMount: {type: "cache", target: "/root/.gradle", sharing: "shared"}
+// Cache mount for gradle's dependency + build cache.
+_cacheMount: {type: "cache", target: "/root/.gradle"}
 
-// Per-project configuration cache. Lives at <build-root>/.gradle/
-// configuration-cache (project-local, NOT in $GRADLE_USER_HOME). The
-// relative target resolves against the stage's WORKDIR — every stage
-// gets `.gradle/configuration-cache` under its own /monorepo/<dir>/
-// without us threading `dir` into the gradle package. Cache id
-// defaults to the target string, so all stages share storage; this
-// is safe because gradle keys entries by build-root path, so each
-// project's entries occupy disjoint slots in the shared dir.
-// `sharing=locked` — gradle's configuration-cache locking is less
-// battle-tested than the build-cache's, prefer correctness over the
-// marginal parallelism win.
-_configCacheMount: {type: "cache", target: ".gradle/configuration-cache", sharing: "locked"}
+// Per-project gradle configuration cache. Lives at <build-root>/.gradle/
+// configuration-cache (project-local, NOT in $GRADLE_USER_HOME); the
+// relative target resolves against the stage's WORKDIR so each stage
+// gets its own slot under /monorepo/<dir>/.
+_configCacheMount: {type: "cache", target: ".gradle/configuration-cache"}
 
 // gradle's local build cache lives at $BAYT_CACHE_DIR/gradle (set by
 // .bayt/init.gradle.kts that bayt emits per-project). Pass the init

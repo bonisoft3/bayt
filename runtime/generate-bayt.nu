@@ -54,29 +54,23 @@
 # .bayt/ directory is rebuilt on every run so removed targets don't
 # leave stale per-target files behind.
 
-# build-project-index walks the workspace from ws_root and returns a
+# build-project-index walks the workspace from workspace_root and returns a
 # record mapping each project's name → its workspace-root-relative dir.
-# Cross-project deps are now Bazel-style refs ("<project>:<target>"),
-# so the runtime needs an upfront name → dir map to resolve them. The
-# scan is one-shot and cheap (only project.name + project.dir is
-# extracted, no targets, no generators).
-def build-project-index [ws_root: string] {
+# Bazel-style cross-project refs ("<project>:<target>") resolve through
+# this index. The scan only extracts project.name + project.dir.
+def build-project-index [workspace_root: string] {
 	mut idx = {}
-	# Exclude bayt's own package + stack files (named bayt.cue but
-	# defining schemas, not projects), plus generated outputs and
-	# common ignored dirs. A bayt-project file has a top-level
-	# `project: <#project>` field; package files don't.
-	# `cd` into ws_root inside a `do` block so the glob pattern stays
-	# relative; nu's glob parser rejects Windows absolute paths whose
-	# backslashes embed in the pattern. Relative results are re-anchored
-	# against ws_root in the loop body.
-	let rel_paths = (do { cd $ws_root; glob "**/bayt.cue" --no-dir --exclude [
-		"**/.bayt/**"
-		"**/node_modules/**"
-		"**/.git/**"
-		"plugins/bayt/bayt/**"
-		"plugins/bayt/stacks/**"
-	] })
+	# Enumerate bayt.cue files via `git ls-files`. Drop bayt's own
+	# package + stacks files: they share the bayt.cue name but
+	# define schemas, not projects. Anchor repo-relative paths to
+	# workspace_root so the downstream `cue export` works from any cwd.
+	let rel_paths = (do { cd $workspace_root; ^git ls-files --cached --others --exclude-standard }
+		| lines
+		| where ($it | str ends-with "/bayt.cue") or $it == "bayt.cue"
+		| where not ($it | str starts-with "plugins/bayt/bayt/")
+		| where not ($it | str starts-with "plugins/bayt/stacks/")
+		| each { |p| $"($workspace_root)/($p)" }
+	)
 	for path in $rel_paths {
 		let r = (do { ^cue export $path -e '{name: project.name, dir: project.dir}' --out json } | complete)
 		if $r.exit_code != 0 {
@@ -176,17 +170,11 @@ def write-bundle [bundle: record, base: string] {
 	}
 
 	# --- gradle init script
-	# Static content per project. Points gradle's local build cache at
-	# $BAYT_CACHE_DIR/gradle so cache.nu's mount and gradle's cache
-	# share the same on-disk store. Emitted unconditionally — non-
-	# gradle projects' .bayt/init.gradle.kts is a harmless ~10-line
-	# Kotlin file that never gets sourced.
-	#
-	# `org.gradle.caching=true` must be set in gradle.properties for
-	# the local cache to be consulted; tracker, libraries/*, plugins/*
-	# all have it. New gradle projects inherit it via the workspace's
-	# gradle.properties template (sayt lint will keep them in sync
-	# once that's wired).
+	# Points gradle's local build cache at $BAYT_CACHE_DIR/gradle so
+	# cache.nu's mount and gradle's cache share the same on-disk
+	# store. Emitted for every project — non-gradle projects' copy
+	# never gets sourced. Requires `org.gradle.caching=true` in the
+	# project's gradle.properties for gradle to consult the cache.
 	atomic-write $"($prefix).bayt/init.gradle.kts" 'settingsEvaluated {
     // Resolution mirrors cache.nu local-root:
     //   1. $BAYT_CACHE_DIR (explicit override)
@@ -258,18 +246,18 @@ def cross-dep-strings [targets: record] {
 
 # load-dep-manifests loads .bayt/bayt.<target>.json for each cross-project
 # dep. deps  — list of refs like ["libraries_logs:build"]
-#       index — project-name → ws-root-relative-dir map
-#       ws_root — absolute workspace root path
-def load-dep-manifests [deps: list<string>, index: record, ws_root: string] {
+#       index — project-name → workspace-root-relative-dir map
+#       workspace_root — absolute workspace root path
+def load-dep-manifests [deps: list<string>, index: record, workspace_root: string] {
 	mut result = {}
 	for dep in $deps {
 		let parts = ($dep | split row ":")
 		let target = ($parts | last)
 		let dep_dir_rel = (dep-to-dir $dep $index)
 		let manifest_path = if $dep_dir_rel == "." {
-			$"($ws_root)/.bayt/bayt.($target).json"
+			$"($workspace_root)/.bayt/bayt.($target).json"
 		} else {
-			$"($ws_root)/($dep_dir_rel)/.bayt/bayt.($target).json"
+			$"($workspace_root)/($dep_dir_rel)/.bayt/bayt.($target).json"
 		}
 		if not ($manifest_path | path exists) {
 			error make {msg: $"bayt: dep manifest not found: ($manifest_path)\n  run generate-bayt for ($dep_dir_rel) first, or use --recursive"}
@@ -296,14 +284,13 @@ def find-workspace-root [] {
 
 # topo-schedule returns a list of workspace-root-relative project dirs in
 # leaf-first (topological) order via post-order DFS from root_rel.
-# Post-order DFS guarantees that every dependency of a node appears before
-# it in the output — correct topological order for leaf-first builds.
-# Cross-project deps are now Bazel-style refs ("project:target"); the
-# project_index resolves the producer name → dir.
-# ws_root  — absolute workspace root path
+# Post-order DFS guarantees that every dependency of a node appears
+# before it in the output — correct order for leaf-first builds. Bazel-
+# style refs ("project:target") resolve via project_index.
+# workspace_root  — absolute workspace root path
 # root_rel — workspace-root-relative dir of the starting project ("." for root)
-# index    — project_name → ws-root-relative-dir map
-def topo-schedule [ws_root: string, root_rel: string, index: record] {
+# index    — project_name → workspace-root-relative-dir map
+def topo-schedule [workspace_root: string, root_rel: string, index: record] {
 	mut visiting: list<string> = []  # nodes on current DFS stack (cycle detection)
 	mut done: list<string> = []      # post-order output (leaf-first)
 
@@ -344,18 +331,17 @@ def topo-schedule [ws_root: string, root_rel: string, index: record] {
 		$stack = ($stack | append {dir: $current, phase: "exit"})
 
 		let bayt_cue = if $current == "." {
-			$"($ws_root)/bayt.cue"
+			$"($workspace_root)/bayt.cue"
 		} else {
-			$"($ws_root)/($current)/bayt.cue"
+			$"($workspace_root)/($current)/bayt.cue"
 		}
 		if not ($bayt_cue | path exists) {
 			continue
 		}
 		let targets = (pass1 $bayt_cue)
-		# Cross-project deps and cross-project `from` refs now share one
+		# Cross-project deps and cross-project `from` refs share one
 		# vocabulary ("<project>:<target>") and one resolution path
-		# (project_index → dir), so the cycle detector covers both — no
-		# more "from chains aren't tracked" gap.
+		# (project_index → dir), so the cycle detector covers both.
 		let cdeps = (cross-dep-strings $targets)
 		# Push deps in reverse order so the first dep is processed first.
 		for dep in ($cdeps | reverse) {
@@ -372,10 +358,10 @@ def topo-schedule [ws_root: string, root_rel: string, index: record] {
 # regen-project runs both CUE passes for one project's bayt.cue and
 # writes the resulting bundle. Used by both single-project and recursive
 # modes.
-def regen-project [bayt_cue: string, dir_rel: string, index: record, ws_root: string] {
+def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_root: string] {
 	let targets = (pass1 $bayt_cue)
 	let cdeps = (cross-dep-strings $targets)
-	let dep_manifests = (load-dep-manifests $cdeps $index $ws_root)
+	let dep_manifests = (load-dep-manifests $cdeps $index $workspace_root)
 	let bundle = (pass2 $bayt_cue $dep_manifests)
 	write-bundle $bundle $dir_rel
 }
@@ -388,31 +374,31 @@ export def main [--recursive (-r)] {
 		return
 	}
 
-	let ws_root = (find-workspace-root)
+	let workspace_root = (find-workspace-root)
 	# One-shot scan of every bayt.cue to map project_name → dir.
 	# Cross-project refs ("<project>:<target>") resolve through this.
-	let index = (build-project-index $ws_root)
+	let index = (build-project-index $workspace_root)
 
 	if $recursive {
 		let project_abs = (pwd)
-		let project_rel = ($project_abs | path relative-to $ws_root)
+		let project_rel = ($project_abs | path relative-to $workspace_root)
 		let project_rel = if ($project_rel | str trim) == "" { "." } else { $project_rel }
 
 		# Work from workspace root so write-bundle's relative paths are correct.
-		cd $ws_root
+		cd $workspace_root
 
-		let schedule = (topo-schedule $ws_root $project_rel $index)
+		let schedule = (topo-schedule $workspace_root $project_rel $index)
 		for dir_rel in $schedule {
 			let bayt_cue = if $dir_rel == "." {
-				$"($ws_root)/bayt.cue"
+				$"($workspace_root)/bayt.cue"
 			} else {
-				$"($ws_root)/($dir_rel)/bayt.cue"
+				$"($workspace_root)/($dir_rel)/bayt.cue"
 			}
-			regen-project $bayt_cue $dir_rel $index $ws_root
+			regen-project $bayt_cue $dir_rel $index $workspace_root
 		}
 	} else {
 		# Single-project mode: run from inside the project directory.
-		regen-project "./bayt.cue" "." $index $ws_root
+		regen-project "./bayt.cue" "." $index $workspace_root
 	}
 
 	# Run cache GC at end of generation. Cheap (no-op when under

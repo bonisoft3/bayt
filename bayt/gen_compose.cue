@@ -122,16 +122,27 @@ import (
 		][0]
 	}
 
+	// _mount renders one `--mount=...` directive. Cache-mount id and
+	// sharing are synthesised from `scope` + target; the #mount
+	// schema's disjunction already disallows user-supplied id on
+	// cache mounts.
 	_mount: {
-		m:   #dockerfile.#mount
-		out: string
-		let _t =  m.type
-		let _tg = [if m.target != _|_                            {",target=\(m.target)"},   ""][0]
-		let _sc = [if m.source != _|_                            {",source=\(m.source)"},   ""][0]
-		let _id = [if m.id != _|_                                {",id=\(m.id)"},           ""][0]
-		let _sh = [if m.sharing != _|_ && m.type == "cache"      {",sharing=\(m.sharing)"}, ""][0]
-		let _rq = [if m.required                                 {",required=true"},        ""][0]
-		out: "--mount=type=\(_t)\(_tg)\(_sc)\(_id)\(_sh)\(_rq)"
+		m:     #dockerfile.#mount
+		scope: string
+		out:   string
+		let _t  = m.type
+		let _tg = [if m.target != _|_                {",target=\(m.target)"}, ""][0]
+		let _sc = [if m.source != _|_                {",source=\(m.source)"}, ""][0]
+		let _rq = [if m.required                     {",required=true"},      ""][0]
+		// id: synthesised for cache, user-provided for everything else.
+		let _id = [
+			if m.type == "cache" && m.target != _|_ {
+				",id=\(scope):\(m.target),sharing=locked"
+			},
+			if m.type != "cache" && m.id != _|_ {",id=\(m.id)"},
+			"",
+		][0]
+		out: "--mount=type=\(_t)\(_tg)\(_sc)\(_id)\(_rq)"
 	}
 
 	// Helper: render one RUN line for a cmd rule.
@@ -157,9 +168,10 @@ import (
 		// and `default` otherwise. Used throughout for nullable cmd
 		// sub-fields and for OS-axis overrides on linux.
 		let _cmdMounts = [if c.dockerfile != _|_ && c.dockerfile.mounts != _|_ {c.dockerfile.mounts}, []][0]
+		let _mountScope = "\(t.project)-\(t.name)"
 		let _mountStrs = [
-			for m in t.dockerfile.mounts {(_mount & {"m": m}).out},
-			for m in _cmdMounts {(_mount & {"m": m}).out},
+			for m in t.dockerfile.mounts {(_mount & {"m": m, scope: _mountScope}).out},
+			for m in _cmdMounts {(_mount & {"m": m, scope: _mountScope}).out},
 		]
 		_prefix: [if len(_mountStrs) > 0 {strings.Join(_mountStrs, " ") + " "}, ""][0]
 		_wrap:   [if c.dockerfile != _|_ && c.dockerfile.wrap != _|_ {"\(c.dockerfile.wrap) "}, ""][0]
@@ -420,12 +432,13 @@ import (
 		// RUN must carry every mount any cmd needs (gradle cache, pnpm
 		// store, secret mounts). Direct mode has one RUN per cmd with
 		// only that cmd's mounts.
-		_targetMountStrs: [for m in t.dockerfile.mounts {(_mount & {"m": m}).out}]
+		let _mountScope = "\(t.project)-\(t.name)"
+		_targetMountStrs: [for m in t.dockerfile.mounts {(_mount & {"m": m, scope: _mountScope}).out}]
 		_cmdMountStrs: [
 			for c in t.cmds
 			if c.dockerfile != _|_ && c.dockerfile.mounts != _|_
 			for m in c.dockerfile.mounts {
-				(_mount & {"m": m}).out
+				(_mount & {"m": m, scope: _mountScope}).out
 			},
 		]
 
@@ -445,18 +458,12 @@ import (
 		// multi-cmd targets. Wrapping each branch in an explicit
 		// list keeps the nesting unambiguous.
 
-		// Persistent cache for cache.nu's content-addressable store.
-		// Stable id (`bayt-cache`) means every bayt-emitted RUN across
-		// every project/stage shares the same backing volume — a cache
-		// hit written by libraries_logs:build during stage X is
-		// readable by services_tracker:integrate during stage Y.
-		// Path matches cache.nu's `local-root` default; if someone
-		// overrides BAYT_CACHE_DIR inside a container the writes would
-		// land outside this mount and go into the layer cache instead.
-		// Only emitted for incremental targets because non-incremental
-		// RUNs don't go through the Taskfile and so don't invoke
-		// cache.nu.
-		_baytCacheMountStr: "--mount=type=cache,id=bayt-cache,target=/root/.cache/bayt,sharing=shared"
+		// Persistent per-target cache slot for cache.nu's content-
+		// addressable task store. Cross-project / cross-build reuse
+		// goes through cache.nu's network backends
+		// (`BAYT_CACHE_URL` / `BAYT_CACHE_REGISTRY`).
+		_baytCacheMount: {type: "cache", target: "/root/.cache/bayt"}
+		_baytCacheMountStr: (_mount & {m: _baytCacheMount, scope: "\(t.project)-\(t.name)"}).out
 
 		_runs: list.Concat([
 			if t.dockerfile.incremental {
@@ -801,6 +808,16 @@ import (
 				secrets: t.dockerfile.secrets
 			}
 
+			// Deterministic image tag. Bake reads `image:` and uses it
+			// to tag the loaded image; compose's `up`/`run` (without
+			// `--build`) looks up images by the same name. Dropping
+			// this field makes compose fall back to an implicit
+			// `<project>-<service>` tag that doesn't match what bake
+			// loaded, so `compose up` would rebuild. User-supplied
+			// `compose.image:` wins via the guarded emission below.
+			if t.compose == _|_ || t.compose.image == _|_ {
+				image: "bayt-\(svc):latest"
+			}
 			if t.compose != _|_ {
 				let r = t.compose
 				if r.image != _|_ {image:   r.image}

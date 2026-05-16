@@ -54,7 +54,7 @@ _cycle_c3: #project & {
 	defaults: {
 		env: {COMMON_FLAG: "1"}
 		cmd: "builtin": dockerfile: mounts: [
-			{type: "cache", target: "/root/.cache", sharing: "locked"},
+			{type: "cache", target: "/root/.cache"},
 		]
 	}
 	targets: {
@@ -105,7 +105,7 @@ _cycle_c5: #project & {
 			cmd: "builtin": {
 				do: "./gradlew assemble"
 				dockerfile: mounts: [
-					{type: "cache", target: "/root/.gradle", sharing: "locked"},
+					{type: "cache", target: "/root/.gradle"},
 				]
 			}
 		}
@@ -116,7 +116,7 @@ _cycle_c5: #project & {
 					wrap: "dind.sh"
 					mounts: [
 						{type: "secret", id:    "host.env", required: true},
-						{type: "cache",  target: "/root/.gradle", sharing: "locked"},
+						{type: "cache",  target: "/root/.gradle"},
 					]
 				}
 			}

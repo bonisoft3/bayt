@@ -83,7 +83,7 @@ _cycle_c16: targets: build: cmds: [
 // each contribution lands on every target.
 _c17_gradleBase: {
 	cmd: "builtin": dockerfile: mounts: [
-		{type: "cache", target: "/root/.gradle", sharing: "locked"},
+		{type: "cache", target: "/root/.gradle"},
 	]
 }
 _c17_jvmBase: {
@@ -106,7 +106,7 @@ _cycle_c17: #project & {
 _cycle_c17: targets: build: env: JAVA_OPTS:                 "-Xmx2g"
 _cycle_c17: targets: build: env: MISE_TRUSTED_CONFIG_PATHS: "/monorepo"
 _cycle_c17: targets: build: cmd: "builtin": dockerfile: mounts: [
-	{type: "cache", target: "/root/.gradle", sharing: "locked"},
+	{type: "cache", target: "/root/.gradle"},
 ]
 
 // --- C18: dep strings to the same name resolve consistently across

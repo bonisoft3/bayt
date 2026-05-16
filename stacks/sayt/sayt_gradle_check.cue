@@ -39,7 +39,7 @@ _g3: gradle & {
 			cmd: "builtin": {
 				dockerfile: mounts: [
 					{type: "secret", id: "host.env", required: true},
-					{type: "cache", target: "/root/.gradle", sharing: "locked"},
+					{type: "cache", target: "/root/.gradle"},
 				]
 			}
 			dockerfile: secrets: ["host.env"]

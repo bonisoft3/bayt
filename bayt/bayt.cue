@@ -122,17 +122,52 @@ noop: #cmd & {
 	// the project name explicitly.
 	_project: string
 
-	// #mount — BuildKit mount spec, nested here because it's
-	// dockerfile-domain (BuildKit syntax) and consumed only by emitters
-	// that touch dockerfile output: this block's `mounts` and the
-	// per-cmd `#cmd.dockerfile.mounts` decoration.
+	// #mount — BuildKit mount spec, discriminated by `type`. Nested
+	// here because it's dockerfile-domain (BuildKit syntax) and
+	// consumed only by emitters that touch dockerfile output: this
+	// block's `mounts` and the per-cmd `#cmd.dockerfile.mounts`
+	// decoration.
+	//
+	// The disjunction enforces per-type field shapes:
+	//   - Cache mounts can't carry `id` or `sharing` — the emitter
+	//     synthesises both per-target. Every other cache-mount mode
+	//     has subtle problems; a per-target locked mount captures
+	//     most of the benefit without hitting any:
+	//       - `sharing=shared` lets concurrent RUNs touch the cache
+	//         while buildkit is still using it for layer reuse,
+	//         silently rebuilding layers on subsequent runs.
+	//       - `sharing=private` hands every RUN a fresh empty cache;
+	//         no reuse at all.
+	//       - `sharing=locked` with the default id (the mount target
+	//         path) serialises every parallel RUN that mounts the
+	//         same path on one global lock, killing cold-build
+	//         parallelism.
+	//     Trade-off: each (project, target) keeps its own cache slot.
+	//   - Secret/ssh mounts accept `id` (the secret/ssh-key name).
 	#mount: {
-		type:     "cache" | "secret" | "bind" | "ssh" | "tmpfs"
+		type:   "cache"
+		target: string
+		required: *false | bool
+	} | {
+		type:     "secret"
 		target?:  string
 		source?:  string
 		id?:      string
-		sharing?: *"locked" | "shared" | "private"
-		// Defaulted so emitters can interpolate without a _|_ check.
+		required: *false | bool
+	} | {
+		type:     "bind"
+		target?:  string
+		source?:  string
+		required: *false | bool
+	} | {
+		type:     "ssh"
+		target?:  string
+		source?:  string
+		id?:      string
+		required: *false | bool
+	} | {
+		type:     "tmpfs"
+		target?:  string
 		required: *false | bool
 	}
 

@@ -10,8 +10,8 @@ package pnpm
 // Toolchain concept library.
 // =============================================================================
 
-// Shared cache mount for the pnpm download store.
-_storeMount: {type: "cache", target: "/root/.local/share/pnpm/store", sharing: "locked"}
+// Cache mount for pnpm's download store.
+_storeMount: {type: "cache", target: "/root/.local/share/pnpm/store"}
 
 // pnpm.install — `pnpm install --frozen-lockfile` as a separate cmd
 // alongside mise's toolchain install. Cmd-level srcs put the pnpm
