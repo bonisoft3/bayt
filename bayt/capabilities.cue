@@ -11,36 +11,6 @@
 // own bayt.cue).
 package bayt
 
-// hostenv — target reads the `host.env` secret at build time via a
-// BuildKit secret mount, and federates the secret in compose.
-//
-// This is bayt's level of abstraction: secret infrastructure. How the
-// secret gets CONSUMED (a `dind.sh` that sources it, an `aws-cli` that
-// reads env vars from it, a custom script, etc.) is user territory —
-// compose with the capability in user bayt.cue:
-//
-//     "integrate": bayt.hostenv & {
-//         // Wrap with sayt's dind.sh (which sources host.env internally).
-//         cmd: "builtin": dockerfile: wrap: "/monorepo/plugins/devserver/dind.sh"
-//         compose: {
-//             entrypoint: ["/monorepo/plugins/devserver/dind.sh"]
-//             volumes: [
-//                 "//var/run/docker.sock:/var/run/docker.sock",
-//                 "${HOME:-~}/.skaffold/cache:/root/.skaffold/cache",
-//             ]
-//             network_mode: "host"
-//         }
-//     }
-//
-// The `dind.sh` path is a sayt concept (plugins/devserver/dind.sh),
-// not bayt's — bayt only provides the secret plumbing here.
-hostenv: {
-	cmd: "builtin": dockerfile: mounts: [
-		{type: "secret", id: "host.env", required: true},
-	]
-	dockerfile: secrets: ["host.env"]
-}
-
 // incremental — run the target's cmds via `task <n>:<n>` inside the
 // Docker build, so go-task's fingerprint.nu `status:` hook short-
 // circuits re-runs when srcs haven't changed.

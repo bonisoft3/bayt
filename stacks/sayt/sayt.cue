@@ -134,17 +134,21 @@ launch: {
 	}
 }
 
-// integrate — docker-compose integration tests. Often dind +
-// secrets. Default wrap is dind.sh (sayt-owned script that bridges
-// DOCKER_HOST → /var/run/docker.sock and sources host.env).
-// taskfile: {} so bayt can emit Taskfile.integrate.yaml — needed
-// when projects opt into bayt.incremental for the in-container
-// task chain to short-circuit on stamps.
+// integrate — docker-compose integration tests. Default wrap is
+// dind.sh (sayt-owned script that bridges DOCKER_HOST →
+// /var/run/docker.sock). taskfile: {} so bayt can emit
+// Taskfile.integrate.yaml — needed when projects opt into
+// bayt.incremental for the in-container task chain to short-circuit
+// on stamps.
+//
+// No `dockerfile.secrets` default: with the compose-spec map shape,
+// keys accumulate under unification so a stack-level default would
+// be unremovable by consumers. Projects that need build-time
+// secrets declare them explicitly per-target.
 integrate: {
 	deps: *[":build"] | [...string]
 	taskfile: {}
 	compose: {}
-	dockerfile: secrets: *["host.env"] | [...string]
 	cmd: "builtin": dockerfile: wrap: *"dind.sh" | string
 }
 

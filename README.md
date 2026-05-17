@@ -330,7 +330,7 @@ plugins/bayt/
 ├── bayt/                  ← CUE package `bayt`: schema + emitters
 │   ├── bayt.cue             (#target, #project, #cmd, #dockerfile, #compose,
 │   │                         #skaffold, #bake, #vscode, #taskfile, #mount)
-│   ├── capabilities.cue     (bayt.incremental, bayt.hostenv, …)
+│   ├── capabilities.cue     (bayt.incremental, bayt.cache, …)
 │   ├── images.cue           (nubox / busybox / staging / wolfi / dind /
 │   │                         dockerCli presets — set dockerfile.from)
 │   ├── images.lock.cue      (digest pin per image — package.json-style)

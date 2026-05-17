@@ -113,9 +113,9 @@ _cycle_c5: #project & {
 			cmd: "builtin": {
 				do: "./gradlew integrationTest --rerun"
 				dockerfile: {
-					wrap: "dind.sh"
+					wrap: "wrap.sh"
 					mounts: [
-						{type: "secret", id:    "host.env", required: true},
+						{type: "secret", id:    "creds", required: true},
 						{type: "cache",  target: "/root/.gradle"},
 					]
 				}

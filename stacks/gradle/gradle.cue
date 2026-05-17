@@ -141,10 +141,9 @@ test: {
 // gradle.integrationTest — `./gradlew integrationTest --rerun`.
 // Integration test srcs (src/it/resources). Cache mount lives on the
 // target's dockerfile (not the cmd's), so it doesn't collide with
-// cmd-level mounts contributed by orthogonal fragments like
-// `bayt.hostenv` (which sets cmd.builtin.dockerfile.mounts for the
-// host.env secret). Without it, integrate stages re-download the
-// gradle distribution + plugin jars into an empty /root/.gradle/
+// cmd-level mounts contributed by other fragments (e.g. a project-
+// supplied secret mount). Without it, integrate stages re-download
+// the gradle distribution + plugin jars into an empty /root/.gradle/
 // every run — visible as "Downloading
 // https://services.gradle.org/distributions/gradle-X.Y-bin.zip"
 // at the top of the integrate RUN.

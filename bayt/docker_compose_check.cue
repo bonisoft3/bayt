@@ -73,24 +73,31 @@ _d3_dc: dockerfiles: {[_]: _|_}
 // when at least one entry exists).
 _d3_dc: compose: bayt_root: {[!="services"]: _|_}
 
-// --- D4: secrets flow through. A target with hostenv adds
-// `secrets: ["host.env"]` on dockerfile, which becomes the BuildKit
-// `--mount=type=secret` AND the per-file `secrets:` top-level stanza
-// pointing at ${BAYT_HOST_ENV_FILE}.
+// --- D4: secrets flow through. A target declaring `secrets: <id>:
+// null` on dockerfile gets both the BuildKit `--mount=type=secret`
+// (via the cmd's mounts list) AND the per-file `secrets:` top-level
+// stanza with the default file source `${BAYT_<UPPER_ID>_FILE}`.
 _d4: #project & {
 	name: "d4"
 	dir:  "d4"
 	targets: {
-		"integrate": hostenv & {
+		"integrate": {
 			srcs: globs: ["**"]
-			cmd:  "builtin": do: "run-integration"
-			dockerfile: busybox
+			cmd: "builtin": {
+				do: "run-integration"
+				dockerfile: mounts: [
+					{type: "secret", id: "creds", required: true},
+				]
+			}
+			dockerfile: busybox & {
+				secrets: "creds": null
+			}
 		}
 	}
 }
 _d4_dc: (#dockerComposeGen & {project: _d4, depManifests: {}})
-_d4_dc: compose: files: integrate: services: "d4-integrate": build: secrets: ["host.env"]
-_d4_dc: compose: files: integrate: secrets: "host.env": file: "${BAYT_HOST_ENV_FILE}"
+_d4_dc: compose: files: integrate: services: "d4-integrate": build: secrets: ["creds"]
+_d4_dc: compose: files: integrate: secrets: creds: file: "${BAYT_CREDS_FILE}"
 
 // --- D5: develop.watch from the compose block passes through to the
 // per-target service block.

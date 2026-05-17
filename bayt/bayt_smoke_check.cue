@@ -32,7 +32,7 @@ _smoke: #project & {
 			cmd: "builtin": {
 				do: "nu run-integration.nu"
 				dockerfile: mounts: [
-					{type: "secret", id: "host.env", required: true},
+					{type: "secret", id: "creds", required: true},
 				]
 			}
 		}

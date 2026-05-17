@@ -773,7 +773,12 @@ import (
 					for c in t.dockerfile.copy
 					if c.from != null {c.from},
 				]
-				if t.dockerfile.incremental || len(_depEntries) > 0 || t.dockerfile.from != null || len(_runtimeDeps) > 0 || len(_copyContextEntries) > 0 {
+				let _userAddlCtx = [
+					if t.compose == _|_ {{}},
+					if t.compose != _|_ && t.compose.build == _|_ {{}},
+					if t.compose != _|_ && t.compose.build != _|_ {t.compose.build.additional_contexts},
+				][0]
+				if t.dockerfile.incremental || len(_depEntries) > 0 || t.dockerfile.from != null || len(_runtimeDeps) > 0 || len(_copyContextEntries) > 0 || len(_userAddlCtx) > 0 {
 					additional_contexts: {
 						for e in _depEntries {
 							(e): "service:\(e)"
@@ -796,16 +801,26 @@ import (
 						for f in _copyContextEntries {
 							(f.name): f.context
 						}
+						// User-supplied entries from compose.build.additional_contexts
+						// (e.g. a `monorepo-root: ../../..` path to enable a
+						// single workspace-wide COPY from a leaf target).
+						for k, v in _userAddlCtx {
+							(k): v
+						}
 					}
 				}
 
 				if len(t.dockerfile.secrets) > 0 {
-					secrets: t.dockerfile.secrets
+					secrets: [for k, _ in t.dockerfile.secrets {k}]
+				}
+
+				if len(t.dockerfile.extra_hosts) > 0 {
+					extra_hosts: t.dockerfile.extra_hosts
 				}
 			}
 
 			if len(t.dockerfile.secrets) > 0 {
-				secrets: t.dockerfile.secrets
+				secrets: [for k, _ in t.dockerfile.secrets {k}]
 			}
 
 			// Deterministic image tag. Bake reads `image:` and uses it
@@ -887,16 +902,19 @@ import (
 
 					if len(t.dockerfile.secrets) > 0 {
 						secrets: {
-							for s in t.dockerfile.secrets {
-								// BAYT_<SECRET>_FILE: path to a temp file that dind-vrun
-								// creates so Docker Compose can mount the secret at both
-								// build time (BuildKit) and runtime. Hand-maintained
-								// project compose.yaml files MUST declare the same secret
-								// the same way (file: ${BAYT_<SECRET>_FILE}) — declaring
-								// it differently (e.g. environment:) collides with this
-								// per-target declaration since compose merges all top-level
-								// secrets blocks across includes.
-								(s): {file: "${BAYT_\(strings.ToUpper(strings.Replace(s, ".", "_", -1)))_FILE}"}
+							for s, src in t.dockerfile.secrets {
+								// Compose-spec shape: per-secret value picks the
+								// source. Map value is the secret spec — null
+								// means default file source, an `environment`
+								// arm means a sibling service supplies the value
+								// at compose-up time (e.g. dindbox sidecar's
+								// published port).
+								if src == null {
+									(s): {file: "${BAYT_\(strings.ToUpper(strings.Replace(s, ".", "_", -1)))_FILE}"}
+								}
+								if src != null {
+									(s): src
+								}
 							}
 						}
 					}

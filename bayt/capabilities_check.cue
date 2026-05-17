@@ -5,39 +5,52 @@
 // orthogonal capabilities compose without conflict.
 package bayt
 
-// --- CAP1: hostenv wires the secret on cmd-level mounts AND
-// dockerfile.secrets. Both ends are needed: cmd-level for the
-// BuildKit `RUN --mount=type=secret`, dockerfile.secrets for the
-// federated compose `secrets:` block.
+// --- CAP1: a target declaring a build-time secret wires both ends:
+// cmd-level `mounts` for the BuildKit `RUN --mount=type=secret` AND
+// `dockerfile.secrets` for the federated compose `secrets:` block.
 _cap1: #project & {
 	name: "cap1"
 	dir:  "test/cap1"
 	targets: {
-		"integrate": hostenv & {
-			dockerfile: nubox
-			cmd: "builtin": do: "./gradlew integrationTest"
+		"integrate": {
+			dockerfile: nubox & {
+				secrets: "creds": null
+			}
+			cmd: "builtin": {
+				do: "./gradlew integrationTest"
+				dockerfile: mounts: [
+					{type: "secret", id: "creds", required: true},
+				]
+			}
 		}
 	}
 }
 _cap1: targets: integrate: cmd: "builtin": dockerfile: mounts: [
-	{type: "secret", id: "host.env", required: true},
+	{type: "secret", id: "creds", required: true},
 ]
-_cap1: targets: integrate: dockerfile: secrets: ["host.env"]
+_cap1: targets: integrate: dockerfile: secrets: "creds": null
 
-// --- CAP2: hostenv composes with user-supplied wrap + compose runtime
-// extras (the dind.sh dogfood pattern documented in capabilities.cue).
+// --- CAP2: a build-time secret composes with a cmd `wrap` and
+// compose runtime extras (volumes, network_mode) without conflict.
 _cap2: #project & {
 	name: "cap2"
 	dir:  "test/cap2"
 	targets: {
-		"integrate": hostenv & {
-			dockerfile: nubox
+		"integrate": {
+			dockerfile: nubox & {
+				secrets: "creds": null
+			}
 			cmd: "builtin": {
 				do: "./gradlew integrationTest"
-				dockerfile: wrap: "/monorepo/plugins/devserver/dind.sh"
+				dockerfile: {
+					wrap: "/monorepo/scripts/wrap.sh"
+					mounts: [
+						{type: "secret", id: "creds", required: true},
+					]
+				}
 			}
 			compose: {
-				entrypoint:   ["/monorepo/plugins/devserver/dind.sh"]
+				entrypoint:   ["/monorepo/scripts/wrap.sh"]
 				network_mode: "host"
 				volumes: [
 					"/var/run/docker.sock:/var/run/docker.sock",
@@ -46,9 +59,9 @@ _cap2: #project & {
 		}
 	}
 }
-_cap2: targets: integrate: cmd: "builtin": dockerfile: wrap: "/monorepo/plugins/devserver/dind.sh"
-_cap2: targets: integrate: compose: network_mode:    "host"
-_cap2: targets: integrate: dockerfile: secrets:               ["host.env"]
+_cap2: targets: integrate: cmd: "builtin": dockerfile: wrap: "/monorepo/scripts/wrap.sh"
+_cap2: targets: integrate: compose: network_mode: "host"
+_cap2: targets: integrate: dockerfile: secrets: "creds": null
 
 // --- CAP3: incremental flips the dockerfile.incremental flag. The
 // emitter rewrites the RUN line to `task <name>:<name>` and stages
@@ -65,23 +78,30 @@ _cap3: #project & {
 }
 _cap3: targets: build: dockerfile: incremental: true
 
-// --- CAP4: incremental + hostenv compose without conflict — different
-// output blocks (incremental → dockerfile.incremental, hostenv →
-// dockerfile.secrets + cmd mounts).
+// --- CAP4: incremental composes with an explicit secret declaration
+// without conflict — different output blocks (incremental →
+// dockerfile.incremental, secret → dockerfile.secrets + cmd mounts).
 _cap4: #project & {
 	name: "cap4"
 	dir:  "test/cap4"
 	targets: {
-		"integrate": hostenv & incremental & {
-			dockerfile: nubox
-			cmd: "builtin": do: "./gradlew integrationTest"
+		"integrate": incremental & {
+			dockerfile: nubox & {
+				secrets: "creds": null
+			}
+			cmd: "builtin": {
+				do: "./gradlew integrationTest"
+				dockerfile: mounts: [
+					{type: "secret", id: "creds", required: true},
+				]
+			}
 		}
 	}
 }
 _cap4: targets: integrate: dockerfile: incremental: true
-_cap4: targets: integrate: dockerfile: secrets:     ["host.env"]
+_cap4: targets: integrate: dockerfile: secrets: "creds": null
 _cap4: targets: integrate: cmd: "builtin": dockerfile: mounts: [
-	{type: "secret", id: "host.env", required: true},
+	{type: "secret", id: "creds", required: true},
 ]
 
 // Public aggregator forces evaluation of the hidden _cap* bindings.

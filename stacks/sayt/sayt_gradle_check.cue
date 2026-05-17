@@ -38,14 +38,14 @@ _g3: gradle & {
 		"integrate": {
 			cmd: "builtin": {
 				dockerfile: mounts: [
-					{type: "secret", id: "host.env", required: true},
+					{type: "secret", id: "creds", required: true},
 					{type: "cache", target: "/root/.gradle"},
 				]
 			}
-			dockerfile: secrets: ["host.env"]
+			dockerfile: secrets: "creds": null
 		}
 	}
 }
 
-// Assert secrets list + mount entry survive.
-_g3: targets: integrate: dockerfile: secrets: ["host.env"]
+// Assert secrets entry + cmd-level mount survive after override.
+_g3: targets: integrate: dockerfile: secrets: "creds": null

@@ -66,21 +66,67 @@ nubox: {
 	}
 }
 
-// dind — nubox + socat + docker smoke. socat bridges DOCKER_HOST
-// (TCP) → /var/run/docker.sock when the host daemon is remote (e.g.
-// Docker Desktop on Mac). The `docker --help` invocation is a smoke
-// test that the docker CLI is reachable and loads the buildx/compose
-// plugins eagerly (they're loaded once per CLI process, so a single
-// --help warms all three).
-//
-// Composition is by key-merge through #MapAsList — nubox's three
-// entries flow through unchanged, and dind contributes its own two.
-// No list-length juggling, no field-copy dance: priorities (>0)
-// place dind's lines after nubox's at #MapToList sort time.
-dind: nubox & {
+// dind — alpine docker:cli + buildx/compose plugins, with socat
+// copied from alpine/socat. CLI-only (no daemon binaries) so the
+// image stays small. Bakes two convenience scripts under
+// /usr/local/bin; see the scripts themselves for their intent.
+dind: {
+	from: close({
+		name:    *lock.images.docker | string
+		context: *"docker-image://\(name)" | string
+	})
+	copy: [
+		{
+			from: {name: lock.images.alpine_socat}
+			srcs: ["/usr/bin/socat1"]
+			dst:  "/usr/local/bin/socat"
+		},
+		{
+			from: {name: lock.images.alpine_socat}
+			srcs: ["/usr/lib/libreadline.so.8", "/usr/lib/libncursesw.so.6"]
+			dst:  "/usr/lib/"
+		},
+	]
 	defaultPreamble: {
-		"socat-install": {priority: 10, line: "RUN zypper -n install socat=1.8.0.2-160000.2.3"}
-		"docker-smoke":  {priority: 11, line: "RUN docker --help"}
+		"dind-scripts": {priority: 3, line: #"""
+			RUN <<DIND
+			cat > /usr/local/bin/dind.sh <<'SCRIPT'
+			#!/bin/sh
+			# dind.sh — RUN-side wrap. Reads the docker_host secret
+			# mounted at /run/secrets/docker_host and re-exports it
+			# as DOCKER_HOST so testcontainers / docker CLI in the
+			# wrapped command reach the dindbox-bridged daemon.
+			set -e
+			export DOCKER_HOST="$(cat /run/secrets/docker_host)"
+			exec "$@"
+			SCRIPT
+			cat > /usr/local/bin/dind-entrypoint.sh <<'SCRIPT'
+			#!/bin/sh
+			# dind-entrypoint.sh — sidecar entrypoint. Bridges the
+			# mounted /var/run/docker.sock to a published TCP port
+			# (socat), discovers the literal IP host.docker.internal
+			# resolves to on this host (cross-platform via a probe
+			# container with --add-host=host-gateway), then exports
+			# DOCKER_HOST and BAYT_DOCKER_HOST before execing CMD.
+			# DOCKER_HOST is the local docker CLI's target;
+			# BAYT_DOCKER_HOST is the env-sourced secret value piped
+			# through to RUN sandboxes that bake spawns from CMD.
+			set -e
+			export DOCKER_HOST=unix:///var/run/docker.sock
+			socat -d0 TCP-LISTEN:2375,fork,reuseaddr UNIX-CONNECT:/var/run/docker.sock &
+			socat -u OPEN:/dev/null TCP:127.0.0.1:2375,retry=100,interval=0.05 >/dev/null 2>&1
+			HOST_PORT=$(docker inspect "$HOSTNAME" --format '{{(index (index .NetworkSettings.Ports "2375/tcp") 0).HostPort}}')
+			[ -n "$HOST_PORT" ] || { echo "dind-entrypoint: no host port for $HOSTNAME" >&2; exit 1; }
+			HOST_IP=$(docker run --rm --add-host=host.docker.internal:host-gateway \#(lock.images.busybox) \
+			    awk '/host\.docker\.internal/ {printf "%s", $1; exit}' /etc/hosts)
+			[ -n "$HOST_IP" ] || { echo "dind-entrypoint: failed to probe host IP" >&2; exit 1; }
+			export DOCKER_HOST="tcp://${HOST_IP}:${HOST_PORT}"
+			export BAYT_DOCKER_HOST="$DOCKER_HOST"
+			exec "$@"
+			SCRIPT
+			chmod +x /usr/local/bin/dind.sh /usr/local/bin/dind-entrypoint.sh
+			DIND
+			"""#}
 	}
 }
 

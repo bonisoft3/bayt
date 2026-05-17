@@ -272,8 +272,17 @@ noop: #cmd & {
 	// Build-time mounts (BuildKit `--mount=type=cache,...`) and
 	// secrets (BuildKit `--mount=type=secret,...`). Attached to RUN
 	// lines per cmd rulemap.
-	mounts:  [...#mount]
-	secrets: [...string]
+	mounts: [...#mount]
+	// Per-id secret source map, mirrors compose-spec `secrets.<id>`.
+	// null → file at ${BAYT_<UPPER_ID>_FILE}; {environment: V} → bake
+	// reads $V at compose-up time; {file: P} → explicit path.
+	secrets: [Name=string]: *null | close({
+		environment: string
+	}) | close({
+		file: string
+	})
+
+	extra_hosts: [...string]
 
 	// Lines emitted after the cmd RUN, before EXPOSE.
 	epilogue: [...string]
