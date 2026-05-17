@@ -8,7 +8,7 @@
 // schema has grown an exploitable loophole — stop and investigate.
 package baytcyclenegative
 
-import "bonisoft.org/plugins/bayt/bayt"
+import "bonisoft.org/plugins/bayt/core:bayt"
 
 // Direct A → B → A loop.
 _bad_selfcycle: bayt.#project & {

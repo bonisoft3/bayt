@@ -33,7 +33,7 @@
 //
 //   package my_service
 //   import (
-//       bayt "bonisoft.org/plugins/bayt/bayt"
+//       bayt "bonisoft.org/plugins/bayt/core:bayt"
 //       sayt "bonisoft.org/plugins/bayt/stacks/sayt"
 //       mise "bonisoft.org/plugins/bayt/stacks/mise"
 //   )
@@ -61,7 +61,7 @@ package sayt
 import (
 	"list"
 
-	"bonisoft.org/plugins/bayt/bayt"
+	"bonisoft.org/plugins/bayt/core:bayt"
 	// Capitalized aliases for the toolchain-stack imports so the
 	// lowercase `gradle:` / `pnpm:` umbrella exports below don't
 	// shadow them.

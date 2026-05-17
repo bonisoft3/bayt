@@ -4,7 +4,7 @@ Bayt gives you Bazel-quality incremental invalidation on top of the build tools 
 
 You don't migrate away from your build tool. You just stop hand-maintaining seven files that all describe the same target in slightly different ways.
 
-Bayt is the declarative layer under [sayt](https://github.com/bonisoft3/sayt) — sayt covers the day-to-day verbs (`setup`, `build`, `test`, …), bayt defines what those verbs operate on when a project opts into fine-grained targets. If you're happy with `.vscode/tasks.json` you don't need bayt. If you're tired of your build graph disagreeing with your compose graph which disagrees with your CI graph, bayt is the DSL that makes one source of truth for all of them.
+Bayt is an opinionated build-config generator: you describe targets in CUE, bayt emits the toolchain-specific files. It pairs naturally with [sayt](https://github.com/bonisoft3/sayt) (sayt's `generate` verb invokes bayt as one of its rulemap steps) but bayt is standalone — you can run `bayt` directly from any project containing a `bayt.cue`. If you're happy with `.vscode/tasks.json` you don't need bayt. If you're tired of your build graph disagreeing with your compose graph which disagrees with your CI graph, bayt is the DSL that makes one source of truth for all of them.
 
 ## Why bayt?
 
@@ -17,29 +17,27 @@ Bayt is the declarative layer under [sayt](https://github.com/bonisoft3/sayt) �
 
 ## Install
 
-Bayt is distributed as a claude plugin and as a CUE module you import into your own `cue.mod`.
+Pin the release in your project's `mise.toml`:
 
-**Claude Code (plugin):**
-```bash
-claude plugin marketplace add bonisoft3/bayt
-claude plugin install bayt@bonisoft3-bayt
+```toml
+[tools]
+"github:bonisoft3/bayt" = "0.1.0"
 ```
 
-**Embedded as a submodule (preferred for monorepos):**
+`bayt` is then on PATH and the cue/nu tree lives next to it. Run from any directory containing a `bayt.cue`:
+
 ```bash
-git submodule add https://github.com/bonisoft3/bayt plugins/bayt
+bayt --recursive
 ```
 
-**Plain copy (no submodule):**
-```bash
-git clone --depth 1 https://github.com/bonisoft3/bayt /tmp/bayt
-cp -r /tmp/bayt plugins/bayt
-rm -rf plugins/bayt/.git
+**Sayt pairing (optional).** If the project uses sayt, add bayt to the generate rulemap so `sayt generate` re-emits bayt's outputs alongside the rest of the pipeline:
+
+```yaml
+say:
+  generate:
+    rulemap:
+      bayt: null
 ```
-
-Bayt expects to live at `plugins/bayt/` within your monorepo so the generated Taskfiles can reference the runtime nushell scripts by relative path. That constraint mirrors sayt's relocatable layout.
-
-If you already use sayt, the `auto-bayt` generator rule in `.sayt/config.cue` picks up bayt automatically — run `sayt generate` and bayt is part of the pipeline.
 
 ## Getting started
 
@@ -50,7 +48,7 @@ Start with one target. Here's a gradle service:
 package my_service
 
 import (
-    bayt "bonisoft.org/plugins/bayt/bayt"
+    bayt "bonisoft.org/plugins/bayt/core:bayt"
     sayt "bonisoft.org/plugins/bayt/stacks/sayt"
 )
 

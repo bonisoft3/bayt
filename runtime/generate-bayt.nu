@@ -67,7 +67,7 @@ def build-project-index [workspace_root: string] {
 	let rel_paths = (do { cd $workspace_root; ^git ls-files --cached --others --exclude-standard }
 		| lines
 		| where ($it | str ends-with "/bayt.cue") or $it == "bayt.cue"
-		| where not ($it | str starts-with "plugins/bayt/bayt/")
+		| where not ($it | str starts-with "plugins/bayt/core/")
 		| where not ($it | str starts-with "plugins/bayt/stacks/")
 		| each { |p| $"($workspace_root)/($p)" }
 	)

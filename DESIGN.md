@@ -828,7 +828,7 @@ Stacks are language presets. They unify verb fragments with language-specific `s
 ```cue
 // plugins/sayt/stacks/gradle.cue
 package gradle
-import "bonisoft.org/plugins/bayt/bayt"
+import "bonisoft.org/plugins/bayt/core:bayt"
 
 #gradleProject: bayt.#project & {
     activate: *"mise x --" | string
@@ -870,7 +870,7 @@ import "bonisoft.org/plugins/bayt/bayt"
 ```cue
 // plugins/sayt/stacks/pnpm.cue
 package pnpm
-import "bonisoft.org/plugins/bayt/bayt"
+import "bonisoft.org/plugins/bayt/core:bayt"
 
 #pnpmProject: bayt.#project & {
     activate: *"mise x --" | string
@@ -916,7 +916,7 @@ import "bonisoft.org/plugins/bayt/bayt"
 ```cue
 // plugins/sayt/stacks/sayt.cue — the self-hosted stack, shortest.
 package sayt
-import "bonisoft.org/plugins/bayt/bayt"
+import "bonisoft.org/plugins/bayt/core:bayt"
 
 #saytProject: bayt.#project & {
     activate: *"mise x --" | string
