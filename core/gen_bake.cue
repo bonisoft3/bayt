@@ -39,7 +39,14 @@ import (
 
 	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
 
-	_emit: {for n, t in G._m.files if t.bake != _|_ {(n): t}}
+	// Emit bake.<n>.hcl only for targets that declare a real release-
+	// style bake (image set). Plain `bake: {}` on the release preset
+	// still has `image: string` required by the consumer's override
+	// (see iris release targets), so this naturally selects release
+	// targets while skipping compose-x-bake-only configs where the
+	// project fills `bake.cache.{from,to}` for layer-cache wiring but
+	// no HCL artifact is wanted.
+	_emit: {for n, t in G._m.files if t.bake != _|_ if t.bake.image != _|_ {(n): t}}
 
 	// Helper: render one full HCL file body for a target (variables +
 	// target block).
@@ -48,9 +55,8 @@ import (
 		t: _
 
 		let _hasImage = t.bake.image != _|_
-		let _hasScope = t.bake.cacheScope != _|_
 
-		// Variable blocks — IMAGE / PUSH_IMAGE / optional CACHE_SCOPE.
+		// Variable blocks — IMAGE / PUSH_IMAGE.
 		_varLines: [
 			if _hasImage {"variable \"IMAGE\" {"},
 			if _hasImage {"  default = \"\(t.bake.image)\""},
@@ -58,9 +64,6 @@ import (
 			"variable \"PUSH_IMAGE\" {",
 			"  default = \"\(t.bake.push)\"",
 			"}",
-			if _hasScope {"variable \"CACHE_SCOPE\" {"},
-			if _hasScope {"  default = \"\(t.bake.cacheScope)\""},
-			if _hasScope {"}"},
 		]
 
 		let _tagList = [
@@ -71,14 +74,8 @@ import (
 		let _platforms = [for p in t.bake.platforms {"\"\(p)\""}]
 		let _argPairs =  [for k, v in t.bake.args {"    \"\(k)\" = \"\(v)\""}]
 
-		let _projId =   "\(t.project)-\(n)"
-		let _cfDefault = [for c in t.bake.cacheFrom {"\"\(c)\""}]
-		let _ctDefault = [for c in t.bake.cacheTo {"\"\(c)\""}]
-		let _cfGha = [
-			"\"type=gha,scope=main-\(_projId)\"",
-			"\"type=gha,scope=${CACHE_SCOPE}-\(_projId)\"",
-		]
-		let _ctGha = ["\"type=gha,mode=max,scope=${CACHE_SCOPE}-\(_projId)\""]
+		let _cacheFrom = [for c in t.bake.cache.from {"\"\(c)\""}]
+		let _cacheTo =   [for c in t.bake.cache.to {"\"\(c)\""}]
 
 		// args = { ... } block. Hoisted because `for` inside a list-
 		// literal `if` doesn't splat — multiple pairs would collide at
@@ -98,10 +95,8 @@ import (
 			if len(_platforms) > 0 {"  platforms  = [\(strings.Join(_platforms, ", "))]"},
 			"  tags       = \(_tagList)",
 			"  output     = PUSH_IMAGE == \"true\" ? [\"type=registry\"] : [\"type=docker\"]",
-			if _hasScope {"  cache-from = CACHE_SCOPE != \"\" ? [\(strings.Join(_cfGha, ", "))] : []"},
-			if !_hasScope && len(_cfDefault) > 0 {"  cache-from = [\(strings.Join(_cfDefault, ", "))]"},
-			if _hasScope {"  cache-to   = CACHE_SCOPE != \"\" ? [\(strings.Join(_ctGha, ", "))] : []"},
-			if !_hasScope && len(_ctDefault) > 0 {"  cache-to   = [\(strings.Join(_ctDefault, ", "))]"},
+			if len(_cacheFrom) > 0 {"  cache-from = [\(strings.Join(_cacheFrom, ", "))]"},
+			if len(_cacheTo) > 0 {"  cache-to   = [\(strings.Join(_cacheTo, ", "))]"},
 		], _argLines, [
 			"}",
 		]])

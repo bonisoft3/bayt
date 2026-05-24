@@ -28,9 +28,9 @@ say:
   build:
     do: "nu tests/test-bayt.nu"
   test:
-    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu"
+    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu"
   integrate:
-    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu"
+    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu"
   launch:
     do: "true"
   release:

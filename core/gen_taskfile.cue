@@ -61,11 +61,11 @@ import (
 		])
 	}
 
-	// Helper: fingerprint.nu invocation. Manifest-driven — all inputs
-	// (srcs, excludes, outs, chainedDeps) live in the per-target JSON;
-	// fingerprint.nu reads them and handles path math (including
-	// cross-project `../` traversal) in nushell, where it belongs.
-	// CUE stays out of path manipulation.
+	// Helper: fingerprint.nu invocation. Manifest carries srcs/excludes/
+	// outs/chainedDeps; fingerprint.nu reads them and handles cross-
+	// project `../` traversal for dep stamps. The local stamp path is
+	// composed here (CUE knows the target + cmd names) and passed via
+	// --stamp-file so fingerprint.nu's contract is one-flag-per-concern.
 	//
 	// Hard-coded `mise x --` prefix: the bayt runtime is mise-bound
 	// (it ships nu via the project's `.mise.toml`), and that's a
@@ -75,20 +75,21 @@ import (
 	// the system-emitted fingerprint hook. No cascading defaults from
 	// project/target — the leaf composes the prefix it needs.
 	_fingerprint: F={
-		t:   _
-		sub: string // "hash-check" or "hash-stamp"
+		t:    _
+		mode: "check" | "stamp"
 		// cmd: empty → target-level stamp; non-empty → per-cmd stamp.
 		// fingerprint.nu's --cmd flag scopes hash inputs to that cmd's
-		// effective srcs and writes/reads .task/bayt/<target>.<cmd>.hash.
+		// effective srcs; the stamp file name appends .<cmd> to match.
 		cmd: *"" | string
 		out: string
-		// Manifest path also uses {{.TASKFILE_DIR}} so it's absolute and
-		// immune to the same nested-include working-directory bug.
-		let _cmdFlag = [
-			if F.cmd == "" {""},
-			if F.cmd != "" {" --cmd \(F.cmd)"},
-		][0]
-		out: "mise x -- nu \(G._runtime)/fingerprint.nu \(sub) --manifest {{.TASKFILE_DIR}}/bayt.\(t.name).json\(_cmdFlag)"
+		// Manifest path uses {{.TASKFILE_DIR}} so it's absolute and
+		// immune to the nested-include working-directory bug. The stamp
+		// path stays cwd-relative; go-task runs each task from the
+		// Taskfile's dir, so `.task/bayt/` lands in the same project.
+		let _cmdFlag    = [if F.cmd != "" {" --cmd \(F.cmd)"}, ""][0]
+		let _stampName  = [if F.cmd != "" {"\(F.t.name).\(F.cmd)"}, F.t.name][0]
+		let _updateFlag = [if F.mode == "stamp" {" --update-stamp"}, ""][0]
+		out: "mise x -- nu \(G._runtime)/fingerprint.nu --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
 	}
 
 	// Helper: build the YAML cmds list for a (possibly per-cmd) task.
@@ -172,7 +173,7 @@ import (
 		][0]
 		out: [
 			_innerLine,
-			{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": B.t, sub: "hash-stamp", "cmd": B.cmd}).out){{end}}"},
+			{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": B.t, mode: "stamp", "cmd": B.cmd}).out){{end}}"},
 		]
 	}
 
@@ -221,7 +222,7 @@ import (
 						// itself is an implicit src, so even no-cmd
 						// targets (doctor, lint, etc.) participate in
 						// the merkle chain via a stable stamp.
-						status: [(_fingerprint & {"t": t, sub: "hash-check"}).out]
+						status: [(_fingerprint & {"t": t, mode: "check"}).out]
 
 						if len(t.cmds) == 1 {
 							let _c = t.cmds[0]
@@ -259,7 +260,7 @@ import (
 						// every per-cmd task succeeded, so the target
 						// stamp accurately reflects "all cmds passed."
 						cmds: [
-							{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": t, sub: "hash-stamp"}).out){{end}}"},
+							{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": t, mode: "stamp"}).out){{end}}"},
 						]
 						if t.taskfile.run != _|_ && t.taskfile.run == "always" {
 							run: "always"
@@ -284,7 +285,7 @@ import (
 								// each cmd-subtask's cache lookup scopes
 								// to its own srcs/outs slice.
 								vars: BAYTW: (_baytWrap & {"t": t, "cmd": _c.name}).out
-								status: [(_fingerprint & {"t": t, sub: "hash-check", "cmd": _c.name}).out]
+								status: [(_fingerprint & {"t": t, mode: "check", "cmd": _c.name}).out]
 								generates: [".task/bayt/\(t.name).\(_c.name).hash"]
 								cmds: (_cmdsBlock & {"t": t, "cmd": _c.name, "innerDo": _c.do}).out
 							}

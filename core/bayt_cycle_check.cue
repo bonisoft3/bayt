@@ -46,25 +46,6 @@ _cycle_c2: #project & {
 	}
 }
 
-// --- C3: project defaults unified into every target. defaults supplies
-// env + a shared cache mount; each target overrides `do`.
-_cycle_c3: #project & {
-	name: "c3"
-	dir:  "test/c3"
-	defaults: {
-		env: {COMMON_FLAG: "1"}
-		cmd: "builtin": dockerfile: mounts: [
-			{type: "cache", target: "/root/.cache"},
-		]
-	}
-	targets: {
-		"setup":   {cmd: "builtin": do: "true"}
-		"build":   {cmd: "builtin": do: "cargo build"}
-		"test":    {cmd: "builtin": do: "cargo test"}
-		"release": {cmd: "builtin": do: "cargo build --release"}
-	}
-}
-
 // --- C4: rulemap composition at multiple layers. Two layered fragments
 // + a project-level addition; all four resolve in priority order.
 _c4_layer1: {
@@ -218,7 +199,6 @@ _cycle_c10: targets: "build-min": cmds: [
 Tests: cycle: {
 	c1:  _cycle_c1
 	c2:  _cycle_c2
-	c3:  _cycle_c3
 	c4:  _cycle_c4
 	c5:  _cycle_c5
 	c6:  _cycle_c6

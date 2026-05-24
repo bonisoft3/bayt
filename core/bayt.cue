@@ -579,14 +579,39 @@ noop: #cmd & {
 	// `output = PUSH_IMAGE == "true" ? ["type=registry"] : ["type=docker"]`.
 	// Skaffold / CI override via env. Default false.
 	push: *false | bool
-	// Optional GHA cache scope. Non-empty enables `cache-from` / `cache-to`
-	// referencing the CACHE_SCOPE variable plus a hard-coded `main` scope.
-	cacheScope?: string
 	platforms: *["linux/amd64", "linux/arm64"] | [...string]
 	tags:      [...string]
 	args: [string]: string
-	cacheFrom: [...string]
-	cacheTo:   [...string]
+	// Buildx cache wiring. Same record feeds two emitters:
+	//   - gen_bake.cue → `bake.<target>.hcl` cache-from / cache-to
+	//   - gen_compose.cue → `compose.yaml` build.x-bake.{cache-from,cache-to}
+	//
+	// On a #target, only `from` / `to` are meaningful — they carry the
+	// resolved per-target cache strings. The sugar inputs (`type`,
+	// `scope`, `registry`) live at #project.bake.cache and are consumed
+	// by the per-target loop, which composes `from` / `to` with the
+	// target name baked into each scope key (so mode=max writers from
+	// sibling targets can't clobber each other).
+	//
+	// Sugar by type (set at #project.bake.cache):
+	//   - "gha":      requires `scope`.
+	//   - "registry": requires `registry` + `scope`.
+	//
+	// Sugar and passthrough are mutually exclusive: when `type` is set,
+	// `from` / `to` are constrained to `[]`. Mixing the two (e.g.
+	// `type: "gha"` alongside `from: ["custom"]`) fails CUE unification
+	// rather than silently dropping one side.
+	cache: C={
+		type?:     "gha" | "registry"
+		scope?:    string
+		registry?: string
+		from:      [...string]
+		to:        [...string]
+		if C.type != _|_ {
+			from: []
+			to:   []
+		}
+	}
 }
 
 // =============================================================================
@@ -775,9 +800,13 @@ noop: #cmd & {
 	// it from here; targets don't carry it unless they need to override.
 	activate: *"mise x --" | string
 
-	// Optional target-level defaults unified into every target.
-	defaults?: #target
-
+	// Project-level bake config. Same #bake schema as #target.bake;
+	// the cache.from/to lists (whether typed directly or derived from
+	// the type+scope[+ref] sugar) propagate down to every target with
+	// {target} substituted to `<project>-<target>` so each target's
+	// mode=max writer doesn't clobber its siblings. Optional —
+	// non-release projects leave this unset.
+	bake?: #bake
 
 	// Targets. Map key becomes target.name; project name + dir are
 	// propagated so cross-project dep refs can build relative paths.
@@ -789,6 +818,38 @@ noop: #cmd & {
 		name:    Name
 		project: P.name
 		dir:     P.dir
-		if P.defaults != _|_ {P.defaults}
+		// Compose per-target cache strings with this target's name
+		// baked into the scope key (mode=max writers from sibling
+		// targets would otherwise clobber). Sugar at P.bake.cache
+		// (type + scope [+ registry]) selects a backend recipe;
+		// explicit P.bake.cache.from / to win when non-empty.
+		if P.bake != _|_ {
+			let _t = "\(P.name)-\(Name)"
+			let _c = P.bake.cache
+			bake: cache: {
+				from: [
+					if len(_c.from) > 0 {_c.from},
+					if _c.type == _|_ {[]},
+					if _c.type == "gha" {[
+						"type=gha,scope=main-\(_t)",
+						"type=gha,scope=\(_c.scope)-\(_t)",
+					]},
+					if _c.type == "registry" {[
+						"type=registry,ref=\(_c.registry):\(_c.scope)-\(_t)",
+					]},
+				][0]
+				to: [
+					if len(_c.to) > 0 {_c.to},
+					if _c.type == _|_ {[]},
+					if _c.type == "gha" {[
+						"type=gha,mode=max,scope=\(_c.scope)-\(_t)",
+					]},
+					if _c.type == "registry" {[
+						"type=registry,ref=\(_c.registry):\(_c.scope)-\(_t),mode=min,image-manifest=true,oci-mediatypes=true",
+					]},
+				][0]
+			}
+		}
 	}) | null
 }
+

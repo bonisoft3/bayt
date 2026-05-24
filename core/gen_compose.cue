@@ -817,6 +817,44 @@ import (
 				if len(t.dockerfile.extra_hosts) > 0 {
 					extra_hosts: t.dockerfile.extra_hosts
 				}
+
+				// Per-target x-bake config — `docker buildx bake -f
+				// compose.yaml` reads build.x-bake.* at this target's
+				// RUN. Same fields fed to bake.<target>.hcl
+				// (gen_bake.cue), so compose-as-bake-input and the
+				// release HCL stay in sync.
+				//
+				// Note: SLSA provenance + SBOM attestations include a
+				// build timestamp baked into the image manifest, so
+				// the manifest digest drifts per build even with all
+				// layers CACHED. compose-spec's `x-bake` doesn't pass
+				// through `attest` / `provenance` / `sbom` fields
+				// (verified via `bake --print`), so they must be
+				// disabled out-of-band via BUILDX_NO_DEFAULT_ATTESTATIONS=1
+				// on every bake caller. dindbox compose sets it for
+				// the inner-bake; CI workflows must set it for the
+				// outer host bake.
+				// `bake?: #bake` means non-bake targets leave t.bake
+				// at _|_, so guard before touching its fields.
+				if t.bake != _|_ {
+					"x-bake": {
+						if len(t.bake.platforms) > 0 {
+							platforms: t.bake.platforms
+						}
+						if len(t.bake.tags) > 0 {
+							tags: t.bake.tags
+						}
+						if len(t.bake.args) > 0 {
+							args: t.bake.args
+						}
+						if len(t.bake.cache.from) > 0 {
+							"cache-from": t.bake.cache.from
+						}
+						if len(t.bake.cache.to) > 0 {
+							"cache-to": t.bake.cache.to
+						}
+					}
+				}
 			}
 
 			if len(t.dockerfile.secrets) > 0 {

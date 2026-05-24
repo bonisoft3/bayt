@@ -50,7 +50,7 @@ _t1_tf: files: build: tasks: default: {
 	vars: BAYTW: =~"^mise x -- nu .*cache\\.nu run --manifest .*bayt\\.build\\.json.* -- mise x --$"
 	cmds: [
 		"{{.BAYTW}} cargo build --release",
-		{defer: =~"^{{if not .EXIT_CODE}}.* hash-stamp .*{{end}}$"},
+		{defer: =~"^{{if not .EXIT_CODE}}.*fingerprint\\.nu .* --update-stamp{{end}}$"},
 	]
 }
 
@@ -100,7 +100,7 @@ _t3_tf: files: build: tasks: pregen: generates: [".task/bayt/build.pregen.hash"]
 _t3_tf: files: build: tasks: pregen: vars: BAYTW: =~"^mise x -- nu .*cache\\.nu run --manifest .*bayt\\.build\\.json --cmd pregen.* -- mise x --$"
 _t3_tf: files: build: tasks: pregen: cmds: [
 	"{{.BAYTW}} gen-code.nu",
-	{defer: =~"^{{if not .EXIT_CODE}}.* hash-stamp --manifest .* --cmd pregen{{end}}$"},
+	{defer: =~"^{{if not .EXIT_CODE}}.*fingerprint\\.nu --manifest .* --cmd pregen --stamp-file .*build\\.pregen\\.hash --update-stamp{{end}}$"},
 ]
 
 // --- T4: env map flows through onto the emitted task.
