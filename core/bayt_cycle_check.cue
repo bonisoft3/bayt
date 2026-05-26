@@ -70,10 +70,10 @@ _cycle_c4: #project & {
 // finalize (20). #MapToList strips the priority field from its output;
 // the order itself is the assertion.
 _cycle_c4: targets: build: cmds: [
-	{name: "pregen",    shell: "nu", do: "pregen.nu",    stop: false, ...},
-	{name: "builtin",   shell: "nu", do: "build.nu",     stop: false, ...},
-	{name: "postcheck", shell: "nu", do: "postcheck.nu", stop: false, ...},
-	{name: "finalize",  shell: "nu", do: "finalize.nu",  stop: false, ...},
+	{name: "pregen",    shell: "exec", do: "pregen.nu",    stop: false, ...},
+	{name: "builtin",   shell: "exec", do: "build.nu",     stop: false, ...},
+	{name: "postcheck", shell: "exec", do: "postcheck.nu", stop: false, ...},
+	{name: "finalize",  shell: "exec", do: "finalize.nu",  stop: false, ...},
 ]
 
 // --- C5: far-away cmd.dockerfile decoration across multiple targets.
@@ -94,7 +94,6 @@ _cycle_c5: #project & {
 			cmd: "builtin": {
 				do: "./gradlew integrationTest --rerun"
 				dockerfile: {
-					wrap: "wrap.sh"
 					mounts: [
 						{type: "secret", id:    "creds", required: true},
 						{type: "cache",  target: "/root/.gradle"},
@@ -192,7 +191,7 @@ _cycle_c10: #project & {
 	}
 }
 _cycle_c10: targets: "build-min": cmds: [
-	{name: "builtin", shell: "nu", do: "real-build", stop: false, ...},
+	{name: "builtin", shell: "exec", do: "real-build", stop: false, ...},
 ]
 
 // Public aggregator forces evaluation of all hidden bindings.

@@ -1,37 +1,20 @@
-// bake_gen.cue — per-target docker-bake HCL emission.
+// bake_gen.cue — per-target docker-bake HCL emission. Minimal:
+// only carries what compose's `x-bake` can't express — the IMAGE /
+// PUSH_IMAGE bake variables (skaffold overrides via `--set` / env),
+// the tag binding `tags = [IMAGE]`, and the output ternary
+// `PUSH_IMAGE == "true" ? registry : docker`.
 //
-// Since bayt emits skaffold.yaml as well, we can fully control the custom
-// build command skaffold uses and point it explicitly at the per-target
-// .bayt/bake.<n>.hcl file via `-f`. That lets us split bake output the
-// same way we split Taskfile / compose / skaffold — one file per target,
-// independent cache invalidation.
+// Everything else (context, dockerfile, target, platforms, args,
+// cache-from, cache-to) lives in compose's `x-bake` and reaches bake
+// via the multi-file merge in the generated skaffold:
 //
-//   docker buildx bake -f .bayt/bake.release.hcl release
+//   docker compose config | docker buildx bake -f- -f .bayt/bake.<n>.hcl <n>
 //
-// Each per-target file is self-contained: its own variable defaults and
-// the single `target "<n>" { ... }` block. Users invoking bake locally
-// pass -f explicitly; the hand-maintained docker-bake.override.hcl (if
-// present) still auto-merges because bake discovers it by filename.
-//
-// Emits the skaffold custom-command contract:
-//
-//   variable "IMAGE"       { default = "<image>" }
-//   variable "PUSH_IMAGE"  { default = "false" }
-//   variable "CACHE_SCOPE" { default = "" }
-//
-//   target "<n>" {
-//     tags     = [IMAGE]
-//     output   = PUSH_IMAGE == "true" ? ["type=registry"] : ["type=docker"]
-//     platforms = [...]
-//     cache-from = CACHE_SCOPE != "" ? [...] : []
-//     cache-to   = CACHE_SCOPE != "" ? [...] : []
-//   }
+// So the HCL alone won't build — `bake -f .bayt/bake.<n>.hcl` errors
+// on missing context. Always invoke through the generated skaffold
+// (which the project's hand-edited skaffold.yaml `requires:`), or
+// pair the HCL with compose's flattened output as above.
 package bayt
-
-import (
-	"list"
-	"strings"
-)
 
 #bakeGen: G={
 	project: #project
@@ -48,66 +31,30 @@ import (
 	// no HCL artifact is wanted.
 	_emit: {for n, t in G._m.files if t.bake != _|_ if t.bake.image != _|_ {(n): t}}
 
-	// Helper: render one full HCL file body for a target (variables +
-	// target block).
+	// HCL body — only what bake's compose-input can't express: the
+	// IMAGE / PUSH_IMAGE variables and the output ternary on
+	// PUSH_IMAGE. The rest (context, dockerfile, target, platforms,
+	// args, cache) lives in compose's x-bake and merges in via
+	// gen_skaffold.cue's `docker compose config | bake -f- -f .bayt/…`.
 	_fileBody: {
 		n: string
 		t: _
 
-		let _hasImage = t.bake.image != _|_
-
-		// Variable blocks — IMAGE / PUSH_IMAGE.
-		_varLines: [
-			if _hasImage {"variable \"IMAGE\" {"},
-			if _hasImage {"  default = \"\(t.bake.image)\""},
-			if _hasImage {"}"},
-			"variable \"PUSH_IMAGE\" {",
-			"  default = \"\(t.bake.push)\"",
-			"}",
-		]
-
-		let _tagList = [
-			if _hasImage {"[IMAGE]"},
-			if !_hasImage {"[" + strings.Join([for tag in t.bake.tags {"\"\(tag)\""}], ", ") + "]"},
-		][0]
-
-		let _platforms = [for p in t.bake.platforms {"\"\(p)\""}]
-		let _argPairs =  [for k, v in t.bake.args {"    \"\(k)\" = \"\(v)\""}]
-
-		let _cacheFrom = [for c in t.bake.cache.from {"\"\(c)\""}]
-		let _cacheTo =   [for c in t.bake.cache.to {"\"\(c)\""}]
-
-		// args = { ... } block. Hoisted because `for` inside a list-
-		// literal `if` doesn't splat — multiple pairs would collide at
-		// the same list position. list.Concat does the right thing.
-		_argLines: [
-			if len(_argPairs) > 0 {"  args = {"},
-			for p in _argPairs {p},
-			if len(_argPairs) > 0 {"  }"},
-		]
-
-		// Target block.
-		_targetLines: list.Concat([[
-			"target \"\(n)\" {",
-			"  context    = \".\"",
-			"  dockerfile = \".bayt/Dockerfile.\(n)\"",
-			"  target     = \"\(n)\"",
-			if len(_platforms) > 0 {"  platforms  = [\(strings.Join(_platforms, ", "))]"},
-			"  tags       = \(_tagList)",
-			"  output     = PUSH_IMAGE == \"true\" ? [\"type=registry\"] : [\"type=docker\"]",
-			if len(_cacheFrom) > 0 {"  cache-from = [\(strings.Join(_cacheFrom, ", "))]"},
-			if len(_cacheTo) > 0 {"  cache-to   = [\(strings.Join(_cacheTo, ", "))]"},
-		], _argLines, [
-			"}",
-		]])
-
-		_lines: [
-			for l in _varLines {l},
-			"",
-			for l in _targetLines {l},
-		]
 		out: string
-		out: strings.Join(_lines, "\n") + "\n"
+		out: """
+			variable "IMAGE" {
+			  default = "\(t.bake.image)"
+			}
+			variable "PUSH_IMAGE" {
+			  default = "\(t.bake.push)"
+			}
+
+			target "\(n)" {
+			  tags   = [IMAGE]
+			  output = PUSH_IMAGE == "true" ? ["type=registry"] : ["type=docker"]
+			}
+
+			"""
 	}
 
 	// Per-target HCL bodies. Key is target name; written to

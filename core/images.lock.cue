@@ -26,20 +26,14 @@ lock: images: {
 	docker:       "docker:29.2.0-cli@sha256:ae2609c051339b48c157d97edc4f1171026251607b29a2b0f25f990898586334"
 	alpine_socat: "alpine/socat:latest@sha256:bfd2550379212e087dc18db2f4611f43477be4b575d660c8f18c5b9a1b2e2757"
 	leap:         "opensuse/leap:16.0@sha256:859560554b625c225fa767b76d61253d529b95d082c2d68579ad69168d5e3da7"
-	// envoyproxy/envoy ships its binary at /usr/local/bin/envoy and
-	// envsubst at /usr/bin/envsubst. tracker-tx's launch COPYs both
-	// into a leap-based stage. Ubuntu (envoy) and leap are both glibc,
-	// so the binaries run cross-distro after a small set of /usr/lib
-	// shared libs are also COPY'd.
+	// envoyproxy/envoy ships /usr/local/bin/envoy and /usr/bin/envsubst.
+	// Both are glibc-linked, so they COPY into any glibc-based stage
+	// when the matching /usr/lib shared libs are COPY'd alongside.
 	envoy: "envoyproxy/envoy:v1.35.3@sha256:4d496918618a7ebd6c71ae8285e31ebff092f3a0a5ad642d50decf4a54eb2456"
 	// tarampampam/microcheck — tiny static healthcheck binaries
 	// (httpcheck, portcheck) for COPY-from in dockerfile preambles.
-	// Used by bayt's healthcheck.http / .tcp templates.
 	microcheck: "tarampampam/microcheck:1@sha256:79c187c05bfa67518078bf4db117771942fa8fe107dc79a905861c75ddf28dfa"
 	// mockserver/mockserver — HTTP mock with declarative expectations
-	// loaded from MOCKSERVER_INITIALIZATION_JSON_PATH. Used by iris's
-	// integrate stage to stub the OpenAI/Ollama chat-completions
-	// endpoint without pulling a real AI runtime + model. Same image
-	// products/iris/images/mockserver/Dockerfile uses.
+	// loaded from MOCKSERVER_INITIALIZATION_JSON_PATH.
 	mockserver: "mockserver/mockserver:mockserver-5.15.0@sha256:0f9ef78c94894ac3e70135d156193b25e23872575d58e2228344964273b4af6b"
 }

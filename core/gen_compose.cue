@@ -173,20 +173,78 @@ import (
 			for m in t.dockerfile.mounts {(_mount & {"m": m, scope: _mountScope}).out},
 			for m in _cmdMounts {(_mount & {"m": m, scope: _mountScope}).out},
 		]
-		_prefix: [if len(_mountStrs) > 0 {strings.Join(_mountStrs, " ") + " "}, ""][0]
-		_wrap:   [if c.dockerfile != _|_ && c.dockerfile.wrap != _|_ {"\(c.dockerfile.wrap) "}, ""][0]
+
+		// inject. When set, the cmd's RUN line is a heredoc body that
+		// does mounts + setup/teardown around the activated cmd.
+		let _inject = [if c.dockerfile != _|_ && c.dockerfile.inject != _|_ {c.dockerfile.inject}, null][0]
+		let _injectMountStrs = [
+			if _inject == null {[]},
+			if _inject != null {[
+				for s in _inject.secrets {
+					let _tg = [if s.target != _|_ {",target=\(s.target)"}, ""][0]
+					let _md = [if s.mode != _|_ {",mode=\(s.mode)"}, ""][0]
+					"--mount=type=secret,id=\(s.id)\(_tg)\(_md)"
+				},
+			]},
+		][0]
+
+		// Mount-flag prefix combines target mounts + cmd mounts + inject mounts.
+		let _allMountStrs = list.Concat([_mountStrs, _injectMountStrs])
+		_prefix: [if len(_allMountStrs) > 0 {strings.Join(_allMountStrs, " ") + " "}, ""][0]
 
 		// OS axis: linux overrides cmd-level for container builds.
 		let _do        = [if c.linux != _|_ && c.linux.do != _|_       {c.linux.do},     c.do][0]
 		let _shell     = [if c.linux != _|_ && c.linux.shell != _|_    {c.linux.shell},  c.shell][0]
 		let _activated = [if len(t.activate) > 0                       {"\(t.activate) \(_do)"}, _do][0]
-		let _full      = "\(_wrap)\(_activated)"
+
+		// --- inject body assembly ---
+		// Auto-emitted pre lines from secrets[].var sugar.
+		let _varPres = [
+			if _inject == null {[]},
+			if _inject != null {list.Concat([
+				for s in _inject.secrets if s.var != _|_ {
+					let _path = [if s.target != _|_ {s.target}, "/run/secrets/\(s.id)"][0]
+					[
+						if s.var.contents != _|_ {"export \(s.var.contents)=\"$(cat \(_path))\""},
+						if s.var.path != _|_ {"export \(s.var.path)=\"\(_path)\""},
+					]
+				},
+			])},
+		][0]
+		let _defaultStepsList = [
+			if _inject != null && _inject.defaultSteps != _|_ && _inject.defaultSteps != null {
+				(#MapToList & {in: _inject.defaultSteps}).out
+			},
+			[],
+		][0]
+		let _injectSteps = [
+			if _inject == null {[]},
+			if _inject != null {[for s in _inject.steps {s}]},
+		][0]
+		let _allSteps = list.Concat([_defaultStepsList, _injectSteps])
+		let _allPres = list.Concat([_varPres, [for st in _allSteps {st.pre}]])
+		let _allPosts = [for st in _allSteps if st.post != _|_ {st.post}]
+		// LIFO teardown.
+		let _postsLifo = [for i, _ in _allPosts {_allPosts[len(_allPosts)-1-i]}]
 
 		out: string
 		out: [
+			// inject is set → multi-line heredoc RUN. Mounts on the RUN
+			// line; body is /bin/sh with set -e + setup + trap-LIFO-post
+			// + activated cmd.
+			if _inject != null {
+				let _trap = [if len(_postsLifo) > 0 {"trap '\(strings.Join(_postsLifo, "; "))' EXIT"}, ""][0]
+				let _bodyLines = list.Concat([
+					["set -e"],
+					_allPres,
+					[if _trap != "" {_trap}],
+					[_activated],
+				])
+				"RUN \(_prefix)<<BAYT_INJECT\n\(strings.Join(_bodyLines, "\n"))\nBAYT_INJECT"
+			},
 			// shell == "exec" → exec form, whitespace-tokenized argv.
-			if _shell == "exec" {
-				let _tokens = strings.Split(_full, " ")
+			if _inject == null && _shell == "exec" {
+				let _tokens = strings.Split(_activated, " ")
 				let _quoted = [for tk in _tokens if tk != "" {"\"\(tk)\""}]
 				"RUN \(_prefix)[\(strings.Join(_quoted, ", "))]"
 			},
@@ -194,15 +252,15 @@ import (
 			// already `/bin/sh -c <cmd>`, so writing it that way avoids
 			// the JSON-escape dance on the cmd string. Cmds with quotes,
 			// backslashes, etc. flow through verbatim.
-			if _shell == "sh" {
-				"RUN \(_prefix)\(_full)"
+			if _inject == null && _shell == "sh" {
+				"RUN \(_prefix)\(_activated)"
 			},
 			// other shells (nu, bash, pwsh, …) → exec form wrapping the
 			// cmd in `[<shell>, "-c", <do>]`. The do string is
 			// JSON-escaped: backslash first (so the next pass doesn't
 			// re-escape), then quote.
-			if _shell != "exec" && _shell != "sh" {
-				let _esc1 = strings.Replace(_full, "\\", "\\\\", -1)
+			if _inject == null && _shell != "exec" && _shell != "sh" {
+				let _esc1 = strings.Replace(_activated, "\\", "\\\\", -1)
 				let _esc2 = strings.Replace(_esc1, "\"", "\\\"", -1)
 				"RUN \(_prefix)[\"\(_shell)\", \"-c\", \"\(_esc2)\"]"
 			},
@@ -469,24 +527,13 @@ import (
 			if t.dockerfile.incremental {
 				let _allMounts = list.Concat([[_baytCacheMountStr], _targetMountStrs, _cmdMountStrs])
 				let _mountStr = [if len(_allMounts) > 0 {strings.Join(_allMounts, " ") + " "}, ""][0]
-				// Collect wraps from all cmds (typically just the builtin cmd).
-				// Mirrors _cmdMountStrs pattern: iterate t.cmds (priority-
-				// sorted list) rather than accessing t.cmd map by key — map
-				// key access in CUE conditionals doesn't evaluate concretely
-				// for pattern-constrained maps.
-				let _wrapCmds = [for c in t.cmds if c.dockerfile != _|_ && c.dockerfile.wrap != _|_ {c.dockerfile.wrap}]
-				let _wrapStr = [if len(_wrapCmds) > 0 {"\(_wrapCmds[0]) "}, ""][0]
 				// `task bayt:<n>` (no `-t`) — the WORKDIR's Taskfile.yml
 				// is the launch root, with `bayt:` resolving the per-
 				// target chain through `.bayt/Taskfile.yml`. Single
 				// namespace path, same address users invoke on the host.
-				// _wrapStr prepends dind.sh (or similar) when any cmd has
-				// a dockerfile.wrap set. Exec form: `task` is a single
-				// program with two args, no shell needed.
-				let _full = "\(_wrapStr)task bayt:\(t.name)"
-				let _tokens = strings.Split(_full, " ")
-				let _quoted = [for tk in _tokens if tk != "" {"\"\(tk)\""}]
-				["RUN \(_mountStr)[\(strings.Join(_quoted, ", "))]"]
+				// Exec form: `task` is a single program with two args,
+				// no shell needed.
+				["RUN \(_mountStr)[\"task\", \"bayt:\(t.name)\"]"]
 			},
 			if !t.dockerfile.incremental {[]},
 			if !t.dockerfile.incremental {
@@ -590,8 +637,8 @@ import (
 				"CMD \(_activatePrefix)\(_cmStr)"
 			},
 			if len(_cmList) > 0 {
-				let _full = list.Concat([_activateTokens, _cmList])
-				let quoted = [for a in _full {"\"\(a)\""}]
+				let _activated = list.Concat([_activateTokens, _cmList])
+				let quoted = [for a in _activated {"\"\(a)\""}]
 				"CMD [\(strings.Join(quoted, ", "))]"
 			},
 		]
@@ -778,7 +825,18 @@ import (
 					if t.compose != _|_ && t.compose.build == _|_ {{}},
 					if t.compose != _|_ && t.compose.build != _|_ {t.compose.build.additional_contexts},
 				][0]
-				if t.dockerfile.incremental || len(_depEntries) > 0 || t.dockerfile.from != null || len(_runtimeDeps) > 0 || len(_copyContextEntries) > 0 || len(_userAddlCtx) > 0 {
+				// Ref-arm FROM (`from: ref:`) and ref-arm copy entries
+				// need explicit `service:<qualified-name>` redirects so
+				// bake resolves the alias to the sibling target's compose
+				// service rather than trying to pull it from a registry.
+				// Image-name arm entries (leaf registry images) are
+				// resolved by bake's default registry fetch — no entry
+				// needed unless the user wants to override the source,
+				// which they do via compose.build.additional_contexts
+				// directly (picked up below as _userAddlCtx).
+				let _selfFromIsRef = t.dockerfile.from != null && t.dockerfile.from.ref != _|_
+				let _copyRefEntries = [for f in _copyContextEntries if f.ref != _|_ {f}]
+				if t.dockerfile.incremental || len(_depEntries) > 0 || _selfFromIsRef || len(_runtimeDeps) > 0 || len(_copyRefEntries) > 0 || len(_userAddlCtx) > 0 {
 					additional_contexts: {
 						for e in _depEntries {
 							(e): "service:\(e)"
@@ -786,24 +844,15 @@ import (
 						if t.dockerfile.incremental {
 							"bayt-runtime": "service:bayt-runtime-stub"
 						}
-						if t.dockerfile.from != null {
-							(t.dockerfile.from.name): t.dockerfile.from.context
+						if _selfFromIsRef {
+							(t.dockerfile.from.name): "service:\(t.dockerfile.from.name)"
 						}
 						for k in _runtimeDeps {
 							(k): "service:\(k)"
 						}
-						// Each `dockerfile.copy` entry with `from` set adds
-						// an additional_contexts entry so bake resolves the
-						// COPY --from=<alias> reference. External (from.name)
-						// entries get docker-image://<name>; internal
-						// (from.ref) entries get service:<qualified-name>.
-						// from.context already carries the right prefix.
-						for f in _copyContextEntries {
-							(f.name): f.context
+						for f in _copyRefEntries {
+							(f.name): "service:\(f.name)"
 						}
-						// User-supplied entries from compose.build.additional_contexts
-						// (e.g. a `monorepo-root: ../../..` path to enable a
-						// single workspace-wide COPY from a leaf target).
 						for k, v in _userAddlCtx {
 							(k): v
 						}

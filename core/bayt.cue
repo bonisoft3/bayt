@@ -77,7 +77,45 @@ import "strings"
 
 	// Output-format axis — decorations applied only when emitting that format.
 	dockerfile?: {
-		wrap?:    string
+		// Structured wrap. When set, the RUN line gets `--mount=type=
+		// secret,…` flags for each entry in `secrets`, and the cmd body
+		// is wrapped in a /bin/sh -c '<setup>; trap <teardown> EXIT;
+		// <cmd>' shell. Setup lines come from (in order):
+		//   - each `secrets[].var.contents`/`.path` sugar (auto-emits
+		//     `export <name>=…`)
+		//   - `defaultSteps` (framework-supplied, keyed, ordered by
+		//     priority — composable / overridable by key)
+		//   - `steps` (project-leaf-additive plain list)
+		// Teardown is a single combined trap firing the steps' `post`
+		// lines in LIFO order, each protected with `${var:-}` guards in
+		// the user's source.
+		inject?: {
+			secrets: [...{
+				// Foreign-keyed to a compose `build.secrets[].id` on the
+				// same target. The stack defines both halves; CUE does
+				// not statically enforce (naming convention).
+				id: string
+
+				// Optional sugar — when set, emit a setup line at the
+				// head of the wrap body.
+				var?: {
+					// export <contents>="$(cat /run/secrets/<id>)"
+					contents?: string
+					// export <path>="<target or /run/secrets/<id>>"
+					path?: string
+				}
+
+				// BuildKit --mount target= (literal absolute path). When
+				// unset the secret appears at /run/secrets/<id>.
+				target?: string
+				// File mode for the mounted secret (e.g. "0600").
+				mode?: string
+			}]
+
+			defaultSteps: *null | #MapAsList
+			steps:        *[] | [...{pre: string, post?: string}]
+		}
+
 		mounts?:  [...#dockerfile.#mount]
 		secrets?: [...string]
 		network?: *"default" | "none" | "host"
@@ -115,6 +153,20 @@ noop: #cmd & {
 // Kept narrow; each carries only what cannot be derived from the portable
 // action. Deps/srcs/outs live on #target, not here.
 // =============================================================================
+
+// Resolve a Bazel-style ref to its qualified compose-service name
+// `<project>-<target>`. `:target` is same-project (uses `proj`);
+// `project:target` is cross-project (uses the embedded project).
+#qualifyRef: {
+	ref:  string
+	proj: string
+	let _parts = strings.Split(ref, ":")
+	let _proj = [
+		if _parts[0] == "" {proj},
+		if _parts[0] != "" {_parts[0]},
+	][0]
+	name: "\(_proj)-\(_parts[1])"
+}
 
 #dockerfile: D={
 	// _project — injected by #target so the `from: ref: ":<target>"`
@@ -223,22 +275,15 @@ noop: #cmd & {
 	// stage's filesystem and ENVs, so layering a preset on top is
 	// neither needed nor expressible.
 	from: null | close({
-		name:    string & !~"^scratch$"
-		context: *"docker-image://\(name)" | string
+		name: string & !~"^scratch$"
 	}) | close({
 		ref: string
-		let _parts = strings.Split(ref, ":")
-		let _proj = [
-			if _parts[0] == "" {D._project},
-			if _parts[0] != "" {_parts[0]},
-		][0]
 		// Qualified alias: `<project>-<target>` rather than just
 		// `<target>`. BuildKit silently collapses `FROM X AS Y` when
-		// X==Y (the downstream stage steals the upstream's name), so a
-		// same-target chain like `FROM setup AS setup` would lose the
-		// chain entirely. Qualifying with project disambiguates.
-		name:    "\(_proj)-\(_parts[1])"
-		context: "service:\(_proj)-\(_parts[1])"
+		// X==Y (the downstream stage steals the upstream's name), so
+		// a same-target chain like `FROM setup AS setup` would lose
+		// the chain entirely. Qualifying with project disambiguates.
+		name: (#qualifyRef & {"ref": ref, proj: D._project}).name
 	})
 
 	// WORKDIR. Defaults to /monorepo/<projectDir> in the emitter.
@@ -304,17 +349,10 @@ noop: #cmd & {
 	// --exclude.
 	copy: [...{
 		from: *null | close({
-			name:    string & !~"^scratch$"
-			context: "docker-image://\(name)"
+			name: string & !~"^scratch$"
 		}) | close({
-			ref: string
-			let _parts = strings.Split(ref, ":")
-			let _proj = [
-				if _parts[0] == "" {D._project},
-				if _parts[0] != "" {_parts[0]},
-			][0]
-			name:    "\(_proj)-\(_parts[1])"
-			context: "service:\(_proj)-\(_parts[1])"
+			ref:  string
+			name: (#qualifyRef & {"ref": ref, proj: D._project}).name
 		})
 		srcs:    [...string]
 		dst:     string
@@ -579,7 +617,7 @@ noop: #cmd & {
 	// `output = PUSH_IMAGE == "true" ? ["type=registry"] : ["type=docker"]`.
 	// Skaffold / CI override via env. Default false.
 	push: *false | bool
-	platforms: *["linux/amd64", "linux/arm64"] | [...string]
+	platforms: *[] | [...string]
 	tags:      [...string]
 	args: [string]: string
 	// Buildx cache wiring. Same record feeds two emitters:

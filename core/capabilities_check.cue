@@ -43,7 +43,6 @@ _cap2: #project & {
 			cmd: "builtin": {
 				do: "./gradlew integrationTest"
 				dockerfile: {
-					wrap: "/monorepo/scripts/wrap.sh"
 					mounts: [
 						{type: "secret", id: "creds", required: true},
 					]
@@ -59,7 +58,6 @@ _cap2: #project & {
 		}
 	}
 }
-_cap2: targets: integrate: cmd: "builtin": dockerfile: wrap: "/monorepo/scripts/wrap.sh"
 _cap2: targets: integrate: compose: network_mode: "host"
 _cap2: targets: integrate: dockerfile: secrets: "creds": null
 

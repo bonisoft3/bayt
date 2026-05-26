@@ -1,37 +1,18 @@
 // images.cue — container base-image presets producing dockerfile.from
-// values. Each preset sets `dockerfile.from.name` as a field-level
-// disjunction default; `context` auto-derives from the schema's
-// `*"docker-image://\(name)" | string` default. Use a preset on a
-// LEAF stage when you want a fresh `FROM <image>`; for chained stages
-// use `dockerfile: from: ref: ":<target>"` (preset + ref shorthand
-// don't compose, see below).
+// values. Each preset sets `dockerfile.from.name` to a pinned digest
+// from `images.lock.cue`. Use a preset on a LEAF stage when you want
+// a fresh `FROM <image>`; for chained stages use `dockerfile: from:
+// ref: ":<target>"` (preset + ref shorthand don't compose — the
+// schema's closed `from` arms reject the mix).
 //
-// Image references are pulled from images.lock.cue's `lock.images.<alias>`
-// table — single source of truth for the registry+tag+digest tuple.
-//
-// Composition: derived presets (e.g. `dind`) extend a base preset by
-// adding new keyed entries to its defaultPreamble. CUE map unification
-// merges by key, so no list.Concat dance:
-//
-//   dind: nubox & {
-//     defaultPreamble: {
-//       "socat-install": {line: "RUN ..."}
-//     }
-//   }
+// Composition: derived presets extend a base by adding new keyed
+// entries to its defaultPreamble. CUE map unification merges by key.
 //
 // Compose into a target's dockerfile block:
 //
 //   targets: "build":   dockerfile: nubox     // leap, includes lazybox
 //   targets: "release": dockerfile: busybox   // musl runtime
-//   targets: "ops":     dockerfile: staging   // busybox + lazybox overlay
-//
-// Image presets are for LEAF stages only — when you want a fresh
-// FROM <image>. Chained stages (FROM another bayt target via
-// `dockerfile: from: ref: ":<target>"`) inherit the upstream stage's
-// filesystem and ENVs, so layering a preset on top is unnecessary.
-// The schema rejects `nubox & {from: ref: ...}` — combining an image
-// preset's canonical from with a ref-arm shorthand is a no-op
-// overlay at best and silently masks the chain intent at worst.
+//   targets: "dindbox": dockerfile: bayt.dind // docker:cli + socat + entrypoint
 package bayt
 
 // _lazyboxOverlay — defaultPreamble fragment that COPYs lazybox into
@@ -57,8 +38,7 @@ nubox: {
 	// fails CUE evaluation. Chained-FROM consumers don't compose the
 	// preset; they set `dockerfile: from: ref:` directly.
 	from: close({
-		name:    *lock.images.leap | string
-		context: *"docker-image://\(name)" | string
+		name: *lock.images.leap | string
 	})
 	defaultPreamble: _lazyboxOverlay & {
 		"mise-trusted":  {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
@@ -68,12 +48,11 @@ nubox: {
 
 // dind — alpine docker:cli + buildx/compose plugins, with socat
 // copied from alpine/socat. CLI-only (no daemon binaries) so the
-// image stays small. Bakes two convenience scripts under
-// /usr/local/bin; see the scripts themselves for their intent.
+// image stays small. Bakes the dindbox sidecar's entrypoint script
+// under /usr/local/bin; see the script itself for its intent.
 dind: {
 	from: close({
-		name:    *lock.images.docker | string
-		context: *"docker-image://\(name)" | string
+		name: *lock.images.docker | string
 	})
 	copy: [
 		{
@@ -88,29 +67,19 @@ dind: {
 		},
 	]
 	defaultPreamble: {
-		"dind-scripts": {priority: 3, line: #"""
+		"dind-entrypoint": {priority: 3, line: #"""
 			RUN <<DIND
-			cat > /usr/local/bin/dind.sh <<'SCRIPT'
-			#!/bin/sh
-			# dind.sh — RUN-side wrap. Reads the docker_host secret
-			# mounted at /run/secrets/docker_host and re-exports it
-			# as DOCKER_HOST so testcontainers / docker CLI in the
-			# wrapped command reach the dindbox-bridged daemon.
-			set -e
-			export DOCKER_HOST="$(cat /run/secrets/docker_host)"
-			exec "$@"
-			SCRIPT
 			cat > /usr/local/bin/dind-entrypoint.sh <<'SCRIPT'
 			#!/bin/sh
 			# dind-entrypoint.sh — sidecar entrypoint. Bridges the
 			# mounted /var/run/docker.sock to a published TCP port
 			# (socat), discovers the literal IP host.docker.internal
 			# resolves to on this host (cross-platform via a probe
-			# container with --add-host=host-gateway), then exports
-			# DOCKER_HOST and BAYT_DOCKER_HOST before execing CMD.
-			# DOCKER_HOST is the local docker CLI's target;
-			# BAYT_DOCKER_HOST is the env-sourced secret value piped
-			# through to RUN sandboxes that bake spawns from CMD.
+			# container with --add-host=host-gateway), then reassigns
+			# DOCKER_HOST to `tcp://<ip>:<port>` before execing CMD.
+			# The final DOCKER_HOST value flows out via compose's
+			# env-sourced `docker_host` secret to RUN sandboxes that
+			# bake spawns from CMD.
 			set -e
 			export DOCKER_HOST=unix:///var/run/docker.sock
 			socat -d0 TCP-LISTEN:2375,fork,reuseaddr UNIX-CONNECT:/var/run/docker.sock &
@@ -121,10 +90,26 @@ dind: {
 			    awk '/host\.docker\.internal/ {printf "%s", $1; exit}' /etc/hosts)
 			[ -n "$HOST_IP" ] || { echo "dind-entrypoint: failed to probe host IP" >&2; exit 1; }
 			export DOCKER_HOST="tcp://${HOST_IP}:${HOST_PORT}"
-			export BAYT_DOCKER_HOST="$DOCKER_HOST"
+			# Hydrate the host's buildx instance file from
+			# $BUILDX_INSTANCE (verbatim file content) + the
+			# BUILDX_BUILDER env. The compose service env carries
+			# these via `${VAR:-}` interpolation so missing host env
+			# degrades to empty — the guards below skip writing in
+			# that case. Compose secrets aren't portable (file:
+			# source breaks on missing path across hosts/inception,
+			# environment: source errors when var is unset), so we
+			# stick to plain env passthrough.
+			if [ -n "${BUILDX_BUILDER:-}" ] && [ -n "${BUILDX_INSTANCE:-}" ]; then
+			    mkdir -p /root/.docker/buildx/instances
+			    printf '%s' "$BUILDX_INSTANCE" > "/root/.docker/buildx/instances/$BUILDX_BUILDER"
+			fi
+			if [ -n "${DOCKER_AUTH_CONFIG:-}" ]; then
+			    mkdir -p /root/.docker
+			    printf '%s' "$DOCKER_AUTH_CONFIG" > /root/.docker/config.json
+			fi
 			exec "$@"
 			SCRIPT
-			chmod +x /usr/local/bin/dind.sh /usr/local/bin/dind-entrypoint.sh
+			chmod +x /usr/local/bin/dind-entrypoint.sh
 			DIND
 			"""#}
 	}
@@ -133,25 +118,7 @@ dind: {
 // busybox — minimal musl runner, scratch-adjacent. Use for release.
 busybox: {
 	from: close({
-		name:    *lock.images.busybox | string
-		context: *"docker-image://\(name)" | string
-	})
-}
-
-// staging — busybox + lazybox overlay for ops shells in running pods.
-staging: {
-	from:            busybox.from
-	defaultPreamble: _lazyboxOverlay
-}
-
-// docker — official docker image (Alpine), CLI + buildx + compose
-// plugins included. Use for CI stages that shell out to docker without
-// needing a local daemon. Stages that need a daemon should use `dind`
-// + dind.sh.
-docker: {
-	from: close({
-		name:    *lock.images.docker | string
-		context: *"docker-image://\(name)" | string
+		name: *lock.images.busybox | string
 	})
 }
 

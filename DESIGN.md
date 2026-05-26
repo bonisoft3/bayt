@@ -152,7 +152,11 @@ Key invariants:
     // Applies only when emitting that specific file. Far-away unification
     // lets the dockerfile block decorate a cmd without the cmd knowing.
     dockerfile?: close({
-        wrap?:    string                // "dind.sh", "unshare -n", etc.
+        inject?: {                      // structured wrap: secrets + setup/teardown
+            secrets: [...{id: string, target?: string, mode?: string, var?: {contents?: string, path?: string}}]
+            defaultSteps: *null | #MapAsList // keyed map of {pre, post?, priority?}
+            steps:        *[] | [...{pre: string, post?: string}]
+        }
         mounts?:  [...#mount]           // --mount=type=cache|secret|bind|ssh
         secrets?: [...string]           // secret ids required by this rule
         network?: *"default" | "none" | "host"
@@ -597,14 +601,6 @@ Three base presets cover 95% of cases. All ship in `plugins/sayt/bases.cue` as `
     // No mise, no lazybox; just the artifact.
 }
 
-// #staging — runner + lazybox overlay. For ops shells in running pods.
-#staging: #dockerfileBlock & {
-    base:  "busybox:musl"
-    stage: "runtime"
-    preamble: [
-        "COPY --from=bonisoft3/lazybox /lazybox /usr/local",
-    ]
-}
 ```
 
 Usage:
@@ -614,7 +610,6 @@ targets: {
     "build":    { dockerfile: bases.#nubox }
     "test":     { dockerfile: bases.#nubox }
     "release":  { dockerfile: bases.#busybox }
-    "staging":  { dockerfile: bases.#staging }
 }
 ```
 
@@ -774,7 +769,7 @@ package bayt
     outs: *["build/test-results-int/**/*.xml"] | [...string]
     dockerfile: { secrets: ["host.env"] }
     compose: {}
-    cmd: "builtin": dockerfile: { wrap: "dind.sh" }
+    cmd: "builtin": dockerfile: inject: secrets: [{id: "docker_host", var: contents: "DOCKER_HOST"}]
 }
 
 // release: the shippable image. Typically #busybox base.
@@ -1020,11 +1015,10 @@ import (
 
         "integrate": {
             // Integration tests need docker-in-docker plus a host.env secret.
-            cmd: "builtin": dockerfile: {
-                wrap: "dind.sh"
-                mounts: [{type: "secret", id: "host.env", required: true}]
-            }
-            dockerfile: secrets: ["host.env"]
+            cmd: "builtin": dockerfile: inject: secrets: [
+                {id: "host.env", var: path: "HOST_ENV_FILE"},
+            ]
+            dockerfile: secrets: "host.env": null
         }
 
         "release": {
