@@ -199,6 +199,12 @@ import (
 
 		// --- inject body assembly ---
 		// Auto-emitted pre lines from secrets[].var sugar.
+		//   var.contents: "VAR"     → export VAR="$(cat <path>)"
+		//   var.path:     "/abs/p"  → guarded mkdir + cp <path> /abs/p
+		// Both can be set on the same secret; emission order matches the
+		// schema (contents first). Empty mounted secrets (compose env-
+		// source unset → zero-byte file) skip placement so partial
+		// configurations leave the canonical paths alone.
 		let _varPres = [
 			if _inject == null {[]},
 			if _inject != null {list.Concat([
@@ -206,7 +212,7 @@ import (
 					let _path = [if s.target != _|_ {s.target}, "/run/secrets/\(s.id)"][0]
 					[
 						if s.var.contents != _|_ {"export \(s.var.contents)=\"$(cat \(_path))\""},
-						if s.var.path != _|_ {"export \(s.var.path)=\"\(_path)\""},
+						if s.var.path != _|_ {"if [ -s \"\(_path)\" ]; then mkdir -p \"$(dirname \"\(s.var.path)\")\"; cp -p \"\(_path)\" \"\(s.var.path)\"; fi"},
 					]
 				},
 			])},

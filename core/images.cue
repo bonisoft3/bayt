@@ -10,9 +10,14 @@
 //
 // Compose into a target's dockerfile block:
 //
-//   targets: "build":   dockerfile: nubox     // leap, includes lazybox
-//   targets: "release": dockerfile: busybox   // musl runtime
-//   targets: "dindbox": dockerfile: bayt.dind // docker:cli + socat + entrypoint
+//   targets: "build":   dockerfile: nubox       // leap, includes lazybox
+//   targets: "release": dockerfile: busybox     // musl runtime
+//   targets: "dindbox": dockerfile: bayt.dindbox // docker:cli + socat
+//
+// docker-in-docker targets pair `dindbox` (the image preset) with
+// `sayt.dindboxInject` (the inject helper) — the preset provides the
+// FROM base + socat binary; the inject body does the in-sandbox env
+// extraction, file placement, and unix-socket forwarding.
 package bayt
 
 // _lazyboxOverlay — defaultPreamble fragment that COPYs lazybox into
@@ -46,11 +51,17 @@ nubox: {
 	}
 }
 
-// dind — alpine docker:cli + buildx/compose plugins, with socat
-// copied from alpine/socat. CLI-only (no daemon binaries) so the
-// image stays small. Bakes the dindbox sidecar's entrypoint script
-// under /usr/local/bin; see the script itself for its intent.
-dind: {
+// dindbox — lean docker:cli + socat binary. No entrypoint script,
+// no defaultPreamble. Pair with `sayt.dindboxInject` on the consuming
+// ci target: that helper mounts host-supplied compose secrets
+// (docker_host, buildx_builder, buildx_instance, docker_config) and
+// emits the in-sandbox setup body (env extraction, file placement,
+// unix-socket forwarder for clients that ignore $DOCKER_HOST).
+//
+// socat binary ships in the image because some clients (testcontainers)
+// bypass $DOCKER_HOST and look for /var/run/docker.sock — the
+// in-sandbox socat creates that bridge at RUN time.
+dindbox: {
 	from: close({
 		name: *lock.images.docker | string
 	})
@@ -66,53 +77,6 @@ dind: {
 			dst:  "/usr/lib/"
 		},
 	]
-	defaultPreamble: {
-		"dind-entrypoint": {priority: 3, line: #"""
-			RUN <<DIND
-			cat > /usr/local/bin/dind-entrypoint.sh <<'SCRIPT'
-			#!/bin/sh
-			# dind-entrypoint.sh — sidecar entrypoint. Bridges the
-			# mounted /var/run/docker.sock to a published TCP port
-			# (socat), discovers the literal IP host.docker.internal
-			# resolves to on this host (cross-platform via a probe
-			# container with --add-host=host-gateway), then reassigns
-			# DOCKER_HOST to `tcp://<ip>:<port>` before execing CMD.
-			# The final DOCKER_HOST value flows out via compose's
-			# env-sourced `docker_host` secret to RUN sandboxes that
-			# bake spawns from CMD.
-			set -e
-			export DOCKER_HOST=unix:///var/run/docker.sock
-			socat -d0 TCP-LISTEN:2375,fork,reuseaddr UNIX-CONNECT:/var/run/docker.sock &
-			socat -u OPEN:/dev/null TCP:127.0.0.1:2375,retry=100,interval=0.05 >/dev/null 2>&1
-			HOST_PORT=$(docker inspect "$HOSTNAME" --format '{{(index (index .NetworkSettings.Ports "2375/tcp") 0).HostPort}}')
-			[ -n "$HOST_PORT" ] || { echo "dind-entrypoint: no host port for $HOSTNAME" >&2; exit 1; }
-			HOST_IP=$(docker run --rm --add-host=host.docker.internal:host-gateway \#(lock.images.busybox) \
-			    awk '/host\.docker\.internal/ {printf "%s", $1; exit}' /etc/hosts)
-			[ -n "$HOST_IP" ] || { echo "dind-entrypoint: failed to probe host IP" >&2; exit 1; }
-			export DOCKER_HOST="tcp://${HOST_IP}:${HOST_PORT}"
-			# Hydrate the host's buildx instance file from
-			# $BUILDX_INSTANCE (verbatim file content) + the
-			# BUILDX_BUILDER env. The compose service env carries
-			# these via `${VAR:-}` interpolation so missing host env
-			# degrades to empty — the guards below skip writing in
-			# that case. Compose secrets aren't portable (file:
-			# source breaks on missing path across hosts/inception,
-			# environment: source errors when var is unset), so we
-			# stick to plain env passthrough.
-			if [ -n "${BUILDX_BUILDER:-}" ] && [ -n "${BUILDX_INSTANCE:-}" ]; then
-			    mkdir -p /root/.docker/buildx/instances
-			    printf '%s' "$BUILDX_INSTANCE" > "/root/.docker/buildx/instances/$BUILDX_BUILDER"
-			fi
-			if [ -n "${DOCKER_AUTH_CONFIG:-}" ]; then
-			    mkdir -p /root/.docker
-			    printf '%s' "$DOCKER_AUTH_CONFIG" > /root/.docker/config.json
-			fi
-			exec "$@"
-			SCRIPT
-			chmod +x /usr/local/bin/dind-entrypoint.sh
-			DIND
-			"""#}
-	}
 }
 
 // busybox — minimal musl runner, scratch-adjacent. Use for release.

@@ -209,7 +209,10 @@ import (
 
 				if len(t.cmds) <= 1 {
 					// SINGLE-CMD (or zero-cmd) PATH — flat default
-					// task; status hook scoped to target stamp.
+					// task. When taskfile.incremental is true (default),
+					// the cmd is wrapped in the cache.nu BAYTW + the
+					// target stamp short-circuits reruns via `status:`.
+					// When false, cmds emit raw — no machinery.
 					tasks: default: {
 						if t.taskfile.desc != _|_ {desc: t.taskfile.desc}
 						if t.taskfile.silent {silent: true}
@@ -218,19 +221,32 @@ import (
 
 						// status: target-level hash-check (no --cmd).
 						// fingerprint.nu reads target.srcs from the
-						// manifest. Every target gets one: the manifest
-						// itself is an implicit src, so even no-cmd
-						// targets (doctor, lint, etc.) participate in
-						// the merkle chain via a stable stamp.
-						status: [(_fingerprint & {"t": t, mode: "check"}).out]
+						// manifest. Every incremental target gets one:
+						// the manifest itself is an implicit src, so even
+						// no-cmd targets (doctor, lint, etc.) participate
+						// in the merkle chain via a stable stamp.
+						if t.taskfile.incremental {
+							status: [(_fingerprint & {"t": t, mode: "check"}).out]
+						}
 
 						if len(t.cmds) == 1 {
 							let _c = t.cmds[0]
-							// BAYTW absorbs the cache.nu wrapper + activate
-							// suffix; the cmd line reads as `{{.BAYTW}} <do>`
-							// so the user's actual command stays unobscured.
-							vars: BAYTW: (_baytWrap & {"t": t}).out
-							cmds: (_cmdsBlock & {"t": t, "innerDo": _c.do}).out
+							if t.taskfile.incremental {
+								// BAYTW absorbs cache.nu wrapper + activate
+								// suffix; cmd reads as `{{.BAYTW}} <do>`
+								// so the user's actual command stays
+								// unobscured.
+								vars: BAYTW: (_baytWrap & {"t": t}).out
+								cmds: (_cmdsBlock & {"t": t, "innerDo": _c.do}).out
+							}
+							if !t.taskfile.incremental {
+								// Raw cmd — go-task evaluates as a shell
+								// command. No stamp-skip; no cache.nu
+								// wrap. Use when the cmd should run every
+								// time it's invoked (ephemeral / runtime
+								// driven by outer cache layers).
+								cmds: [_c.do]
+							}
 						}
 
 						if t.taskfile.run != _|_ && t.taskfile.run == "always" {
@@ -245,23 +261,25 @@ import (
 				if len(t.cmds) > 1 {
 					// MULTI-CMD PATH — one internal task per cmd,
 					// chained via deps in priority order; default
-					// wrapper holds shared bits and writes the
-					// target-level stamp. Per-cmd tasks use --cmd to
-					// scope status/stamp to their own srcs.
+					// wrapper holds shared bits and (when incremental)
+					// writes the target-level stamp. Per-cmd tasks gate
+					// status/stamp/BAYTW on taskfile.incremental.
 					let _last = t.cmds[len(t.cmds)-1].name
 
 					tasks: default: {
 						if t.taskfile.desc != _|_ {desc: t.taskfile.desc}
 						if t.taskfile.silent {silent: true}
 						deps: list.Concat([_sameProjectDeps, [_last]])
-						// Wrapper writes the target-level stamp (full
-						// union of all srcs). Cross-project consumers
-						// read this. The defer block runs only when
-						// every per-cmd task succeeded, so the target
-						// stamp accurately reflects "all cmds passed."
-						cmds: [
-							{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": t, mode: "stamp"}).out){{end}}"},
-						]
+						if t.taskfile.incremental {
+							// Wrapper writes the target-level stamp (full
+							// union of all srcs). Cross-project consumers
+							// read this. The defer block runs only when
+							// every per-cmd task succeeded, so the target
+							// stamp accurately reflects "all cmds passed."
+							cmds: [
+								{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": t, mode: "stamp"}).out){{end}}"},
+							]
+						}
 						if t.taskfile.run != _|_ && t.taskfile.run == "always" {
 							run: "always"
 						}
@@ -281,13 +299,18 @@ import (
 									deps: [t.cmds[i-1].name]
 								}
 								if len(t.env) > 0 {env: t.env}
-								// Per-cmd BAYTW carries `--cmd <name>` so
-								// each cmd-subtask's cache lookup scopes
-								// to its own srcs/outs slice.
-								vars: BAYTW: (_baytWrap & {"t": t, "cmd": _c.name}).out
-								status: [(_fingerprint & {"t": t, mode: "check", "cmd": _c.name}).out]
-								generates: [".task/bayt/\(t.name).\(_c.name).hash"]
-								cmds: (_cmdsBlock & {"t": t, "cmd": _c.name, "innerDo": _c.do}).out
+								if t.taskfile.incremental {
+									// Per-cmd BAYTW carries `--cmd <name>` so
+									// each cmd-subtask's cache lookup scopes
+									// to its own srcs/outs slice.
+									vars: BAYTW: (_baytWrap & {"t": t, "cmd": _c.name}).out
+									status: [(_fingerprint & {"t": t, mode: "check", "cmd": _c.name}).out]
+									generates: [".task/bayt/\(t.name).\(_c.name).hash"]
+									cmds: (_cmdsBlock & {"t": t, "cmd": _c.name, "innerDo": _c.do}).out
+								}
+								if !t.taskfile.incremental {
+									cmds: [_c.do]
+								}
 							}
 						}
 					}

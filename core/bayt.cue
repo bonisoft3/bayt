@@ -97,11 +97,17 @@ import "strings"
 				id: string
 
 				// Optional sugar — when set, emit a setup line at the
-				// head of the wrap body.
+				// head of the wrap body. `contents` and `path` compose:
+				// set both to extract the secret into an env var AND
+				// place the secret content at a file path.
 				var?: {
-					// export <contents>="$(cat /run/secrets/<id>)"
+					// export <contents>="$(cat /run/secrets/<id>)" —
+					// extract secret content into the named env var.
 					contents?: string
-					// export <path>="<target or /run/secrets/<id>>"
+					// Absolute path inside the sandbox where the secret
+					// content should be written. Skipped silently when
+					// the mounted secret is empty (compose env-source
+					// unset). Mounting mode is preserved via `cp`.
 					path?: string
 				}
 
@@ -119,6 +125,17 @@ import "strings"
 		mounts?:  [...#dockerfile.#mount]
 		secrets?: [...string]
 		network?: *"default" | "none" | "host"
+	}
+
+	// Inject mode wraps cmd.do as the last shell line of a `RUN
+	// <<HEREDOC` body — Dockerfile's heredoc-RUN form is interpreted
+	// by /bin/sh. cmd.do becomes an honest shell line only when
+	// `shell: "sh"`; any other value silently misrepresents what
+	// runs. Enforce at the schema level so authors can't declare
+	// `shell: "exec"` (or "nu", "bash", etc.) alongside an inject
+	// block without a clear CUE error.
+	if dockerfile != _|_ && dockerfile.inject != _|_ {
+		shell: "sh"
 	}
 	vscode?: {
 		windows?: {
@@ -479,6 +496,24 @@ noop: #cmd & {
 	run:     *"when_changed" | "once" | "always"
 	silent:  *false | bool
 	desc?:   string
+
+	// incremental — when true (default), the per-target Taskfile entry
+	// emits go-task's `status:` hook (fingerprint.nu stamp check),
+	// `BAYTW` cache.nu wrapper for the cmds, and the `defer:`
+	// update-stamp on success. The full work-avoidance loop.
+	//
+	// Set false for ephemeral / always-fresh tasks where stamp-based
+	// skip is undesirable (e.g. doctor checks, regenerators that
+	// derive from external state, runtime test commands where the
+	// outer cache layer already gates execution).
+	//
+	// Orthogonal to dockerfile.incremental: this gates the Taskfile
+	// shape, which fires the same machinery whether the task is
+	// invoked from a Dockerfile RUN at build-time or from a compose
+	// `command:` at runtime. The `bayt.incremental` capability turns
+	// BOTH flags on plus adds the shared-storage cache mount for
+	// cache.nu's local backend.
+	incremental: *true | bool
 
 	preconditions: [...{sh: string, msg?: string}]
 
