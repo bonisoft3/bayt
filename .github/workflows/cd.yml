@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -38,3 +39,20 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+      - name: Set up CUE
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: cue-lang/setup-cue@v1.0.1
+        with:
+          version: 'latest'
+
+      # OIDC login to registry.cue.works. Requires a one-time trust
+      # entry configured on cue.dev binding this workflow to publish
+      # under github.com/bonisoft3/bayt.
+      - name: Authenticate to CUE Central Registry
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: cue-labs/registry-login-action@v1
+
+      - name: Publish CUE module
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cue mod publish "${GITHUB_REF_NAME}"

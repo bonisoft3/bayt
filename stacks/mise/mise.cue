@@ -9,7 +9,7 @@
 //
 //   import (
 //       sayt "bonisoft.org/plugins/sayt/bayt"
-//       mise "bonisoft.org/plugins/bayt/stacks/mise"
+//       mise "github.com/bonisoft3/bayt/stacks/mise"
 //   )
 //
 //   targets: {

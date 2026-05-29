@@ -7,7 +7,7 @@
 package gradle
 
 import (
-	bayt "bonisoft.org/plugins/bayt/core:bayt"
+	bayt "github.com/bonisoft3/bayt/core:bayt"
 )
 
 // =============================================================================

@@ -33,9 +33,9 @@
 //
 //   package my_service
 //   import (
-//       bayt "bonisoft.org/plugins/bayt/core:bayt"
-//       sayt "bonisoft.org/plugins/bayt/stacks/sayt"
-//       mise "bonisoft.org/plugins/bayt/stacks/mise"
+//       bayt "github.com/bonisoft3/bayt/core:bayt"
+//       sayt "github.com/bonisoft3/bayt/stacks/sayt"
+//       mise "github.com/bonisoft3/bayt/stacks/mise"
 //   )
 //
 //   _proj: bayt.#project & {
@@ -50,7 +50,7 @@
 // Usage — standard-mapping project:
 //
 //   package my_service
-//   import sayt "bonisoft.org/plugins/bayt/stacks/sayt"
+//   import sayt "github.com/bonisoft3/bayt/stacks/sayt"
 //
 //   _proj: sayt.gradle & {
 //       dir: "services/my-service"
@@ -61,13 +61,13 @@ package sayt
 import (
 	"list"
 
-	"bonisoft.org/plugins/bayt/core:bayt"
+	"github.com/bonisoft3/bayt/core:bayt"
 	// Capitalized aliases for the toolchain-stack imports so the
 	// lowercase `gradle:` / `pnpm:` umbrella exports below don't
 	// shadow them.
-	Gradle "bonisoft.org/plugins/bayt/stacks/gradle"
-	Mise   "bonisoft.org/plugins/bayt/stacks/mise"
-	Pnpm   "bonisoft.org/plugins/bayt/stacks/pnpm"
+	Gradle "github.com/bonisoft3/bayt/stacks/gradle"
+	Mise   "github.com/bonisoft3/bayt/stacks/mise"
+	Pnpm   "github.com/bonisoft3/bayt/stacks/pnpm"
 )
 
 // setup — toolchain install. Runs once when .mise.lock changes.
