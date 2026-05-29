@@ -31,6 +31,7 @@
 # cache story (cache.nu per-target + tool-native per-task).
 
 use ./fingerprint.nu [compute-fingerprint, resolve-manifest]
+use ./tools.nu [run-oras]
 
 # ============================================================================
 # Similarity scoring (used by every backend's lookup path)
@@ -334,9 +335,9 @@ def oras-get [project: string, target: string, key: string]: nothing -> bool {
 		error make { msg: "cache.nu: BAYT_CACHE_REGISTRY set but `oras` CLI not on PATH" }
 	}
 	let ref = (oras-ref $project $target $key)
-	let exists = (do { ^oras manifest fetch $ref } | complete)
+	let exists = (do { run-oras manifest fetch $ref } | complete)
 	if $exists.exit_code != 0 { return false }
-	^oras pull $ref --output .
+	run-oras pull $ref --output .
 	true
 }
 
@@ -347,7 +348,7 @@ def oras-put [project: string, target: string, key: string, outs_globs: list<str
 	let cwd = (pwd)
 	let files = (expand-globs $outs_globs | each { |f| $f | path relative-to $cwd })
 	if ($files | is-empty) { return }
-	^oras push (oras-ref $project $target $key) ...$files
+	run-oras push (oras-ref $project $target $key) ...$files
 }
 
 # ============================================================================

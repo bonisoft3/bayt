@@ -1,4 +1,4 @@
-# generate-bayt.nu — walk the #render bundle and write every output file.
+# generate.nu — walk the #render bundle and write every output file.
 #
 # Pure/impure split: CUE computes the full render (#manifestGen +
 # #taskfileGen + #dockerComposeGen + #skaffoldGen + #vscodeGen + #bakeGen),
@@ -6,13 +6,13 @@
 #
 # Usage (from a project directory containing bayt.cue):
 #
-#   nu <bayt-dir>/generate-bayt.nu              # single project
-#   nu <bayt-dir>/generate-bayt.nu --recursive  # project + all cross-project deps
+#   bayt generate              # single project
+#   bayt generate --recursive  # project + all cross-project deps
 #
 # Or, referenced from sayt's auto-generation rulemap:
 #
-#   use ./generate-bayt.nu
-#   generate-bayt [--recursive]
+#   use ./generate.nu
+#   generate [--recursive]
 #
 # bayt.cue MUST expose:
 #   - project: <#project>         (first-pass dep extraction)
@@ -54,6 +54,8 @@
 # .bayt/ directory is rebuilt on every run so removed targets don't
 # leave stale per-target files behind.
 
+use ./tools.nu [run-cue, run-nu]
+
 # build-project-index walks the workspace from workspace_root and returns a
 # record mapping each project's name → its workspace-root-relative dir.
 # Bazel-style cross-project refs ("<project>:<target>") resolve through
@@ -72,7 +74,7 @@ def build-project-index [workspace_root: string] {
 		| each { |p| $"($workspace_root)/($p)" }
 	)
 	for path in $rel_paths {
-		let r = (do { ^cue export $path -e '{name: project.name, dir: project.dir}' --out json } | complete)
+		let r = (do { run-cue export $path -e '{name: project.name, dir: project.dir}' --out json } | complete)
 		if $r.exit_code != 0 {
 			print -e $"bayt: project-index scan failed for ($path)"
 			print -e $r.stderr
@@ -200,7 +202,7 @@ def write-bundle [bundle: record, base: string] {
 # pass1 extracts the project.targets map from a bayt.cue.
 # bayt_cue — path to bayt.cue (relative or absolute).
 def pass1 [bayt_cue: string] {
-	let r = (do { ^cue export $bayt_cue -e project.targets --out json } | complete)
+	let r = (do { run-cue export $bayt_cue -e project.targets --out json } | complete)
 	if $r.exit_code != 0 {
 		print -e $"bayt: pass-1 failed for ($bayt_cue)"
 		print -e $r.stderr
@@ -214,7 +216,7 @@ def pass1 [bayt_cue: string] {
 # dep_manifests — record keyed by dep string, value = target manifest JSON.
 def pass2 [bayt_cue: string, dep_manifests: record] {
 	let inject = ({depManifestsIn: $dep_manifests} | to json --raw)
-	let r = (do { $inject | ^cue export - $bayt_cue -e _render --out json } | complete)
+	let r = (do { $inject | run-cue export - $bayt_cue -e _render --out json } | complete)
 	if $r.exit_code != 0 {
 		print -e $"bayt: pass-2 failed for ($bayt_cue)"
 		print -e $r.stderr
@@ -260,7 +262,7 @@ def load-dep-manifests [deps: list<string>, index: record, workspace_root: strin
 			$"($workspace_root)/($dep_dir_rel)/.bayt/bayt.($target).json"
 		}
 		if not ($manifest_path | path exists) {
-			error make {msg: $"bayt: dep manifest not found: ($manifest_path)\n  run generate-bayt for ($dep_dir_rel) first, or use --recursive"}
+			error make {msg: $"bayt: dep manifest not found: ($manifest_path)\n  run `bayt generate` for ($dep_dir_rel) first, or use --recursive"}
 		}
 		$result = ($result | insert $dep (open $manifest_path))
 	}
@@ -408,5 +410,5 @@ export def main [--recursive (-r)] {
 	# BAYT_CACHE_NO_GC=true for CI / disk-pressured envs. Errors
 	# propagate — silently swallowed GC means the cache fills until
 	# it eats the disk.
-	^nu $cache_nu gc
+	run-nu $cache_nu gc
 }

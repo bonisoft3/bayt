@@ -65,21 +65,7 @@ def git-patterns [paths: list<string>]: nothing -> list<string> {
   }
 }
 
-# libc flavor — distinguishes glibc vs musl on Linux. Without it a
-# host glibc stamp gets trusted by a musl container build, producing
-# binary-incompatible target/ artifacts. The interpreter target triple
-# is a fallback only — a glibc-built nu running in a musl container
-# would report glibc, so the linker-path check wins when present.
-def libc-flavor []: nothing -> string {
-  let host = sys host
-  if $host.name != "Linux" { return "" }
-  if (glob "/lib/ld-musl-*.so.1" | is-not-empty) { return "musl" }
-  if ("/lib64/libc.so.6" | path exists) { return "glibc" }
-  let target = (version | get build_target)
-  if ($target | str ends-with "-musl") { return "musl" }
-  if ($target | str ends-with "-gnu")  { return "glibc" }
-  ""
-}
+use ./tools.nu [libc-flavor]
 
 # Platform identity folded into every hash. Stops an arm64-mac stamp
 # from being trusted on an amd64-linux host when a worktree is cross-
