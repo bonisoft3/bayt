@@ -857,13 +857,14 @@ import (
 						for e in _depEntries {
 							(e): "service:\(e)"
 						}
-						// bayt-runtime: published OCI image by default;
-						// override at compose-eval time with BAYT_RUNTIME
-						// (e.g. `./plugins/bayt` for in-monorepo dev,
-						// pointing at the local checkout). Gate on
-						// taskfile.incremental — that's the same axis
-						// that decides whether _baytCopies emit the
-						// COPY --from=bayt-runtime line.
+						// bayt-runtime: published OCI image, pinned in
+						// images.lock.cue. generate.nu rewrites this
+						// line to a relative path when invoked with
+						// --runtime <path> (monorepo-dev mode); the
+						// env-var override (BAYT_RUNTIME) is the
+						// runtime escape hatch for external consumers.
+						// Gate on taskfile.incremental — same axis as
+						// _baytCopies' COPY --from=bayt-runtime line.
 						if _taskfileInc {
 							"bayt-runtime": "${BAYT_RUNTIME:-docker-image://\(lock.images.bayt)}"
 						}

@@ -111,6 +111,20 @@ def atomic-write [target: string, content: string] {
 
 # write-bundle writes all output files for a pre-loaded render bundle.
 # base — workspace-root-relative project dir (e.g. "services/tracker" or ".")
+# Rewrite `bayt-runtime: ${BAYT_RUNTIME:-docker-image://…}` to a
+# compose-YAML-relative path when BAYT_RUNTIME_DIR is set (monorepo-
+# dev mode). Tag-based injection in gen_compose.cue would have been
+# cleaner but cue tags don't propagate to imported packages
+# (cue-lang/cue#1530), so the rewrite happens here at write time.
+def _inject-runtime [content: string, base: string]: nothing -> string {
+	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
+	if ($runtime_dir | is-empty) { return $content }
+	let depth = if ($base == "." or $base == "") { 0 } else { ($base | split row "/" | length) }
+	let prefix = (0..$depth | each {|_| "../" } | str join "")
+	let rel_path = $"($prefix)($runtime_dir)"
+	$content | str replace --regex --all 'bayt-runtime: \$\{BAYT_RUNTIME:-docker-image://[^}]+\}' $"bayt-runtime: ($rel_path)"
+}
+
 def write-bundle [bundle: record, base: string] {
 	let prefix = if $base == "." or $base == "" { "" } else { $"($base)/" }
 
@@ -140,11 +154,11 @@ def write-bundle [bundle: record, base: string] {
 	}
 
 	# --- compose
-	atomic-write $"($prefix).bayt/compose.yaml" ($bundle.docker.compose.root | to yaml)
-	atomic-write $"($prefix).bayt/compose.bayt.yaml" ($bundle.docker.compose.bayt_root | to yaml)
-	atomic-write $"($prefix).bayt/compose.bayt.deps.yaml" ($bundle.docker.compose.bayt_deps_root | to yaml)
+	atomic-write $"($prefix).bayt/compose.yaml" (_inject-runtime ($bundle.docker.compose.root | to yaml) $base)
+	atomic-write $"($prefix).bayt/compose.bayt.yaml" (_inject-runtime ($bundle.docker.compose.bayt_root | to yaml) $base)
+	atomic-write $"($prefix).bayt/compose.bayt.deps.yaml" (_inject-runtime ($bundle.docker.compose.bayt_deps_root | to yaml) $base)
 	for entry in ($bundle.docker.compose.files | transpose name data) {
-		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" ($entry.data | to yaml)
+		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" (_inject-runtime ($entry.data | to yaml) $base)
 	}
 
 	# --- skaffold
@@ -371,7 +385,12 @@ def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_r
 # Entry point.
 const cache_nu = (path self | path dirname | path join "cache.nu")
 
-export def main [--recursive (-r)] {
+export def main [--recursive (-r), --runtime: string = ""] {
+	let effective = if ($runtime | is-empty) { ($env.BAYT_RUNTIME_DIR? | default "") } else { $runtime }
+	with-env { BAYT_RUNTIME_DIR: $effective } { _main --recursive=$recursive }
+}
+
+def _main [--recursive (-r)] {
 	if not ("bayt.cue" | path exists) {
 		return
 	}
@@ -399,8 +418,15 @@ export def main [--recursive (-r)] {
 			regen-project $bayt_cue $dir_rel $index $workspace_root
 		}
 	} else {
-		# Single-project mode: run from inside the project directory.
-		regen-project "./bayt.cue" "." $index $workspace_root
+		# Single-project mode: cd to workspace_root so write-bundle's
+		# relative paths (used by --runtime injection) are computed
+		# against the right depth — same convention --recursive uses.
+		let project_abs = (pwd)
+		let project_rel = ($project_abs | path relative-to $workspace_root)
+		let project_rel = if ($project_rel | str trim) == "" { "." } else { $project_rel }
+		let bayt_cue = if $project_rel == "." { $"($workspace_root)/bayt.cue" } else { $"($workspace_root)/($project_rel)/bayt.cue" }
+		cd $workspace_root
+		regen-project $bayt_cue $project_rel $index $workspace_root
 	}
 
 	# Run cache GC at end of generation. Cheap (no-op when under
