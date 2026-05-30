@@ -3,8 +3,13 @@
 use runtime/generate.nu
 
 # Walk bayt.cue and emit .bayt/* artifacts.
-def "main generate" [--recursive (-r)] {
-	if $recursive { generate --recursive } else { generate }
+# --runtime <path>: workspace-rooted path to bayt's source tree. When
+# set, generated compose embeds a relative path to bayt-runtime
+# instead of the default `${BAYT_RUNTIME:-docker-image://…}`. Use
+# this in monorepo-dev configs (sayt's auto-bayt rule) so committed
+# YAML points at the local checkout.
+def "main generate" [--recursive (-r), --runtime: string = ""] {
+	if $recursive { generate --recursive --runtime $runtime } else { generate --runtime $runtime }
 }
 
 # Restore-or-run a target cmd under the content-addressable cache.
