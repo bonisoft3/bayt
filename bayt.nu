@@ -8,9 +8,22 @@ def "main generate" [--recursive (-r)] {
 }
 
 # Restore-or-run a target cmd under the content-addressable cache.
-def --wrapped "main cache run" [...args] {
+# Signature mirrors runtime/cache.nu's `main run` because nu spread
+# args are positional — `--manifest` etc. wouldn't survive forwarding
+# through `...$args`.
+def --wrapped "main cache run" [
+	--manifest: string
+	--cmd: string = ""
+	--full
+	--similar
+	...cmd_args: string
+] {
 	use runtime/cache.nu
-	cache main run ...$args
+	# Strip the caller's `--` end-of-flags marker before re-emitting
+	# one for the inner call; otherwise it lands as a positional and
+	# `--` runs as the command instead of the user's cmd.
+	let inner = if ($cmd_args | length) > 0 and ($cmd_args | first) == "--" { $cmd_args | skip 1 } else { $cmd_args }
+	cache main run --manifest $manifest --cmd $cmd --full=$full --similar=$similar -- ...$inner
 }
 
 # Evict local-FS cache entries to fit byte budget.
@@ -29,6 +42,18 @@ def "main cache status" [] {
 def "main cache clear" [] {
 	use runtime/cache.nu
 	cache main clear
+}
+
+# Compute or check the cache fingerprint of a target's srcs.
+# Stamp mode writes; check mode is silent (exit 0=match, 1=miss).
+def "main fingerprint" [
+	--manifest: string = ""
+	--cmd: string = ""
+	--stamp-file: string = ""
+	--update-stamp
+] {
+	use runtime/fingerprint.nu
+	fingerprint --manifest $manifest --cmd $cmd --stamp-file $stamp_file --update-stamp=$update_stamp
 }
 
 # Print install location: bayt's root (default) or its runtime/ dir.

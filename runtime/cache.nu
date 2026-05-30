@@ -582,7 +582,7 @@ export def "main gc" [
 			mtime: (ls -D $p | get 0.modified)
 		} }
 	)
-	let total = ($entries | get size | math sum | default 0)
+	let total = if ($entries | is-empty) { 0 } else { $entries | get size | math sum }
 	if $total <= $budget { return }
 
 	let to_drop = ($entries | sort-by mtime | reduce --fold {acc: [], saved: 0} { |row, st|

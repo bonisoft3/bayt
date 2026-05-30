@@ -335,7 +335,7 @@ def emit-rows [inputs: any, docker: bool, json: bool]: nothing -> nothing {
   }
 }
 
-def main [
+export def main [
   --manifest: string = ""
   --cmd: string = ""
   --exclude (-e): string = ""
