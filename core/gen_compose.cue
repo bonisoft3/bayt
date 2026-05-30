@@ -474,15 +474,21 @@ import (
 		// across deps — touching dep A doesn't invalidate the layer for
 		// dep B. Each dep's Taskfile fragment + manifest are emitted
 		// together so they share one COPY.
-		_incrementalCopies: list.Concat([
-			if t.dockerfile.incremental {[
-				// bayt-runtime lives outside the project context; it's
-				// wired in through the compose service's additional_contexts
-				// (see _service below) and COPY'd here to the well-known
-				// path the generated Taskfile cmds reference.
-				"COPY --from=bayt-runtime --link . /monorepo/plugins/bayt/runtime/",
+		// bayt-runtime resolves through compose's additional_contexts:
+		// either the published OCI image (default) or a host-side path
+		// when BAYT_RUNTIME is set in the env that runs `docker compose`.
+		// `_emit` is filtered by `t.dockerfile != _|_`; `t.taskfile`
+		// may still be absent. Default to false when missing.
+		let _taskfileIncremental = [if t.taskfile != _|_ {t.taskfile.incremental}, false][0]
+		_baytCopies: list.Concat([
+			if _taskfileIncremental {[
+				"COPY --from=bayt-runtime --link . /monorepo/plugins/bayt/",
+				"ENV PATH=/monorepo/plugins/bayt/bin:${PATH}",
 			]},
-			if !t.dockerfile.incremental {[]},
+			if !_taskfileIncremental {[]},
+		])
+
+		_incrementalCopies: list.Concat([
 			if t.dockerfile.incremental {[
 				for d in t.transitiveDeps if G._m.files[d] != _|_ {
 					"COPY --link .bayt/Taskfile.\(d).yaml .bayt/bayt.\(d).json ./.bayt/"
@@ -658,8 +664,11 @@ import (
 		// published only for cross-project consumers, so emit them
 		// AFTER the RUN. Net: .bayt regen (Taskfile/target json
 		// rewrites) doesn't invalidate non-incremental install RUNs.
-		_preRun:  [if t.dockerfile.incremental  {list.Concat([_selfTaskfileCopies, _incrementalCopies])}, []][0]
-		_postRun: [if !t.dockerfile.incremental {_selfTaskfileCopies},                                   []][0]
+		_preRun: list.Concat([
+			_baytCopies,
+			[if t.dockerfile.incremental {list.Concat([_selfTaskfileCopies, _incrementalCopies])}, []][0],
+		])
+		_postRun: [if !t.dockerfile.incremental {_selfTaskfileCopies}, []][0]
 
 		// Structured COPY directives from t.dockerfile.copy. Each entry
 		// renders to one COPY line. --link defaults on (BuildKit overlay
@@ -842,13 +851,21 @@ import (
 				// directly (picked up below as _userAddlCtx).
 				let _selfFromIsRef = t.dockerfile.from != null && t.dockerfile.from.ref != _|_
 				let _copyRefEntries = [for f in _copyContextEntries if f.ref != _|_ {f}]
-				if t.dockerfile.incremental || len(_depEntries) > 0 || _selfFromIsRef || len(_runtimeDeps) > 0 || len(_copyRefEntries) > 0 || len(_userAddlCtx) > 0 {
+				let _taskfileInc = [if t.taskfile != _|_ {t.taskfile.incremental}, false][0]
+				if t.dockerfile.incremental || _taskfileInc || len(_depEntries) > 0 || _selfFromIsRef || len(_runtimeDeps) > 0 || len(_copyRefEntries) > 0 || len(_userAddlCtx) > 0 {
 					additional_contexts: {
 						for e in _depEntries {
 							(e): "service:\(e)"
 						}
-						if t.dockerfile.incremental {
-							"bayt-runtime": "service:bayt-runtime-stub"
+						// bayt-runtime: published OCI image by default;
+						// override at compose-eval time with BAYT_RUNTIME
+						// (e.g. `./plugins/bayt` for in-monorepo dev,
+						// pointing at the local checkout). Gate on
+						// taskfile.incremental — that's the same axis
+						// that decides whether _baytCopies emit the
+						// COPY --from=bayt-runtime line.
+						if _taskfileInc {
+							"bayt-runtime": "${BAYT_RUNTIME:-docker-image://\(lock.images.bayt)}"
 						}
 						if _selfFromIsRef {
 							(t.dockerfile.from.name): "service:\(t.dockerfile.from.name)"
@@ -1059,26 +1076,6 @@ import (
 				include: _allIncludes
 			}
 
-			// bayt-runtime-stub: a buildable service whose only purpose
-			// is to expose plugins/bayt/runtime as a build context that
-			// other (incremental) services reference via
-			// `additional_contexts: bayt-runtime: service:bayt-runtime-stub`.
-			// `build.context:` allows `..` escapes (unlike additional_contexts:
-			// path: which compose restricts), so this is the only way to
-			// get plugins/bayt/runtime into a stage when the project sits
-			// below it in the tree. Emitted here in the federation root
-			// rather than per-target so the service is defined exactly
-			// once per project. Lives in the federation root (not the
-			// user root) so cross-project includes pick it up.
-			let _hasIncremental = [for _, t in _emit if t.dockerfile.incremental {true}]
-			if len(_hasIncremental) > 0 {
-				services: "bayt-runtime-stub": {
-					build: {
-						context:          "\(G._rootFromBayt)plugins/bayt/runtime"
-						dockerfile_inline: "FROM scratch\nCOPY . /\n"
-					}
-				}
-			}
 		}
 
 		// bayt_deps_root: dep-only federation entry point that other
@@ -1103,17 +1100,6 @@ import (
 				include: _allIncludes
 			}
 
-			// bayt-runtime-stub still needs to flow through the deps
-			// chain for incremental targets in upstream consumers.
-			let _hasIncremental = [for _, t in _emit if t.dockerfile.incremental {true}]
-			if len(_hasIncremental) > 0 {
-				services: "bayt-runtime-stub": {
-					build: {
-						context:          "\(G._rootFromBayt)plugins/bayt/runtime"
-						dockerfile_inline: "FROM scratch\nCOPY . /\n"
-					}
-				}
-			}
 		}
 
 		// User root: thin shell that includes the federation root and

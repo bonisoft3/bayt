@@ -18,29 +18,6 @@ import (
 	// Only targets that declared a taskfile block on their #target.
 	_emit: {for n, t in G._m.files if t.taskfile != _|_ {(n): t}}
 
-	// Absolute path from .bayt/ (where each Taskfile lives) to the bayt
-	// runtime directory. Uses go-task's {{.TASKFILE_DIR}} which is always
-	// the directory of the file that defines the task — immune to
-	// nested-include dir-resolution bugs where go-task may apply a
-	// sub-include's `dir:` relative to the calling project rather than
-	// the included file's location.
-	//
-	// Depth accounting: each Taskfile lives at <project>/.bayt/, which is
-	// one level deeper than the project root, so we need (depth + 1) `../`
-	// hops from .bayt/ to reach the workspace root, then descend into
-	// plugins/bayt/runtime.
-	//   depth=0 (workspace-root): {{.TASKFILE_DIR}}/../plugins/bayt/runtime
-	//   depth=1 (plugins/jvm):    {{.TASKFILE_DIR}}/../../plugins/bayt/runtime
-	//   depth=2 (libraries/logs): {{.TASKFILE_DIR}}/../../../plugins/bayt/runtime
-	_relRoot: strings.Repeat("../", G._m._depth)
-	// One extra `../` hop because Taskfiles live in `.bayt/`, one level
-	// below the project root. {{.TASKFILE_DIR}} is always the file's
-	// own directory regardless of how the task was invoked (nested include,
-	// direct call, etc.) so this path is immune to go-task's nested-include
-	// dir-resolution behaviour.
-	_relRootFromBayt: strings.Repeat("../", G._m._depth+1)
-	_runtime: "{{.TASKFILE_DIR}}/\(_relRootFromBayt)plugins/bayt/runtime"
-
 	// Helper: build one full cmd line (activate prefix + rule body).
 	_cmdLine: {
 		activate: string
@@ -67,13 +44,14 @@ import (
 	// composed here (CUE knows the target + cmd names) and passed via
 	// --stamp-file so fingerprint.nu's contract is one-flag-per-concern.
 	//
-	// Hard-coded `mise x --` prefix: the bayt runtime is mise-bound
-	// (it ships nu via the project's `.mise.toml`), and that's a
-	// guarantee independent of user-side `activate` choices — a target
-	// that sets `activate: ""` to skip mise wrapping for its own cmds
-	// (workspace-root's setup runs `true`) still needs nu on PATH for
-	// the system-emitted fingerprint hook. No cascading defaults from
-	// project/target — the leaf composes the prefix it needs.
+	// No outer `mise x --` prefix: bayt's launcher already invokes
+	// `runtime/nu.toml` (a mise tool-stub), so nu — and any other
+	// pinned tool bayt internally uses — is resolved through mise
+	// inside-out. Wrapping the whole thing in another `mise x --`
+	// is redundant AND active interference: mise's exec context can
+	// sanitize PATH and lose the Dockerfile-set
+	// `/monorepo/plugins/bayt/bin` entry, leaving `bayt` unreachable
+	// in container RUN stages.
 	_fingerprint: F={
 		t:    _
 		mode: "check" | "stamp"
@@ -89,7 +67,7 @@ import (
 		let _cmdFlag    = [if F.cmd != "" {" --cmd \(F.cmd)"}, ""][0]
 		let _stampName  = [if F.cmd != "" {"\(F.t.name).\(F.cmd)"}, F.t.name][0]
 		let _updateFlag = [if F.mode == "stamp" {" --update-stamp"}, ""][0]
-		out: "mise x -- nu \(G._runtime)/fingerprint.nu --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
+		out: "bayt fingerprint --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
 	}
 
 	// Helper: build the YAML cmds list for a (possibly per-cmd) task.
@@ -141,7 +119,7 @@ import (
 		let _shell        = [if len(_matchingCmds) > 0 {_matchingCmds[0].shell}, "exec"][0]
 		let _shellTail    = [if _shell != "exec"       {" \(_shell) -c"},        ""][0]
 
-		out: "mise x -- nu \(G._runtime)/cache.nu run --manifest {{.TASKFILE_DIR}}/bayt.\(W.t.name).json\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)\(_shellTail)"
+		out: "bayt cache run --manifest {{.TASKFILE_DIR}}/bayt.\(W.t.name).json\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)\(_shellTail)"
 	}
 
 	// _cmdsBlock — emits the per-task cmds list as
