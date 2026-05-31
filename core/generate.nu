@@ -111,18 +111,18 @@ def atomic-write [target: string, content: string] {
 
 # write-bundle writes all output files for a pre-loaded render bundle.
 # base — workspace-root-relative project dir (e.g. "services/tracker" or ".")
-# Rewrite `bayt-runtime: ${BAYT_RUNTIME:-docker-image://…}` to a
-# compose-YAML-relative path when BAYT_RUNTIME_DIR is set (monorepo-
-# dev mode). Tag-based injection in gen_compose.cue would have been
-# cleaner but cue tags don't propagate to imported packages
-# (cue-lang/cue#1530), so the rewrite happens here at write time.
+# Rewrite `bayt-runtime: docker-image://…` to a compose-YAML-relative
+# path when BAYT_RUNTIME_DIR is set (monorepo-dev mode). Tag-based
+# injection in gen_compose.cue would have been cleaner but cue tags
+# don't propagate to imported packages (cue-lang/cue#1530), so the
+# rewrite happens here at write time.
 def _inject-runtime [content: string, base: string]: nothing -> string {
 	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
 	if ($runtime_dir | is-empty) { return $content }
 	let depth = if ($base == "." or $base == "") { 0 } else { ($base | split row "/" | length) }
 	let prefix = (0..$depth | each {|_| "../" } | str join "")
 	let rel_path = $"($prefix)($runtime_dir)"
-	$content | str replace --regex --all 'bayt-runtime: \$\{BAYT_RUNTIME:-docker-image://[^}]+\}' $"bayt-runtime: ($rel_path)"
+	$content | str replace --regex --all 'bayt-runtime: docker-image://[^\n"]+' $"bayt-runtime: ($rel_path)"
 }
 
 def write-bundle [bundle: record, base: string] {

@@ -463,32 +463,15 @@ import (
 			"COPY --link \(strings.Join(_selfTaskfileSources, " ")) ./.bayt/",
 		]
 
-		// Incremental-only additions: bayt-runtime stub mount (so
-		// `nu .../fingerprint.nu` resolves) and same-project transitive
-		// deps' taskfile + manifest (cross-project deps' taskfile state
-		// arrives via _depCopies + _selfTaskfileCopies on the dep side).
-		// Stamps (.task/) cross stage boundaries via the same
-		// _depCopies COPY --from=<dep> chain above; this is the only
-		// path stamps take between stages.
+		// Same-project transitive deps' taskfile + manifest (cross-
+		// project deps' taskfile state arrives via _depCopies +
+		// _selfTaskfileCopies on the dep side). Stamps (.task/) cross
+		// stage boundaries via the same _depCopies COPY --from=<dep>
+		// chain above; this is the only path stamps take between stages.
 		// Per-dep COPY (one per transitive dep) keeps cache granularity
 		// across deps — touching dep A doesn't invalidate the layer for
 		// dep B. Each dep's Taskfile fragment + manifest are emitted
 		// together so they share one COPY.
-		// bayt-runtime resolves through compose's additional_contexts:
-		// either the published OCI image (default) or a host-side path
-		// when BAYT_RUNTIME is set in the env that runs `docker compose`.
-		// `_emit` is filtered by `t.dockerfile != _|_`; `t.taskfile`
-		// may still be absent. Default to false when missing.
-		let _taskfileIncremental = [if t.taskfile != _|_ {t.taskfile.incremental}, false][0]
-		let _needsBaytRuntime = _taskfileIncremental || t.dockerfile.baytRuntime
-		_baytCopies: list.Concat([
-			if _needsBaytRuntime {[
-				"COPY --from=bayt-runtime --link runtime /monorepo/plugins/bayt/runtime",
-				"ENV PATH=/monorepo/plugins/bayt/runtime:${PATH}",
-			]},
-			if !_needsBaytRuntime {[]},
-		])
-
 		_incrementalCopies: list.Concat([
 			if t.dockerfile.incremental {[
 				for d in t.transitiveDeps if G._m.files[d] != _|_ {
@@ -665,10 +648,7 @@ import (
 		// published only for cross-project consumers, so emit them
 		// AFTER the RUN. Net: .bayt regen (Taskfile/target json
 		// rewrites) doesn't invalidate non-incremental install RUNs.
-		_preRun: list.Concat([
-			_baytCopies,
-			[if t.dockerfile.incremental {list.Concat([_selfTaskfileCopies, _incrementalCopies])}, []][0],
-		])
+		_preRun: [if t.dockerfile.incremental {list.Concat([_selfTaskfileCopies, _incrementalCopies])}, []][0]
 		_postRun: [if !t.dockerfile.incremental {_selfTaskfileCopies}, []][0]
 
 		// Structured COPY directives from t.dockerfile.copy. Each entry
@@ -852,20 +832,16 @@ import (
 				// directly (picked up below as _userAddlCtx).
 				let _selfFromIsRef = t.dockerfile.from != null && t.dockerfile.from.ref != _|_
 				let _copyRefEntries = [for f in _copyContextEntries if f.ref != _|_ {f}]
-				let _taskfileInc = [if t.taskfile != _|_ {t.taskfile.incremental}, false][0]
-				let _needsBayt = _taskfileInc || t.dockerfile.baytRuntime
-				if t.dockerfile.incremental || _needsBayt || len(_depEntries) > 0 || _selfFromIsRef || len(_runtimeDeps) > 0 || len(_copyRefEntries) > 0 || len(_userAddlCtx) > 0 {
+				// Image-arm copy entries that pin a digest via the `image:`
+				// override emit explicit additional_contexts so bake
+				// resolves <name> to docker-image://<image>. Plain image-
+				// arm entries (no override) rely on bake's default registry
+				// fetch as before — no entry emitted.
+				let _copyImageEntries = [for f in _copyContextEntries if f.image != _|_ {f}]
+				if t.dockerfile.incremental || len(_depEntries) > 0 || _selfFromIsRef || len(_runtimeDeps) > 0 || len(_copyRefEntries) > 0 || len(_copyImageEntries) > 0 || len(_userAddlCtx) > 0 {
 					additional_contexts: {
 						for e in _depEntries {
 							(e): "service:\(e)"
-						}
-						// bayt-runtime — default points at the OCI image
-						// pinned in images.lock.cue. generate.nu rewrites
-						// this line to a relative path under --runtime
-						// (monorepo-dev mode); BAYT_RUNTIME is the env
-						// escape hatch for external consumers.
-						if _needsBayt {
-							"bayt-runtime": "${BAYT_RUNTIME:-docker-image://\(lock.images.bayt)}"
 						}
 						if _selfFromIsRef {
 							(t.dockerfile.from.name): "service:\(t.dockerfile.from.name)"
@@ -875,6 +851,9 @@ import (
 						}
 						for f in _copyRefEntries {
 							(f.name): "service:\(f.name)"
+						}
+						for f in _copyImageEntries {
+							(f.name): "docker-image://\(f.image)"
 						}
 						for k, v in _userAddlCtx {
 							(k): v

@@ -364,9 +364,15 @@ noop: #cmd & {
 	// desirable: faster cache, less invalidation cascade). Other
 	// BuildKit flags map directly: --chmod, --chown, --parents,
 	// --exclude.
+	// from.name doubles as the additional_context key and the
+	// `--from=<name>` reference in the COPY. Default value emitted
+	// in additional_contexts is `docker-image://<name>`; `image:`
+	// overrides that so one fixed key aliases a pinned digest
+	// (bayt-runtime → docker-image://bonitao/bayt:…).
 	copy: [...{
 		from: *null | close({
-			name: string & !~"^scratch$"
+			name:   string & !~"^scratch$"
+			image?: string
 		}) | close({
 			ref:  string
 			name: (#qualifyRef & {"ref": ref, proj: D._project}).name
@@ -433,13 +439,6 @@ noop: #cmd & {
 	// .task/. Taskfiles are COPY'd into the image automatically.
 	// Enable via the `bayt.incremental` capability (capabilities.cue).
 	incremental: *false | bool
-
-	// baytRuntime — this target needs bayt's runtime tree available at
-	// RUN time even though it isn't taskfile-incremental. ci-style
-	// targets set this via sayt.inject because their RUN body spawns
-	// an inner `docker compose up integrate` whose graph resolves
-	// bayt-runtime against the outer stage's filesystem.
-	baytRuntime: *false | bool
 
 	// Dockerfile CMD instruction. Same three-form schema as `entrypoint`
 	// above. Distinct from `compose.command` (service-level runtime

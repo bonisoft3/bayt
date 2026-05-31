@@ -43,6 +43,8 @@
 //     references, deps, srcs/outs.
 package sayt
 
+import "github.com/bonisoft3/bayt/core:bayt"
+
 inject: {
 	// BUILDX_BAKE_ENTITLEMENTS_FS=0 disables bake's filesystem-entitlement
 	// block — required when an inner-bake's compose graph has
@@ -72,9 +74,19 @@ inject: {
 	// sandbox sees the bridged endpoint.
 	// ci-style targets spawn an inner `docker compose up integrate`
 	// whose graph references bayt-runtime, resolved as a path-context
-	// against the outer ci stage's filesystem. The outer stage needs
-	// bayt's runtime tree there for that resolution to succeed.
-	dockerfile: baytRuntime: true
+	// against the outer ci stage's filesystem. The outer stage gets
+	// bayt's runtime tree through this copy entry — `image:` overrides
+	// the additional_contexts value so the fixed `bayt-runtime` key
+	// resolves to the pinned digest. ENV PATH lands via preamble.
+	dockerfile: copy: [{
+		from: {name: "bayt-runtime", image: bayt.lock.images.bayt}
+		srcs: ["runtime"]
+		dst: "/monorepo/plugins/bayt/runtime"
+	}]
+	dockerfile: defaultPreamble: "bayt-runtime-path": {
+		priority: -5
+		line:     "ENV PATH=/monorepo/plugins/bayt/runtime:${PATH}"
+	}
 	dockerfile: secrets: {
 		docker_host:               environment: "DOCKER_HOST_TCP"
 		buildx_builder:            environment: "BUILDX_BUILDER"
