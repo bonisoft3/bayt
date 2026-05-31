@@ -434,6 +434,13 @@ noop: #cmd & {
 	// Enable via the `bayt.incremental` capability (capabilities.cue).
 	incremental: *false | bool
 
+	// baytRuntime — this target needs bayt's runtime tree available at
+	// RUN time even though it isn't taskfile-incremental. ci-style
+	// targets set this via sayt.inject because their RUN body spawns
+	// an inner `docker compose up integrate` whose graph resolves
+	// bayt-runtime against the outer stage's filesystem.
+	baytRuntime: *false | bool
+
 	// Dockerfile CMD instruction. Same three-form schema as `entrypoint`
 	// above. Distinct from `compose.command` (service-level runtime
 	// override). Docker's standard ENTRYPOINT/CMD combination applies.

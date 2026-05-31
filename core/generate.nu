@@ -54,7 +54,7 @@
 # .bayt/ directory is rebuilt on every run so removed targets don't
 # leave stale per-target files behind.
 
-use ./tools.nu [run-cue, run-nu]
+use ../runtime/tools.nu [run-cue, run-nu]
 
 # build-project-index walks the workspace from workspace_root and returns a
 # record mapping each project's name → its workspace-root-relative dir.
@@ -383,7 +383,7 @@ def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_r
 }
 
 # Entry point.
-const cache_nu = (path self | path dirname | path join "cache.nu")
+const cache_nu = (path self | path dirname | path dirname | path join "runtime" "cache.nu")
 
 export def main [--recursive (-r), --runtime: string = ""] {
 	let effective = if ($runtime | is-empty) { ($env.BAYT_RUNTIME_DIR? | default "") } else { $runtime }

@@ -67,7 +67,7 @@ import (
 		let _cmdFlag    = [if F.cmd != "" {" --cmd \(F.cmd)"}, ""][0]
 		let _stampName  = [if F.cmd != "" {"\(F.t.name).\(F.cmd)"}, F.t.name][0]
 		let _updateFlag = [if F.mode == "stamp" {" --update-stamp"}, ""][0]
-		out: "bayt fingerprint --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
+		out: "bayt-runtime fingerprint --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
 	}
 
 	// Helper: build the YAML cmds list for a (possibly per-cmd) task.
@@ -119,7 +119,7 @@ import (
 		let _shell        = [if len(_matchingCmds) > 0 {_matchingCmds[0].shell}, "exec"][0]
 		let _shellTail    = [if _shell != "exec"       {" \(_shell) -c"},        ""][0]
 
-		out: "bayt cache run --manifest {{.TASKFILE_DIR}}/bayt.\(W.t.name).json\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)\(_shellTail)"
+		out: "bayt-runtime cache run --manifest {{.TASKFILE_DIR}}/bayt.\(W.t.name).json\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)\(_shellTail)"
 	}
 
 	// _cmdsBlock — emits the per-task cmds list as

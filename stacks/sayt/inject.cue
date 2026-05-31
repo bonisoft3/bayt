@@ -70,6 +70,11 @@ inject: {
 	// the value back into the canonical $DOCKER_HOST for the inner
 	// docker tooling. Outer process keeps its default daemon socket;
 	// sandbox sees the bridged endpoint.
+	// ci-style targets spawn an inner `docker compose up integrate`
+	// whose graph references bayt-runtime, resolved as a path-context
+	// against the outer ci stage's filesystem. The outer stage needs
+	// bayt's runtime tree there for that resolution to succeed.
+	dockerfile: baytRuntime: true
 	dockerfile: secrets: {
 		docker_host:               environment: "DOCKER_HOST_TCP"
 		buildx_builder:            environment: "BUILDX_BUILDER"

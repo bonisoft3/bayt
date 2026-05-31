@@ -480,12 +480,13 @@ import (
 		// `_emit` is filtered by `t.dockerfile != _|_`; `t.taskfile`
 		// may still be absent. Default to false when missing.
 		let _taskfileIncremental = [if t.taskfile != _|_ {t.taskfile.incremental}, false][0]
+		let _needsBaytRuntime = _taskfileIncremental || t.dockerfile.baytRuntime
 		_baytCopies: list.Concat([
-			if _taskfileIncremental {[
-				"COPY --from=bayt-runtime --link . /monorepo/plugins/bayt/",
-				"ENV PATH=/monorepo/plugins/bayt/bin:${PATH}",
+			if _needsBaytRuntime {[
+				"COPY --from=bayt-runtime --link runtime /monorepo/plugins/bayt/runtime",
+				"ENV PATH=/monorepo/plugins/bayt/runtime:${PATH}",
 			]},
-			if !_taskfileIncremental {[]},
+			if !_needsBaytRuntime {[]},
 		])
 
 		_incrementalCopies: list.Concat([
@@ -852,20 +853,18 @@ import (
 				let _selfFromIsRef = t.dockerfile.from != null && t.dockerfile.from.ref != _|_
 				let _copyRefEntries = [for f in _copyContextEntries if f.ref != _|_ {f}]
 				let _taskfileInc = [if t.taskfile != _|_ {t.taskfile.incremental}, false][0]
-				if t.dockerfile.incremental || _taskfileInc || len(_depEntries) > 0 || _selfFromIsRef || len(_runtimeDeps) > 0 || len(_copyRefEntries) > 0 || len(_userAddlCtx) > 0 {
+				let _needsBayt = _taskfileInc || t.dockerfile.baytRuntime
+				if t.dockerfile.incremental || _needsBayt || len(_depEntries) > 0 || _selfFromIsRef || len(_runtimeDeps) > 0 || len(_copyRefEntries) > 0 || len(_userAddlCtx) > 0 {
 					additional_contexts: {
 						for e in _depEntries {
 							(e): "service:\(e)"
 						}
-						// bayt-runtime: published OCI image, pinned in
-						// images.lock.cue. generate.nu rewrites this
-						// line to a relative path when invoked with
-						// --runtime <path> (monorepo-dev mode); the
-						// env-var override (BAYT_RUNTIME) is the
-						// runtime escape hatch for external consumers.
-						// Gate on taskfile.incremental — same axis as
-						// _baytCopies' COPY --from=bayt-runtime line.
-						if _taskfileInc {
+						// bayt-runtime — default points at the OCI image
+						// pinned in images.lock.cue. generate.nu rewrites
+						// this line to a relative path under --runtime
+						// (monorepo-dev mode); BAYT_RUNTIME is the env
+						// escape hatch for external consumers.
+						if _needsBayt {
 							"bayt-runtime": "${BAYT_RUNTIME:-docker-image://\(lock.images.bayt)}"
 						}
 						if _selfFromIsRef {
