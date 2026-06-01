@@ -125,13 +125,80 @@ _expandLines: {
 		}
 	}
 
-	// Same-project dep names per target — Bazel `:<target>` refs with
-	// leading `:` stripped, so the bare names key directly into
-	// G.project.targets[name]. Computed once and reused by
-	// _transitiveDeps and the per-target files emission below.
+	// Resolve a same-project ref `:X[:view]` (or `:bayt`) to the
+	// synthetic-aware compose service name. Map key for this struct is
+	// the ref string itself; the value is the resolved name. Computed
+	// once across every same-project ref used in any target's `deps:`,
+	// avoiding the template-evaluation pitfalls of a struct-with-args
+	// helper.
+	//
+	//   `:foo`       → "foo"          (today's behavior)
+	//   `:foo:srcs`  → "foo_srcs"     (synthetic name)
+	//   `:foo:outs`  → "foo_outs"     (synthetic name)
+	//   `:bayt`      → "bayt"         (project synthetic)
+	_sameProjectRefName: {
+		for n, t in G.project.targets if t != null
+		for d in t.deps if strings.HasPrefix(d, ":") {
+			let _bare = strings.TrimPrefix(d, ":")
+			let _parts = strings.Split(_bare, ":")
+			// Materialize the view segment to "" when absent, so CUE
+			// evaluates conditions on _view without indexing past the
+			// list (`&&` doesn't short-circuit).
+			let _target = _parts[0]
+			let _view = [if len(_parts) >= 2 {_parts[1]}, ""][0]
+			(d): [
+				if _target == "bayt" {"bayt"},
+				if _target != "bayt" && _view == "srcs" {"\(_target)_srcs"},
+				if _target != "bayt" && _view == "outs" {"\(_target)_outs"},
+				_target,
+			][0]
+		}
+	}
+
+	// Outs (globs + exclude) for each same-project ref. Same keys as
+	// _sameProjectRefName. For `:bayt` returns the scaffolding fileset
+	// (`.bayt/**`, `Taskfile.yml`, `compose.yaml`); for view-suffix refs
+	// returns the corresponding view from the parent target; for plain
+	// refs returns the parent target's outs.
+	//
+	// BRANCH ORDER IS LOAD-BEARING. CUE's `[if c1 {v1}, if c2 {v2}, …][0]`
+	// evaluates every branch with a true condition; if `_target == "bayt"`
+	// were NOT checked first, the later `if _target != "" {…}` branch
+	// would also fire for `:bayt` and try to access
+	// `G.project.targets["bayt"]` (which is `_|_` — the reserved-name
+	// regex rejects "bayt" as a target name). That contaminates the
+	// list with `_|_` and breaks evaluation. Keep `:bayt` first.
+	_sameProjectRefOuts: {
+		for n, t in G.project.targets if t != null
+		for d in t.deps if strings.HasPrefix(d, ":") {
+			let _bare = strings.TrimPrefix(d, ":")
+			let _parts = strings.Split(_bare, ":")
+			let _target = _parts[0]
+			let _view = [if len(_parts) >= 2 {_parts[1]}, ""][0]
+			(d): [
+				if _target == "bayt" {{globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}},
+				if _target != "bayt" && _view == "srcs" {
+					let _t = G.project.targets[_target]
+					{
+						globs:   list.Concat([(_expandGlobs & {in: _t.srcs.defaultGlobs}).out,   _t.srcs.globs])
+						exclude: list.Concat([(_expandGlobs & {in: _t.srcs.defaultExclude}).out, _t.srcs.exclude])
+					}
+				},
+				if _target != "bayt" && _view == "outs" {G.project.targets[_target].outs},
+				if _target != "bayt" && _view == "" {G.project.targets[_target].outs},
+				{globs: [], exclude: []},
+			][0]
+		}
+	}
+
+	// Same-project dep names per target — refs with the leading `:`
+	// stripped and view suffix folded into the synthetic name (so
+	// `:foo:srcs` → `foo_srcs`). Plain refs `:foo` produce `foo`,
+	// matching today's keying into G.project.targets[name]. Computed
+	// once and reused by _transitiveDeps + per-target files emission.
 	_sameProjectDepNames: {
 		for n, t in G.project.targets if t != null {
-			(n): [for d in t.deps if strings.HasPrefix(d, ":") {strings.TrimPrefix(d, ":")}]
+			(n): [for d in t.deps if strings.HasPrefix(d, ":") {_sameProjectRefName[d]}]
 		}
 	}
 
@@ -150,16 +217,41 @@ _expandLines: {
 		}
 	}
 
-	// Transitive cross-project deps per target. Walks the same-project chain
-	// (self + _transitiveDeps[n]) and collects each step's cross-project deps
-	// from _targetCrossDeps. Deduped by "<project>-<name>".
+	// Transitive cross-project deps per target. Two layers:
+	//
+	//   1. Direct: walk the same-project chain (self + _transitiveDeps[n])
+	//      and collect each step's cross-project deps from _targetCrossDeps.
+	//
+	//   2. Recursive: for each direct cross-project dep, also pull its
+	//      OWN transitiveCrossDeps from the dep's manifest. Cross-project
+	//      transitivity becomes implicit — a consumer that `deps: [":b"]`
+	//      a cross-project :b automatically gets :b's full transitive
+	//      closure (libraries_logs, libraries_xproto, etc.) instead of
+	//      having to hand-enumerate.
+	//
+	// Bootstrap: on the first regen after this lands, depManifests on
+	// disk carry the OLD (direct-only) transitiveCrossDeps. So consumers
+	// see one extra hop only. After every project has regenerated once
+	// with the recursive walk, their manifests carry the fully-transitive
+	// set, and consumers pick up the rest on the next regen.
+	//
+	// Deduped by "<project>-<name>".
 	_transitiveCrossDeps: {
 		for n, t in G.project.targets if t != null {
 			let _selfPlusDeps = list.Concat([[n], _transitiveDeps[n]])
-			let _all = list.Concat([
+			let _direct = list.Concat([
 				for tn in _selfPlusDeps
 				if _targetCrossDeps[tn] != _|_ {_targetCrossDeps[tn]}
 			])
+			let _viaManifests = list.Concat([
+				for d in _direct
+				let _ref = "\(d.project):\(d.name)"
+				if G.depManifests[_ref] != _|_
+				if G.depManifests[_ref].transitiveCrossDeps != _|_ {
+					G.depManifests[_ref].transitiveCrossDeps
+				}
+			])
+			let _all  = list.Concat([_direct, _viaManifests])
 			let _keys = [for x in _all {"\(x.project)-\(x.name)"}]
 			(n): [for i, x in _all if !list.Contains(list.Slice(_keys, 0, i), _keys[i]) {x}]
 		}
@@ -225,13 +317,12 @@ _expandLines: {
 				// producer's declared interface available without a
 				// second lookup.
 				chainedDeps: [for d in t.deps {
-					let _bare = strings.TrimPrefix(d, ":")
 					[
 						if strings.HasPrefix(d, ":") {{
-							name:    _bare
+							name:    _sameProjectRefName[d]
 							project: G.project.name
 							dir:     G.project.dir
-							outs:    G.project.targets[_bare].outs
+							outs:    _sameProjectRefOuts[d]
 						}},
 						{
 							name:    G.depManifests[d].name
@@ -298,6 +389,101 @@ _expandLines: {
 				// debuggability — the actual --full / --similar flags in
 				// the Taskfile are what cache.nu sees.
 				cache: t.cache
+			}
+		}
+
+		// Synthetic-stage manifests — minimum shape needed for downstream
+		// emitters (gen_compose._depCopies, gen_bayt._buildCrossEntry) to
+		// resolve cross-project refs to `:foo:srcs` / `:foo:outs` /
+		// `:bayt` / `<proj>:bayt`. Consumers read {visibility, name,
+		// project, dir, outs.{globs, exclude}, transitiveCrossDeps,
+		// chainedDeps} from these stubs.
+		//
+		// Gated on `t.dockerfile != _|_` so synthetics align with the
+		// dockerfile/compose emission in gen_compose.cue (`_emit` map).
+		// A target without a dockerfile has no compose service for
+		// consumers to reference; no synthetic, no manifest.
+		//
+		// File names: `bayt.<n>_srcs.json`, `bayt.<n>_outs.json`,
+		// `bayt.bayt.json`. Nushell's load-dep-manifests joins ref
+		// segments after the first with `_` to derive the filename
+		// (`proj:foo:srcs` → `bayt.foo_srcs.json`, `proj:bayt` →
+		// `bayt.bayt.json`).
+		for n, t in G.project.targets if t != null
+			if t.dockerfile != _|_ {
+			let _srcsGlobs   = list.Concat([(_expandGlobs & {in: t.srcs.defaultGlobs}).out,   t.srcs.globs])
+			let _srcsExclude = list.Concat([(_expandGlobs & {in: t.srcs.defaultExclude}).out, t.srcs.exclude])
+			if len(_srcsGlobs) > 0 {
+				"\(n)_srcs": {
+					name:    "\(n)_srcs"
+					project: G.project.name
+					dir:     G.project.dir
+					// Synthetic carries no toolchain; activate empty.
+					activate: ""
+					// outs == parent srcs so consumer COPYs land the
+					// dep's srcs at their natural paths (matches what
+					// gen_compose._depCopies builds via `outs.globs`).
+					srcs: {globs: [], exclude: []}
+					outs: {globs: _srcsGlobs, exclude: _srcsExclude}
+					env: {}
+					// Synthetic inherits parent visibility. Cross-project
+					// consumers of an internal target's _srcs fail the
+					// public-visibility unification at _buildCrossEntry.
+					visibility:          t.visibility
+					deps:                []
+					transitiveDeps:      []
+					transitiveCrossDeps: []
+					chainedDeps:         []
+					cmds:                []
+					cache: {full: false, similar: false}
+				}
+			}
+			if len(t.outs.globs) > 0 {
+				"\(n)_outs": {
+					name:    "\(n)_outs"
+					project: G.project.name
+					dir:     G.project.dir
+					activate: ""
+					srcs: {globs: [], exclude: []}
+					outs: t.outs
+					env: {}
+					visibility:          t.visibility
+					deps:                []
+					transitiveDeps:      []
+					transitiveCrossDeps: []
+					chainedDeps:         []
+					cmds:                []
+					cache: {full: false, similar: false}
+				}
+			}
+		}
+
+		// Project-bayt synthetic: one per project, gated on at least one
+		// dockerfile-emitting target (matches gen_compose's `_bayt` gate).
+		// Always public — replaces the user-authored <proj>:ops graph
+		// that was always public.
+		let _anyDockerfile = len([for n, t in G.project.targets if t != null if t.dockerfile != _|_ {n}]) > 0
+		if _anyDockerfile {
+			"bayt": {
+				name:    "bayt"
+				project: G.project.name
+				dir:     G.project.dir
+				activate: ""
+				// Scaffolding scope mirrors the synthetic Dockerfile
+				// emitted by gen_compose._renderSyntheticBayt: .bayt/**
+				// (bayt-emitted) plus Taskfile.yml + compose.yaml
+				// (project-root scaffolding). Matches what the hand-
+				// authored `:ops` target used to carry.
+				srcs: {globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}
+				outs: {globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}
+				env: {}
+				visibility:          "public"
+				deps:                []
+				transitiveDeps:      []
+				transitiveCrossDeps: []
+				chainedDeps:         []
+				cmds:                []
+				cache: {full: false, similar: false}
 			}
 		}
 	}

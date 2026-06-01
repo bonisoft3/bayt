@@ -79,11 +79,11 @@ inject: {
 	// the additional_contexts value so the fixed `bayt-runtime` key
 	// resolves to the pinned digest. ENV PATH lands via preamble.
 	dockerfile: copy: [{
-		from: {name: "bayt-runtime", image: bayt.lock.images.bayt}
+		from: {name: "bayt", image: bayt.lock.images.bayt}
 		srcs: ["runtime"]
 		dst: "/monorepo/plugins/bayt/runtime"
 	}]
-	dockerfile: defaultPreamble: "bayt-runtime-path": {
+	dockerfile: defaultPreamble: "bayt-path": {
 		priority: -5
 		line:     "ENV PATH=/monorepo/plugins/bayt/runtime:${PATH}"
 	}

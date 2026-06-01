@@ -111,18 +111,39 @@ def atomic-write [target: string, content: string] {
 
 # write-bundle writes all output files for a pre-loaded render bundle.
 # base — workspace-root-relative project dir (e.g. "services/tracker" or ".")
-# Rewrite `bayt-runtime: docker-image://…` to a compose-YAML-relative
-# path when BAYT_RUNTIME_DIR is set (monorepo-dev mode). Tag-based
-# injection in gen_compose.cue would have been cleaner but cue tags
-# don't propagate to imported packages (cue-lang/cue#1530), so the
-# rewrite happens here at write time.
+# Rewrite `bayt: docker-image://…` to a compose-YAML-relative path when
+# BAYT_RUNTIME_DIR is set (monorepo-dev mode). Tag-based injection in
+# gen_compose.cue would have been cleaner but cue tags don't propagate
+# to imported packages (cue-lang/cue#1530), so the rewrite happens
+# here at write time.
 def _inject-runtime [content: string, base: string]: nothing -> string {
 	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
 	if ($runtime_dir | is-empty) { return $content }
 	let depth = if ($base == "." or $base == "") { 0 } else { ($base | split row "/" | length) }
 	let prefix = (0..$depth | each {|_| "../" } | str join "")
 	let rel_path = $"($prefix)($runtime_dir)"
-	$content | str replace --regex --all 'bayt-runtime: docker-image://[^\n"]+' $"bayt-runtime: ($rel_path)"
+	$content | str replace --regex --all 'bayt: docker-image://[^\n"]+' $"bayt: ($rel_path)"
+}
+
+# Rewrite `bayt <subcommand>` invocations in Taskfile YAML to the
+# depth-aware in-tree slim CLI when BAYT_RUNTIME_DIR is set (monorepo-
+# dev mode). Default emission from gen_taskfile.cue is the bare `bayt`
+# command, which non-monorepo consumers resolve via their host PATH
+# (e.g. `mise install github:bonisoft3/bayt`). Monorepo developers
+# pass `bayt generate --runtime plugins/bayt`, which flips this rewrite
+# on so `task bayt:<n>` works from the monorepo without needing bayt
+# installed globally.
+#
+# Paths are relative to PROJECT ROOT (the cwd inherited by every
+# emitted task via `.bayt`'s `dir: ../` include): depth=0 prefixes `./`
+# for argv unambiguity, depth>=1 emits `../` per level.
+def _inject-taskfile-runtime [content: string, base: string]: nothing -> string {
+	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
+	if ($runtime_dir | is-empty) { return $content }
+	let depth = if ($base == "." or $base == "") { 0 } else { ($base | split row "/" | length) }
+	let prefix = if $depth == 0 { "./" } else { (1..$depth | each {|_| "../" } | str join "") }
+	let rel_path = $"($prefix)($runtime_dir)/runtime/bayt"
+	$content | str replace --regex --all '\bbayt (cache|fingerprint|where)\b' $"($rel_path) $1"
 }
 
 def write-bundle [bundle: record, base: string] {
@@ -142,10 +163,10 @@ def write-bundle [bundle: record, base: string] {
 	}
 
 	# --- Taskfile
-	atomic-write $"($prefix)Taskfile.yml" ($bundle.taskfile.root | to yaml)
-	atomic-write $"($prefix).bayt/Taskfile.yml" ($bundle.taskfile.bayt_root | to yaml)
+	atomic-write $"($prefix)Taskfile.yml" (_inject-taskfile-runtime ($bundle.taskfile.root | to yaml) $base)
+	atomic-write $"($prefix).bayt/Taskfile.yml" (_inject-taskfile-runtime ($bundle.taskfile.bayt_root | to yaml) $base)
 	for entry in ($bundle.taskfile.files | transpose name data) {
-		atomic-write $"($prefix).bayt/Taskfile.($entry.name).yaml" ($entry.data | to yaml)
+		atomic-write $"($prefix).bayt/Taskfile.($entry.name).yaml" (_inject-taskfile-runtime ($entry.data | to yaml) $base)
 	}
 
 	# --- Dockerfile
@@ -264,11 +285,20 @@ def cross-dep-strings [targets: record] {
 # dep. deps  — list of refs like ["libraries_logs:build"]
 #       index — project-name → workspace-root-relative-dir map
 #       workspace_root — absolute workspace root path
+#
+# Two- and three-segment ref support:
+#   "proj:foo"        → target = "foo"        → bayt.foo.json
+#   "proj:foo:srcs"   → target = "foo_srcs"   → bayt.foo_srcs.json
+#   "proj:foo:outs"   → target = "foo_outs"   → bayt.foo_outs.json
+#   "proj:bayt"       → target = "bayt"       → bayt.bayt.json (project synth)
+#
+# The view suffix (srcs/outs) joins with the target name via underscore
+# so the on-disk file matches the synthetic stage's emitted name.
 def load-dep-manifests [deps: list<string>, index: record, workspace_root: string] {
 	mut result = {}
 	for dep in $deps {
 		let parts = ($dep | split row ":")
-		let target = ($parts | last)
+		let target = ($parts | skip 1 | str join "_")
 		let dep_dir_rel = (dep-to-dir $dep $index)
 		let manifest_path = if $dep_dir_rel == "." {
 			$"($workspace_root)/.bayt/bayt.($target).json"

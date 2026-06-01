@@ -44,6 +44,19 @@ import (
 	// Only targets that declared a dockerfile block.
 	_emit: {for n, t in G._m.files if t.dockerfile != _|_ {(n): t}}
 
+	// Synthetic stages emitted alongside each user target. They're
+	// FROM-scratch packaging images that downstream consumers reach via
+	// the `:foo:srcs` / `:foo:outs` ref grammar (#qualifyRef resolves
+	// these to compose services `<proj>-foo_srcs` / `<proj>-foo_outs`).
+	//
+	// Keys are the suffix-decorated synthetic names so generate.nu
+	// writes Dockerfile.<key> + compose.<key>.yaml per entry, matching
+	// the naming convention for user targets. Empty-srcs targets emit
+	// no _srcs image (a zero-COPY scratch is useless); same for empty
+	// outs.
+	_srcsEmit: {for n, t in _emit if len(t.srcs.globs) > 0 {"\(n)_srcs": t}}
+	_outsEmit: {for n, t in _emit if len(t.outs.globs) > 0 {"\(n)_outs": t}}
+
 	// Depth of project.dir so we can walk back to the monorepo root from
 	// inside .bayt/ for cross-project include paths. `.bayt/` depth =
 	// project depth + 1; workspace-root (depth 0) → "../" (one level
@@ -79,15 +92,28 @@ import (
 	// all pair strings are fused into a single `out` in one pass (no
 	// intermediate lists — CUE's lazy eval struggles with conditional
 	// list-building through nested helpers).
+	// Combined emit set: user-target dockerfiles + synthetic `_srcs` /
+	// `_outs` per target + the per-project `bayt` synthetic. Used to
+	// gate _targetDeps's same-project filter so synthetic refs like
+	// `:bayt` pass through to _depCopies. Without this, the filter
+	// `G._emit[d.name] != _|_` would drop any synthetic ref because
+	// synthetics aren't in `_emit`.
+	_allEmit: {
+		for n, _ in _emit {(n): true}
+		for n, _ in _srcsEmit {(n): true}
+		for n, _ in _outsEmit {(n): true}
+		if len(_emit) > 0 {"bayt": true}
+	}
+
 	// Helper: emittable deps for a target — same-project chainedDeps
-	// (gated on dir match + G._emit) plus all cross-project transitive
+	// (gated on dir match + _allEmit) plus all cross-project transitive
 	// deps. Used by both _depCopies (Dockerfile path) and _depEntries
 	// (compose additional_contexts path).
 	_targetDeps: T={
 		t:   _
 		out: [...]
 		out: list.Concat([
-			[for d in T.t.chainedDeps if d.dir == T.t.dir if G._emit[d.name] != _|_ {d}],
+			[for d in T.t.chainedDeps if d.dir == T.t.dir if _allEmit[d.name] != _|_ {d}],
 			[for d in T.t.transitiveCrossDeps {d}],
 		])
 	}
@@ -367,16 +393,33 @@ import (
 		let _depCopyLine = {
 			d: _
 			out: string
+			// `:bayt` consumers get a BULK-COPY of /monorepo from the
+			// dep's bayt synthetic. The synthetic's filesystem contains
+			// the dep's own .bayt/** plus chained transitive bayt content
+			// from cross-project deps (one COPY-from per direct dep in
+			// _renderSyntheticBayt). Anchoring at /monorepo brings all
+			// of that in one consumer COPY — no per-project enumeration.
+			//
+			// Plain workdir deps stay project-dir-anchored: dep's outs
+			// land at /monorepo/<dep.dir>/<glob>.
 			let _dp          = [if d.dir != ""              {"\(d.dir)/"},        ""][0]
 			let _excludeTail = strings.Join([for e in d.outs.exclude {"--exclude=\(e)"}], " ")
 			let _excludeJ    = [if len(d.outs.exclude) > 0  {" \(_excludeTail)"}, ""][0]
 			let _globPaths   = strings.Join([for g in d.outs.globs {"/monorepo/\(_dp)\(g)"}], " ")
-			out: "COPY --from=\(d.project)-\(d.name)\(_excludeJ) --link --parents \(_globPaths) /"
+			out: [
+				if d.name == "bayt" {
+					"COPY --from=\(d.project)-\(d.name) --link /monorepo /monorepo"
+				},
+				"COPY --from=\(d.project)-\(d.name)\(_excludeJ) --link --parents \(_globPaths) /",
+			][0]
 		}
 		let _emitForDep = {
 			d: _
 			out: bool
-			out: !list.Contains(_inheritedDepKeys, "\(d.project)-\(d.name)") && len(d.outs.globs) > 0
+			// Bayt synthetics are bulk-copied without per-glob filtering,
+			// so the outs.globs-non-empty check doesn't apply — they
+			// always emit when not inherited from the FROM chain.
+			out: !list.Contains(_inheritedDepKeys, "\(d.project)-\(d.name)") && (d.name == "bayt" || len(d.outs.globs) > 0)
 		}
 		_depCopies: [
 			if t.dockerfile.from != null
@@ -463,15 +506,11 @@ import (
 			"COPY --link \(strings.Join(_selfTaskfileSources, " ")) ./.bayt/",
 		]
 
-		// Same-project transitive deps' taskfile + manifest (cross-
-		// project deps' taskfile state arrives via _depCopies +
-		// _selfTaskfileCopies on the dep side). Stamps (.task/) cross
-		// stage boundaries via the same _depCopies COPY --from=<dep>
-		// chain above; this is the only path stamps take between stages.
-		// Per-dep COPY (one per transitive dep) keeps cache granularity
-		// across deps — touching dep A doesn't invalidate the layer for
-		// dep B. Each dep's Taskfile fragment + manifest are emitted
-		// together so they share one COPY.
+		// bayt-runtime COPY lines are now emitted via the standard
+		// `_copyLines` path from capabilities.incremental + sayt.inject,
+		// each of which declares a dockerfile.copy entry. _baytCopies
+		// is gone (PR #1308).
+
 		_incrementalCopies: list.Concat([
 			if t.dockerfile.incremental {[
 				for d in t.transitiveDeps if G._m.files[d] != _|_ {
@@ -648,7 +687,9 @@ import (
 		// published only for cross-project consumers, so emit them
 		// AFTER the RUN. Net: .bayt regen (Taskfile/target json
 		// rewrites) doesn't invalidate non-incremental install RUNs.
-		_preRun: [if t.dockerfile.incremental {list.Concat([_selfTaskfileCopies, _incrementalCopies])}, []][0]
+		_preRun: list.Concat([
+			[if t.dockerfile.incremental {list.Concat([_selfTaskfileCopies, _incrementalCopies])}, []][0],
+		])
 		_postRun: [if !t.dockerfile.incremental {_selfTaskfileCopies}, []][0]
 
 		// Structured COPY directives from t.dockerfile.copy. Each entry
@@ -729,10 +770,202 @@ import (
 		out: strings.Join(_lines, "\n") + "\n"
 	}
 
-	// Per-target Dockerfile bodies.
+	// =========================================================================
+	// Synthetic-stage renderers (FROM-scratch packaging images for the
+	// `:foo:srcs` / `:foo:outs` / `<proj>:bayt` ref views).
+	//
+	// Each renderer emits a small Dockerfile body. WORKDIR is set to the
+	// project workdir for COPY --parents consistency with the existing
+	// _srcCopies emission; absolute-path COPYs ignore WORKDIR anyway.
+	// =========================================================================
+
+	// Shared Dockerfile syntax pin — matches _renderDockerfile.
+	_syntheticSyntax: "# syntax=docker/dockerfile:1.7-labs@sha256:b99fecfe00268a8b556fad7d9c37ee25d716ae08a5d7320e6d51c4dd83246894"
+
+	// Stage WORKDIR for a project. Mirrors _renderDockerfile's _workdir
+	// rule: dir=="" → /monorepo (workspaceroot); else /monorepo/<dir>.
+	_syntheticWorkdir: W={
+		dir: string
+		out: string
+		out: [
+			if W.dir == "" {"/monorepo"},
+			"/monorepo/\(W.dir)",
+		][0]
+	}
+
+	// Helper: resolve a chainedDeps entry to its target manifest.
+	// Same-project deps use G._m.files (the current project's manifest);
+	// cross-project deps use G.depManifests via reconstructed
+	// `<project>:<name>` ref. Returns _|_ when the dep isn't resolvable
+	// (e.g. same-project target was null'd, cross-project ref missing).
+	_depManifest: D={
+		d:   _
+		out: _
+		let _sameProj = D.d.project == G.project.name
+		let _crossRef = "\(D.d.project):\(D.d.name)"
+		out: [
+			if _sameProj {G._m.files[D.d.name]},
+			if !_sameProj {G.depManifests[_crossRef]},
+		][0]
+	}
+
+	// Helper: does this dep have a non-empty srcs.globs? Used to decide
+	// whether T_srcs should COPY --from=<dep>_srcs (would fail at build
+	// time if dep's _srcs stage doesn't exist).
+	// Predicate: does this dep have a non-empty srcs.globs?
+	//
+	// Nested guards rather than `&&` because CUE's `&&` does not
+	// short-circuit. With `_dm != _|_ && len(_dm.srcs.globs) > 0`, when
+	// _dm is bottom, `len(_dm.srcs.globs)` also evaluates to bottom and
+	// the whole expression becomes bottom — the list element exists at
+	// [0] as `_|_` and contaminates downstream consumers (_depCopies /
+	// additional_contexts emissions).
+	_depHasSrcs: D={
+		d:   _
+		out: bool
+		let _dm = (_depManifest & {"d": D.d}).out
+		out: [
+			if _dm != _|_ {[
+				if len(_dm.srcs.globs) > 0 {true},
+				false,
+			][0]},
+			false,
+		][0]
+	}
+
+	// Render T_srcs body: FROM scratch + COPY srcs from host + chained
+	// `COPY --from=<dep>_srcs /monorepo /monorepo` per direct dep that
+	// itself has a _srcs image (transitive content flows because each
+	// dep's _srcs already contains its own transitive chain). Both
+	// same- and cross-project deps participate.
+	_renderSyntheticSrcs: R={
+		t:        _
+		_workdir: (_syntheticWorkdir & {dir: R.t.dir}).out
+		_stage:   "\(R.t.name)_srcs"
+		_excludeFlags: [for e in R.t.srcs.exclude {"--exclude=\(e)"}]
+		_excludeJoin: [if len(_excludeFlags) > 0 {strings.Join(_excludeFlags, " ") + " "}, ""][0]
+		_srcCopy: [
+			if len(R.t.srcs.globs) > 0 {
+				"COPY --link --parents \(_excludeJoin)\(strings.Join(R.t.srcs.globs, " ")) ./"
+			},
+		]
+		// Skip same-project `:bayt` deps: the bayt synthetic is a project-
+		// level scratch image with no `_srcs` variant. Emitting
+		// `<proj>-bayt_srcs` would reference a non-existent service.
+		// (Today this is latent — no target both has `srcs.globs` AND
+		// deps `:bayt` — but the guard is cheap defensive scaffolding.)
+		_depCopies: [
+			for d in R.t.chainedDeps
+			if d.name != "bayt"
+			if (_depHasSrcs & {"d": d}).out {
+				"COPY --link --from=\(d.project)-\(d.name)_srcs /monorepo /monorepo"
+			},
+		]
+		_lines: [
+			_syntheticSyntax,
+			"FROM scratch AS \(_stage)",
+			"WORKDIR \(_workdir)",
+			for l in _srcCopy {l},
+			for l in _depCopies {l},
+		]
+		out: string
+		out: strings.Join(_lines, "\n") + "\n"
+	}
+
+	// Render T_outs body: FROM scratch + COPY --from=T <outs.globs> /.
+	// Leaf only — no transitive walk. T's outs are pulled from T's
+	// actual build stage (via additional_contexts wired in the compose
+	// service definition below).
+	_renderSyntheticOuts: R={
+		t:        _
+		_workdir: (_syntheticWorkdir & {dir: R.t.dir}).out
+		_stage:   "\(R.t.name)_outs"
+		_excludeFlags: [for e in R.t.outs.exclude {"--exclude=\(e)"}]
+		_excludeJoin: [if len(_excludeFlags) > 0 {" \(strings.Join(_excludeFlags, " "))"}, ""][0]
+		_dirPath:  [if R.t.dir != "" {"\(R.t.dir)/"}, ""][0]
+		_outsPaths: strings.Join([for g in R.t.outs.globs {"/monorepo/\(_dirPath)\(g)"}], " ")
+		_copy: [
+			if len(R.t.outs.globs) > 0 {
+				"COPY --from=\(R.t.project)-\(R.t.name)\(_excludeJoin) --link --parents \(_outsPaths) /"
+			},
+		]
+		_lines: [
+			_syntheticSyntax,
+			"FROM scratch AS \(_stage)",
+			"WORKDIR \(_workdir)",
+			for l in _copy {l},
+		]
+		out: string
+		out: strings.Join(_lines, "\n") + "\n"
+	}
+
+	// Cross-project deps that the project's bayt synthetic must chain
+	// through. Walks G._m.projectManifest.crossProjectDirs (union of
+	// every target's transitive cross-project deps) and derives each
+	// project's name from its dir via the same convention as
+	// #project.name (dir → slash-to-underscore, "" → "workspaceroot").
+	// Unique by project name so two targets that share the same dep
+	// don't duplicate the COPY chain.
+	_baytCrossProjects: [
+		for dep in G._m.projectManifest.crossProjectDirs {
+			[
+				if dep == "" {"workspaceroot"},
+				strings.Replace(dep, "/", "_", -1),
+			][0]
+		},
+	]
+
+	// Render project-bayt body: FROM scratch + COPY scaffolding files
+	// from the build context + chained `COPY --link --from=<dep>-bayt
+	// /monorepo /monorepo` per cross-project dep.
+	//
+	// Scaffolding scope (matches what the hand-authored `:ops` graph
+	// used to carry):
+	//   - `.bayt/**`     bayt-emitted Dockerfile/compose/Taskfile fragments
+	//   - `Taskfile.yml` project-root go-task launcher (cross-project
+	//                    consumers' setup stages COPY this from context)
+	//   - `compose.yaml` user-authored compose root that includes the
+	//                    federation (`compose up -f <proj>/compose.yaml`)
+	//
+	// Each dep's bayt synthetic already carries its own transitive chain,
+	// so a consumer of THIS project's bayt receives the full transitive
+	// closure of these three filesets in a single bulk-COPY.
+	_renderSyntheticBayt: {
+		_workdir: (_syntheticWorkdir & {dir: G.project.dir}).out
+		_depCopies: [
+			for p in _baytCrossProjects {
+				"COPY --link --from=\(p)-bayt /monorepo /monorepo"
+			},
+		]
+		_lines: [
+			_syntheticSyntax,
+			"FROM scratch AS bayt",
+			"WORKDIR \(_workdir)",
+			"COPY --link --parents .bayt/** Taskfile.yml compose.yaml ./",
+			for l in _depCopies {l},
+		]
+		out: string
+		out: strings.Join(_lines, "\n") + "\n"
+	}
+
+	// Per-target Dockerfile bodies (user targets + synthetics).
 	dockerfiles: {
 		for n, t in _emit {
 			(n): (_renderDockerfile & {"t": t}).out
+		}
+		for n, t in _srcsEmit {
+			(n): (_renderSyntheticSrcs & {"t": t}).out
+		}
+		for n, t in _outsEmit {
+			(n): (_renderSyntheticOuts & {"t": t}).out
+		}
+		// `_bayt` (leading underscore) avoids colliding with the
+		// federation root file path `compose.bayt.yaml` — Dockerfile.bayt
+		// would be technically free but we keep the leading-underscore
+		// convention so all synthetic file names cluster together.
+		// Gated on `_emit` being non-empty (same rule as compose.files).
+		if len(_emit) > 0 {
+			"_bayt": _renderSyntheticBayt.out
 		}
 	}
 
@@ -783,18 +1016,16 @@ import (
 				// schemes need additional_contexts and which don't.
 				// `from: null` (scratch) skips the entry entirely —
 				// Docker's parser handles `FROM scratch` directly.
-				// bayt-runtime: when incremental, the emitted Dockerfile
-				// RUN uses `task <n>:<n>` whose cmds reference
-				// `../../plugins/bayt/runtime/fingerprint.nu`. That path
-				// lives outside the project context. We can't reach it
-				// via additional_contexts: path: (compose restricts
-				// `..` escapes there), so we route through service: form
-				// pointing at the bayt-runtime-stub service emitted into
-				// the project's compose root (see _runtimeStub below).
-				// `build.context:` in the stub IS allowed to escape
-				// upward, so the stub publishes plugins/bayt/runtime as
-				// a buildable context and incremental stages COPY from
-				// service:bayt-runtime-stub.
+				// `bayt`: when a stage needs bayt's runtime tree (any
+				// incremental target, sayt.inject stages, or
+				// dockerfile.baytRuntime: true), the consumer's COPY
+				// `--from=bayt --link runtime /monorepo/plugins/bayt/runtime`
+				// pulls only `runtime/*` (the slim self-contained tree
+				// with bayt.nu / cache.nu / fingerprint.nu / nu.toml).
+				// additional_contexts wires it to
+				// `${BAYT_RUNTIME:-docker-image://<image>}` —
+				// monorepo-dev mode rewrites this to a relative path
+				// via generate.nu's _inject-runtime regex.
 				// Auto-mirror compose.runtime.depends_on as additional_contexts:
 				// service:X on the same target. depends_on is the runtime
 				// tree; additional_contexts is the build tree. Docker
@@ -832,16 +1063,19 @@ import (
 				// directly (picked up below as _userAddlCtx).
 				let _selfFromIsRef = t.dockerfile.from != null && t.dockerfile.from.ref != _|_
 				let _copyRefEntries = [for f in _copyContextEntries if f.ref != _|_ {f}]
-				// Image-arm copy entries that pin a digest via the `image:`
-				// override emit explicit additional_contexts so bake
-				// resolves <name> to docker-image://<image>. Plain image-
-				// arm entries (no override) rely on bake's default registry
-				// fetch as before — no entry emitted.
-				let _copyImageEntries = [for f in _copyContextEntries if f.image != _|_ {f}]
+				// Image-based copy.from entries (e.g. bayt-runtime / `bayt`
+				// from capabilities.incremental + sayt.inject) wire the
+				// `bayt: docker-image://…` additional_contexts entry that
+				// generate.nu rewrites to a relative path under
+				// --runtime (monorepo-dev mode).
+				let _copyImageEntries = [for f in _copyContextEntries if f.image != _|_ if f.ref == _|_ {f}]
 				if t.dockerfile.incremental || len(_depEntries) > 0 || _selfFromIsRef || len(_runtimeDeps) > 0 || len(_copyRefEntries) > 0 || len(_copyImageEntries) > 0 || len(_userAddlCtx) > 0 {
 					additional_contexts: {
 						for e in _depEntries {
 							(e): "service:\(e)"
+						}
+						for f in _copyImageEntries {
+							(f.name): "docker-image://\(f.image)"
 						}
 						if _selfFromIsRef {
 							(t.dockerfile.from.name): "service:\(t.dockerfile.from.name)"
@@ -851,9 +1085,6 @@ import (
 						}
 						for f in _copyRefEntries {
 							(f.name): "service:\(f.name)"
-						}
-						for f in _copyImageEntries {
-							(f.name): "docker-image://\(f.image)"
 						}
 						for k, v in _userAddlCtx {
 							(k): v
@@ -978,6 +1209,90 @@ import (
 		}
 	}
 
+	// =========================================================================
+	// Synthetic-stage compose service helpers. Minimal: just the build
+	// block + image tag. No runtime fields (image/command/env/...), no
+	// x-bake (synthetics have no `bake.image`, gen_bake.cue skips them
+	// naturally), no secrets. additional_contexts wires the COPY --from
+	// refs each stage needs.
+	// =========================================================================
+
+	// T_srcs service: pulls from each direct dep's _srcs image via
+	// additional_contexts. Transitive content flows through each dep's
+	// own _srcs (which carries its own chained copies).
+	_syntheticSrcsService: S={
+		n: string
+		t: _
+		_svc: "\(S.t.project)-\(S.n)"
+		// Matches the dep-filter in _renderSyntheticSrcs: skip `:bayt`
+		// deps because there is no `<proj>-bayt_srcs` service.
+		_depCtxEntries: [
+			for d in S.t.chainedDeps
+			if d.name != "bayt"
+			if (_depHasSrcs & {"d": d}).out {
+				"\(d.project)-\(d.name)_srcs"
+			},
+		]
+		out: {
+			build: {
+				context:    ".."
+				dockerfile: ".bayt/Dockerfile.\(S.n)"
+				target:     S.n
+				if len(_depCtxEntries) > 0 {
+					additional_contexts: {
+						for e in _depCtxEntries {
+							(e): "service:\(e)"
+						}
+					}
+				}
+			}
+			image: "bayt-\(_svc):latest"
+		}
+	}
+
+	// T_outs service: pulls from T's actual build stage via
+	// additional_contexts. Leaf-only, no transitive walk.
+	_syntheticOutsService: S={
+		n:       string
+		t:       _
+		_svc:    "\(S.t.project)-\(S.n)"
+		_parent: "\(S.t.project)-\(S.t.name)"
+		out: {
+			build: {
+				context:    ".."
+				dockerfile: ".bayt/Dockerfile.\(S.n)"
+				target:     S.n
+				additional_contexts: {
+					(_parent): "service:\(_parent)"
+				}
+			}
+			image: "bayt-\(_svc):latest"
+		}
+	}
+
+	// Project-bayt service: FROM scratch + COPY .bayt/** from the build
+	// context + chained COPY-from per cross-project dep's bayt synthetic.
+	// additional_contexts wires each <dep>-bayt service so the Dockerfile
+	// COPY --from refs resolve through compose's federation graph.
+	_syntheticBaytService: {
+		_svc: "\(G.project.name)-bayt"
+		out: {
+			build: {
+				context:    ".."
+				dockerfile: ".bayt/Dockerfile._bayt"
+				target:     "bayt"
+				if len(_baytCrossProjects) > 0 {
+					additional_contexts: {
+						for p in _baytCrossProjects {
+							"\(p)-bayt": "service:\(p)-bayt"
+						}
+					}
+				}
+			}
+			image: "bayt-\(_svc):latest"
+		}
+	}
+
 	// Compose graph: per-target service files + a federated root that
 	// includes them all. Cross-project includes come from
 	// _m.projectManifest.crossProjectDirs — derived from each target's
@@ -1009,12 +1324,39 @@ import (
 					}
 				}
 			}
+
+			// Synthetic compose service files: one each per emitted _srcs /
+			// _outs (per target), plus one per-project `_bayt`. File names
+			// match the dockerfiles map keys (compose.<key>.yaml).
+			for n, t in _srcsEmit {
+				(n): {
+					let svc = "\(t.project)-\(n)"
+					services: (svc): (_syntheticSrcsService & {"n": n, "t": t}).out
+				}
+			}
+			for n, t in _outsEmit {
+				(n): {
+					let svc = "\(t.project)-\(n)"
+					services: (svc): (_syntheticOutsService & {"n": n, "t": t}).out
+				}
+			}
+			// Leading underscore avoids colliding with the federation
+			// root filename `compose.bayt.yaml`. Gated on `_emit` being
+			// non-empty: a project with no dockerfile-emitting targets
+			// has no consumers that would ever reach its scaffolding via
+			// cross-stage COPY, so skip the synthetic.
+			if len(_emit) > 0 {
+				"_bayt": {
+					let svc = "\(G.project.name)-bayt"
+					services: (svc): _syntheticBaytService.out
+				}
+			}
 		}
 
 		// Two emitted roots, layered the same way as the Taskfile pair:
 		//
 		//   - `.bayt/compose.bayt.yaml` is the FEDERATION root. Per-target
-		//     includes + cross-project sibling includes + bayt-runtime-stub.
+		//     includes + cross-project sibling includes.
 		//     Service names are fully qualified `<project>-<target>` here
 		//     so two projects' federations can coexist in one compose graph
 		//     without collision. Other projects' bayt files include this
@@ -1034,11 +1376,21 @@ import (
 		// per-target files are COPY'd, compose still loads what's there.
 		// Critical for per-target layer cache isolation.
 		bayt_root: {
-			let _localIncludes = [
-				for n, _ in _emit {
-					{path: "./compose.\(n).yaml", required: false}
-				},
+			// User-target compose files + synthetic-stage compose files
+			// (per-target _srcs/_outs + per-project _bayt). All marked
+			// required: false so per-stage cache isolation (a stage that
+			// COPYs only some compose files) still loads cleanly.
+			// `_bayt` is gated on _emit being non-empty (same rule as
+			// dockerfiles/compose.files) — empty projects skip it.
+			let _baytInclude = [
+				if len(_emit) > 0 {{path: "./compose._bayt.yaml", required: false}},
 			]
+			let _localIncludes = list.Concat([
+				[for n, _ in _emit {{path: "./compose.\(n).yaml", required: false}}],
+				[for n, _ in _srcsEmit {{path: "./compose.\(n).yaml", required: false}}],
+				[for n, _ in _outsEmit {{path: "./compose.\(n).yaml", required: false}}],
+				_baytInclude,
+			])
 			let _crossIncludes = [
 				for dep in G._m.projectManifest.crossProjectDirs {
 					let _dp = [if dep != "" {"\(dep)/"}, ""][0]
@@ -1062,12 +1414,24 @@ import (
 		// top-level secrets/volumes would collide across federated
 		// graphs). Cross-project includes also use the deps variant.
 		bayt_deps_root: {
-			let _localIncludes = [
-				for n, _ in _emit
-				if n != "integrate" {
-					{path: "./compose.\(n).yaml", required: false}
-				},
+			// User-target deps (minus `integrate`, whose top-level
+			// secrets/volumes collide across federation) + synthetic
+			// stages. The `integrate_srcs` / `integrate_outs` synthetics
+			// reference the user `integrate` service via additional_contexts;
+			// since `integrate` is excluded here, those synthetics MUST
+			// be too, or compose load fails with "unknown service
+			// integrate" when a cross-project consumer includes this
+			// deps root. `_bayt` is project-wide with no per-target
+			// dependency, so it federates safely.
+			let _baytInclude = [
+				if len(_emit) > 0 {{path: "./compose._bayt.yaml", required: false}},
 			]
+			let _localIncludes = list.Concat([
+				[for n, _ in _emit if n != "integrate" {{path: "./compose.\(n).yaml", required: false}}],
+				[for n, _ in _srcsEmit if n != "integrate_srcs" {{path: "./compose.\(n).yaml", required: false}}],
+				[for n, _ in _outsEmit if n != "integrate_outs" {{path: "./compose.\(n).yaml", required: false}}],
+				_baytInclude,
+			])
 			let _crossIncludes = [
 				for dep in G._m.projectManifest.crossProjectDirs {
 					let _dp = [if dep != "" {"\(dep)/"}, ""][0]

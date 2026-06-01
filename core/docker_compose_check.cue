@@ -24,14 +24,19 @@ _d1: #project & {
 	}
 }
 _d1_dc: (#dockerComposeGen & {project: _d1, depManifests: {}})
+// Each user target with non-empty srcs / outs auto-spawns scratch _srcs
+// and _outs synthetic stages; the project gets a single _bayt synthetic
+// carrying its .bayt/ tree. Order matches the emitter's list.Concat:
+// user targets, then _srcs, then _outs, then _bayt.
 _d1_dc: compose: bayt_root: include: [
 	{path: "./compose.build.yaml", required: false},
+	{path: "./compose.build_srcs.yaml", required: false},
+	{path: "./compose.build_outs.yaml", required: false},
+	{path: "./compose._bayt.yaml", required: false},
 ]
 _d1_dc: compose: files: build: services: "d1-build": build: context:    ".."
 _d1_dc: compose: files: build: services: "d1-build": build: dockerfile: ".bayt/Dockerfile.build"
 _d1_dc: compose: files: build: services: "d1-build": build: target:     "build"
-// busybox preset → from.name lands as an additional_contexts entry.
-_d1_dc: compose: files: build: services: "d1-build": build: additional_contexts: (lock.images.busybox): "docker-image://\(lock.images.busybox)"
 
 // --- D2: dep chain — build depends on setup, both have dockerfile
 // blocks. The build service gets `additional_contexts: { d2-setup:
@@ -174,6 +179,46 @@ _d8_dc: compose: files: launch: services: "d8-launch": healthcheck: {
 	retries:  3
 }
 
+// --- D9: synthetic-stage emission. Each target with non-empty
+// srcs.globs spawns `<n>_srcs` (FROM scratch + COPY srcs from host);
+// each with non-empty outs.globs spawns `<n>_outs` (FROM scratch +
+// COPY --from=<n> outs). Per-project `_bayt` synthetic always emitted
+// when at least one dockerfile target exists. Containment-checked on
+// the rendered Dockerfile bodies — exact-string equality is brittle
+// across glob orderings.
+_d9_srcs_body:   _d1_dc.dockerfiles.build_srcs
+_d9_outs_body:   _d1_dc.dockerfiles.build_outs
+_d9_bayt_body:   _d1_dc.dockerfiles._bayt
+_d9_srcs_stage:  strings.Contains(_d9_srcs_body, "FROM scratch AS build_srcs") & true
+_d9_outs_stage:  strings.Contains(_d9_outs_body, "FROM scratch AS build_outs") & true
+_d9_outs_from:   strings.Contains(_d9_outs_body, "COPY --from=d1-build") & true
+_d9_bayt_stage:  strings.Contains(_d9_bayt_body, "FROM scratch AS bayt") & true
+_d9_bayt_scope:  strings.Contains(_d9_bayt_body, ".bayt/** Taskfile.yml compose.yaml") & true
+
+// --- D10: `:bayt` ref consumer. A target depending on `:bayt` (the
+// project-level synthetic) gets a bulk-COPY `--from=<proj>-bayt
+// --link /monorepo /monorepo` in its Dockerfile — distinct from the
+// per-glob workdir COPY emitted for plain `:foo` refs. The compose
+// service for the consumer wires `<proj>-bayt` in
+// additional_contexts so the FROM ref resolves.
+_d10: #project & {
+	name: "d10"
+	dir:  "d10"
+	targets: {
+		"ci": {
+			deps: [":bayt"]
+			cmd: "builtin": do: "true"
+			dockerfile: busybox
+		}
+	}
+}
+_d10_dc: (#dockerComposeGen & {project: _d10, depManifests: {}})
+// Bulk-copy pattern: /monorepo /monorepo, no --parents, no glob filter.
+_d10_ci_body: _d10_dc.dockerfiles.ci
+_d10_ci_has_bulk_copy: strings.Contains(_d10_ci_body, "COPY --from=d10-bayt --link /monorepo /monorepo") & true
+// Additional context wires the bayt synthetic.
+_d10_dc: compose: files: ci: services: "d10-ci": build: additional_contexts: "d10-bayt": "service:d10-bayt"
+
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
 	d1: _d1_dc
@@ -185,4 +230,11 @@ Tests: docker_compose: {
 	d7: _d7_dc
 	d7_has_entrypoint: _d7_has_entrypoint
 	d8: _d8_dc
+	d9_srcs_stage:  _d9_srcs_stage
+	d9_outs_stage:  _d9_outs_stage
+	d9_outs_from:   _d9_outs_from
+	d9_bayt_stage:  _d9_bayt_stage
+	d9_bayt_scope:  _d9_bayt_scope
+	d10:            _d10_dc
+	d10_has_bulk_copy: _d10_ci_has_bulk_copy
 }

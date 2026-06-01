@@ -171,9 +171,19 @@ noop: #cmd & {
 // action. Deps/srcs/outs live on #target, not here.
 // =============================================================================
 
-// Resolve a Bazel-style ref to its qualified compose-service name
-// `<project>-<target>`. `:target` is same-project (uses `proj`);
-// `project:target` is cross-project (uses the embedded project).
+// Resolve a Bazel-style ref to its qualified compose-service name plus
+// a view discriminator. Six ref shapes:
+//
+//   `:target`               same-project workdir COPY from the build stage
+//   `proj:target`           cross-project workdir COPY from the build stage
+//   `:target:srcs`          same-project, scratch image holding srcs only
+//   `:target:outs`          same-project, scratch image holding outs only
+//   `proj:target:srcs|outs` cross-project, same view discrimination
+//   `:bayt` / `proj:bayt`   per-project scaffolding stage (the .bayt/ tree)
+//
+// Returns `name` (the qualified compose service) and `_kind` ∈
+// {workdir, srcs, outs, bayt} so downstream emitters can dispatch on
+// view without re-parsing.
 #qualifyRef: {
 	ref:  string
 	proj: string
@@ -182,7 +192,26 @@ noop: #cmd & {
 		if _parts[0] == "" {proj},
 		if _parts[0] != "" {_parts[0]},
 	][0]
-	name: "\(_proj)-\(_parts[1])"
+	let _target = _parts[1]
+	// Third segment when present; `""` otherwise. The `if cond { body }`
+	// branch isn't evaluated when cond is false, so `_parts[2]` stays
+	// safe even when the ref has only two segments.
+	let _suffix = [
+		if len(_parts) >= 3 {_parts[2]},
+		"",
+	][0]
+	_kind: [
+		if _target == "bayt" {"bayt"},
+		if _suffix == "srcs" {"srcs"},
+		if _suffix == "outs" {"outs"},
+		"workdir",
+	][0]
+	name: [
+		if _kind == "bayt" {"\(_proj)-bayt"},
+		if _kind == "srcs" {"\(_proj)-\(_target)_srcs"},
+		if _kind == "outs" {"\(_proj)-\(_target)_outs"},
+		"\(_proj)-\(_target)",
+	][0]
 }
 
 #dockerfile: D={
@@ -294,7 +323,13 @@ noop: #cmd & {
 	from: null | close({
 		name: string & !~"^scratch$"
 	}) | close({
-		ref: string
+		// FROM is inheritance-only: the whole upstream stage filesystem
+		// flows in. The `:srcs` / `:outs` views are scratch packaging
+		// stages that you'd never want as a FROM base, so reject the
+		// suffix at the schema level. `dockerfile.copy[].from.ref`
+		// accepts all suffixes (curated COPYs are exactly the use case
+		// for the narrow views).
+		ref: string & !~":(srcs|outs)$"
 		// Qualified alias: `<project>-<target>` rather than just
 		// `<target>`. BuildKit silently collapses `FROM X AS Y` when
 		// X==Y (the downstream stage steals the upstream's name), so
@@ -893,8 +928,21 @@ noop: #cmd & {
 	// stack umbrella — e.g. a library that uses `sayt.gradle` but
 	// has no release/launch/verify writes `targets: "release": null`.
 	// Emitters filter null entries when iterating.
+	//
+	// Reserved target-name patterns. The emitter synthesizes:
+	//   `<proj>-bayt`           per project — scaffolding (.bayt/ tree)
+	//   `<proj>-<target>_srcs`  per target — srcs scratch image
+	//   `<proj>-<target>_outs`  per target — outs scratch image
+	// Authoring a target whose name collides with any synthetic would
+	// produce two services with the same qualified name (or two
+	// .bayt/Dockerfile.<n> files at the same path). The regex rejects:
+	//   - exact `bayt` (collides with the project synthetic)
+	//   - anything ending in `_bayt`, `_srcs`, or `_outs`
+	//     (collides with file-name + service-name pattern of synthetics)
+	// Names with incidental endings (e.g. `playbayt`, `outside`) are
+	// allowed — only the underscore-suffix forms are reserved.
 	targets: [Name=string]: (#target & {
-		name:    Name
+		name:    Name & !~"^bayt$|_(srcs|outs|bayt)$"
 		project: P.name
 		dir:     P.dir
 		// Compose per-target cache strings with this target's name

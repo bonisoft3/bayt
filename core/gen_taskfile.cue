@@ -18,6 +18,17 @@ import (
 	// Only targets that declared a taskfile block on their #target.
 	_emit: {for n, t in G._m.files if t.taskfile != _|_ {(n): t}}
 
+	// bayt invocation token emitted into each Taskfile cmd. Default
+	// emission is plain `bayt` — consumers must have it on PATH (e.g.
+	// installed via `mise install github:bonisoft3/bayt`).
+	//
+	// Monorepo developers pass `bayt generate --runtime plugins/bayt`,
+	// which sets BAYT_RUNTIME_DIR and triggers a post-write regex
+	// rewrite in generate.nu (`_inject-runtime`) replacing `bayt` with
+	// a depth-aware in-tree path. That avoids requiring the monorepo
+	// to install bayt globally via mise/PATH overrides.
+	_baytPath: "bayt"
+
 	// Helper: build one full cmd line (activate prefix + rule body).
 	_cmdLine: {
 		activate: string
@@ -67,7 +78,16 @@ import (
 		let _cmdFlag    = [if F.cmd != "" {" --cmd \(F.cmd)"}, ""][0]
 		let _stampName  = [if F.cmd != "" {"\(F.t.name).\(F.cmd)"}, F.t.name][0]
 		let _updateFlag = [if F.mode == "stamp" {" --update-stamp"}, ""][0]
-		out: "bayt-runtime fingerprint --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
+		// Depth-aware in-tree path to bayt. From project root (the cwd
+		// inherited by every task via .bayt's `dir: ../` include), we
+		// walk up `G._m._depth` levels to reach the workspace root,
+		// then into plugins/bayt/bin/bayt. On host this is the in-tree
+		// host CLI. In containers, the generated Dockerfile creates a
+		// symlink `plugins/bayt/bin/bayt -> runtime/bayt` so the same
+		// relative path resolves to the slim in-container CLI.
+		// Workspaceroot (depth=0) prefixes `./` to avoid bare-path
+		// ambiguity.
+		out: "\(_baytPath) fingerprint --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
 	}
 
 	// Helper: build the YAML cmds list for a (possibly per-cmd) task.
@@ -119,7 +139,7 @@ import (
 		let _shell        = [if len(_matchingCmds) > 0 {_matchingCmds[0].shell}, "exec"][0]
 		let _shellTail    = [if _shell != "exec"       {" \(_shell) -c"},        ""][0]
 
-		out: "bayt-runtime cache run --manifest {{.TASKFILE_DIR}}/bayt.\(W.t.name).json\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)\(_shellTail)"
+		out: "\(_baytPath) cache run --manifest {{.TASKFILE_DIR}}/bayt.\(W.t.name).json\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)\(_shellTail)"
 	}
 
 	// _cmdsBlock — emits the per-task cmds list as

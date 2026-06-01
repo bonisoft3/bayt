@@ -1,4 +1,0 @@
-#!/usr/bin/env sh
-set -e
-DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$DIR/nu.toml" "$DIR/bayt-runtime.nu" "$@"
