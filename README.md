@@ -21,7 +21,7 @@ Pin the release in your project's `mise.toml`:
 
 ```toml
 [tools]
-"github:bonisoft3/bayt" = "0.1.0"
+"github:bonisoft3/bayt" = "0.10.0"
 ```
 
 `bayt` is then on PATH and the cue/nu tree lives next to it. Run from any directory containing a `bayt.cue`:
@@ -151,7 +151,7 @@ A *stack* captures what a language toolchain needs. Bayt ships four:
 - **`stacks/gradle`** — kotlin/java/gradle concept fragments: `assemble`, `test`, `integrationTest`, `jibBuildTar`, `check`, `run`. Default srcs scoped to `src/main/` for `assemble` (so test edits don't invalidate build); `bayt.cache.full` on `assemble` and `integrationTest` (gradle's daemon cold-start is too costly to pay on every cache hit). Emits `.bayt/init.gradle.kts` per project pointing gradle's local build cache at `$BAYT_CACHE_DIR/gradle` — gradle's per-task cache and bayt's per-target cache share the same on-disk store and complement each other (per-task hits when only some inputs changed, per-target full skips when nothing changed).
 - **`stacks/pnpm`** — pnpm/node/vite/vitest concept fragments: `install`, `build`, `test`, `dev`, `testInt`, `testE2E`, `lint`. Test srcs split between `srcsTest` (`*.test.ts(x)`) and `srcsIntegrate` (`*.spec.ts(x)`) matching the repo's vitest convention. pnpm store cache mount.
 - **`stacks/mise`** — toolchain installer. `install` (provisions the project's `.mise.toml`), `exec` (sets `activate: "mise x --"` so cmds resolve through mise's shim layer), `doctor`. Used as a building block by other stacks.
-- **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace` are the standard mappings projects compose against.
+- **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace` are the standard mappings projects compose against. `sayt.inject` adds the dind plumbing for ci-cascade flows; `sayt.ci` is a one-line recipe combining inject + the standard `compose up integrate --build` RUN body + FROM `:dindbox`; `sayt.dindbox` is the matching dindbox-target preset.
 
 Using the umbrella collapses a typical service to a handful of lines:
 
@@ -160,8 +160,10 @@ _tracker: sayt.gradle & {
     dir: "services/tracker"
     targets: {
         // Cross-project deps: producer must mark visibility "public".
+        // Same-project deps reachable via `dockerfile.from.ref` (here
+        // sayt.gradle defaults build → FROM `:setup`) don't need to be
+        // restated in `deps:` — chainedDeps walks both sources.
         "build": deps: [
-            ":setup", "workspaceroot:setup",
             "libraries_xproto:build",
             "plugins_jvm:build",
         ]
