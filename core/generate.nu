@@ -160,6 +160,11 @@ def _inject-taskfile-runtime [content: string, base: string]: nothing -> string 
 	$content | str replace --regex --all '\bbayt (cache|fingerprint|where)\b' $"($rel_path) $1"
 }
 
+# Generated-from header. JSON gets a field (no comment syntax).
+def _hash-header  [c: string]: nothing -> string { "# generated from bayt.cue — do not edit\n"  + $c }
+def _slash-header [c: string]: nothing -> string { "// generated from bayt.cue — do not edit\n" + $c }
+def _json-header  [d: any]:    nothing -> any    { {_generated_from: "bayt.cue (do not edit)"} | merge $d }
+
 def write-bundle [bundle: record, base: string] {
 	let prefix = if $base == "." or $base == "" { "" } else { $"($base)/" }
 
@@ -173,27 +178,27 @@ def write-bundle [bundle: record, base: string] {
 	for entry in ($bundle.manifest.files | transpose name data) {
 		let data = $entry.data
 			| update transitiveDeps {|it| $it.transitiveDeps | uniq}
-		atomic-write $"($prefix).bayt/bayt.($entry.name).json" ($data | to json --indent 2)
+		atomic-write $"($prefix).bayt/bayt.($entry.name).json" (_json-header $data | to json --indent 2)
 	}
 
 	# --- Taskfile
-	atomic-write $"($prefix)Taskfile.yml" (_inject-taskfile-runtime ($bundle.taskfile.root | to yaml) $base)
-	atomic-write $"($prefix).bayt/Taskfile.yml" (_inject-taskfile-runtime ($bundle.taskfile.bayt_root | to yaml) $base)
+	atomic-write $"($prefix)Taskfile.yml" (_hash-header (_inject-taskfile-runtime ($bundle.taskfile.root | to yaml) $base))
+	atomic-write $"($prefix).bayt/Taskfile.yml" (_hash-header (_inject-taskfile-runtime ($bundle.taskfile.bayt_root | to yaml) $base))
 	for entry in ($bundle.taskfile.files | transpose name data) {
-		atomic-write $"($prefix).bayt/Taskfile.($entry.name).yaml" (_inject-taskfile-runtime ($entry.data | to yaml) $base)
+		atomic-write $"($prefix).bayt/Taskfile.($entry.name).yaml" (_hash-header (_inject-taskfile-runtime ($entry.data | to yaml) $base))
 	}
 
 	# --- Dockerfile
 	for entry in ($bundle.docker.dockerfiles | transpose name body) {
-		atomic-write $"($prefix).bayt/Dockerfile.($entry.name)" (_inject-dockerfile-runtime $entry.body)
+		atomic-write $"($prefix).bayt/Dockerfile.($entry.name)" (_hash-header (_inject-dockerfile-runtime $entry.body))
 	}
 
 	# --- compose
-	atomic-write $"($prefix).bayt/compose.yaml" (_inject-runtime ($bundle.docker.compose.root | to yaml) $base)
-	atomic-write $"($prefix).bayt/compose.bayt.yaml" (_inject-runtime ($bundle.docker.compose.bayt_root | to yaml) $base)
-	atomic-write $"($prefix).bayt/compose.bayt.deps.yaml" (_inject-runtime ($bundle.docker.compose.bayt_deps_root | to yaml) $base)
+	atomic-write $"($prefix).bayt/compose.yaml" (_hash-header (_inject-runtime ($bundle.docker.compose.root | to yaml) $base))
+	atomic-write $"($prefix).bayt/compose.bayt.yaml" (_hash-header (_inject-runtime ($bundle.docker.compose.bayt_root | to yaml) $base))
+	atomic-write $"($prefix).bayt/compose.bayt.deps.yaml" (_hash-header (_inject-runtime ($bundle.docker.compose.bayt_deps_root | to yaml) $base))
 	for entry in ($bundle.docker.compose.files | transpose name data) {
-		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" (_inject-runtime ($entry.data | to yaml) $base)
+		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" (_hash-header (_inject-runtime ($entry.data | to yaml) $base))
 	}
 
 	# --- skaffold
@@ -201,7 +206,7 @@ def write-bundle [bundle: record, base: string] {
 	# composition is user-owned: hand-write <project>/skaffold.yaml and
 	# `requires:` whichever .bayt/skaffold.<n>.yaml fragments matter.
 	for entry in ($bundle.skaffold.files | transpose name data) {
-		atomic-write $"($prefix).bayt/skaffold.($entry.name).yaml" ($entry.data | to yaml)
+		atomic-write $"($prefix).bayt/skaffold.($entry.name).yaml" (_hash-header ($entry.data | to yaml))
 	}
 
 	# --- vscode tasks (per-target, build/test only)
@@ -212,12 +217,12 @@ def write-bundle [bundle: record, base: string] {
 	# drift). Only build and test are emitted — other targets (setup,
 	# integrate, release, ...) don't fit vscode's build/test workflow.
 	for entry in ($bundle.vscode.files | transpose name data) {
-		atomic-write $"($prefix).bayt/vscode.($entry.name).json" ($entry.data | to json --indent 2)
+		atomic-write $"($prefix).bayt/vscode.($entry.name).json" (_json-header $entry.data | to json --indent 2)
 	}
 
 	# --- bake HCL
 	for entry in ($bundle.bake.files | transpose name body) {
-		atomic-write $"($prefix).bayt/bake.($entry.name).hcl" $entry.body
+		atomic-write $"($prefix).bayt/bake.($entry.name).hcl" (_hash-header $entry.body)
 	}
 
 	# --- gradle init script
@@ -226,7 +231,7 @@ def write-bundle [bundle: record, base: string] {
 	# store. Emitted for every project — non-gradle projects' copy
 	# never gets sourced. Requires `org.gradle.caching=true` in the
 	# project's gradle.properties for gradle to consult the cache.
-	atomic-write $"($prefix).bayt/init.gradle.kts" 'settingsEvaluated {
+	atomic-write $"($prefix).bayt/init.gradle.kts" (_slash-header 'settingsEvaluated {
     // Resolution mirrors cache.nu local-root:
     //   1. $BAYT_CACHE_DIR (explicit override)
     //   2. $XDG_CACHE_HOME/bayt (XDG Base Directory spec, *nix idiomatic)
@@ -243,7 +248,7 @@ def write-bundle [bundle: record, base: string] {
         }
     }
 }
-'
+')
 
 	print $"bayt: wrote files for project ($bundle.manifest.projectManifest.name)"
 }
