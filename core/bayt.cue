@@ -776,13 +776,13 @@ noop: #cmd & {
 	// out-of-tree side effects (toolchain installs at /root/.local/...),
 	// use `dockerfile.from` to inherit the producer stage.
 	srcs: {
-		globs:          [...string]
+		globs:          *[] | [...string]
 		defaultGlobs:   *null | #MapAsList
 		exclude:        *[] | [...string]
 		defaultExclude: *null | #MapAsList
 	}
 	outs: {
-		globs:   [...string]
+		globs:   *[] | [...string]
 		exclude: *[] | [...string]
 	}
 

@@ -136,9 +136,22 @@ _expandLines: {
 	//   `:foo:srcs`  → "foo_srcs"     (synthetic name)
 	//   `:foo:outs`  → "foo_outs"     (synthetic name)
 	//   `:bayt`      → "bayt"         (project synthetic)
-	_sameProjectRefName: {
+	// Refs sourced from t.deps (same-project, leading `:`) PLUS
+	// t.dockerfile.from.ref when it's same-project. Both surface in
+	// `_sameProjectDepNames` below — the FROM-chain version is what
+	// drives scaffolding COPY emission for chained-but-not-in-deps
+	// targets (e.g. `dockerfile.from.ref: ":setup"`).
+	_sameProjectRefs: [
 		for n, t in G.project.targets if t != null
-		for d in t.deps if strings.HasPrefix(d, ":") {
+		for d in t.deps if strings.HasPrefix(d, ":") {d},
+		for n, t in G.project.targets if t != null
+		if t.dockerfile != _|_
+		if t.dockerfile.from != null
+		if t.dockerfile.from.ref != _|_
+		if strings.HasPrefix(t.dockerfile.from.ref, ":") {t.dockerfile.from.ref},
+	]
+	_sameProjectRefName: {
+		for d in _sameProjectRefs {
 			let _bare = strings.TrimPrefix(d, ":")
 			let _parts = strings.Split(_bare, ":")
 			// Materialize the view segment to "" when absent, so CUE
@@ -169,8 +182,7 @@ _expandLines: {
 	// regex rejects "bayt" as a target name). That contaminates the
 	// list with `_|_` and breaks evaluation. Keep `:bayt` first.
 	_sameProjectRefOuts: {
-		for n, t in G.project.targets if t != null
-		for d in t.deps if strings.HasPrefix(d, ":") {
+		for d in _sameProjectRefs {
 			let _bare = strings.TrimPrefix(d, ":")
 			let _parts = strings.Split(_bare, ":")
 			let _target = _parts[0]
@@ -198,7 +210,15 @@ _expandLines: {
 	// once and reused by _transitiveDeps + per-target files emission.
 	_sameProjectDepNames: {
 		for n, t in G.project.targets if t != null {
-			(n): [for d in t.deps if strings.HasPrefix(d, ":") {_sameProjectRefName[d]}]
+			let _fromRef = [
+				if t.dockerfile != _|_
+					if t.dockerfile.from != null
+					if t.dockerfile.from.ref != _|_
+					if strings.HasPrefix(t.dockerfile.from.ref, ":") {t.dockerfile.from.ref},
+			]
+			let _depRefs = [for d in t.deps if strings.HasPrefix(d, ":") {d}]
+			let _all = list.Concat([_fromRef, _depRefs])
+			(n): [for i, d in _all if !list.Contains(list.Slice(_all, 0, i), d) {_sameProjectRefName[d]}]
 		}
 	}
 
@@ -310,22 +330,41 @@ _expandLines: {
 				// Dockerfile emitter's per-glob COPY emission has the
 				// producer's declared interface available without a
 				// second lookup.
-				chainedDeps: [for d in t.deps {
+				chainedDeps: list.Concat([
+					// FROM-chain ref leads when it's same-project (the
+					// chain head, conceptually). Cross-project FROM refs
+					// flow through _targetCrossDeps, not chainedDeps.
+					// Skipped when the user also lists the same ref in
+					// t.deps — that entry takes over.
 					[
-						if strings.HasPrefix(d, ":") {{
-							name:    _sameProjectRefName[d]
+						if t.dockerfile != _|_
+						if t.dockerfile.from != null
+						if t.dockerfile.from.ref != _|_
+						if strings.HasPrefix(t.dockerfile.from.ref, ":")
+						if !list.Contains(t.deps, t.dockerfile.from.ref) {{
+							name:    _sameProjectRefName[t.dockerfile.from.ref]
 							project: G.project.name
 							dir:     G.project.dir
-							outs:    _sameProjectRefOuts[d]
+							outs:    _sameProjectRefOuts[t.dockerfile.from.ref]
 						}},
-						{
-							name:    G.depManifests[d].name
-							project: G.depManifests[d].project
-							dir:     G.depManifests[d].dir
-							outs:    G.depManifests[d].outs
-						},
-					][0]
-				}]
+					],
+					[for d in t.deps {
+						[
+							if strings.HasPrefix(d, ":") {{
+								name:    _sameProjectRefName[d]
+								project: G.project.name
+								dir:     G.project.dir
+								outs:    _sameProjectRefOuts[d]
+							}},
+							{
+								name:    G.depManifests[d].name
+								project: G.depManifests[d].project
+								dir:     G.depManifests[d].dir
+								outs:    G.depManifests[d].outs
+							},
+						][0]
+					}],
+				])
 
 				// Priority-sorted commands. Each cmd's `srcs` is its
 				// EFFECTIVE input set (target.srcs ∪ cmd.srcs, with

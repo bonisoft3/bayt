@@ -215,6 +215,27 @@ lint: {
 	taskfile: run: "always"
 }
 
+// ci — bake-driven dindbox-cascade entry. Composes sayt.inject's dind
+// plumbing with the canonical `compose up integrate --build` RUN body
+// and FROMs the project's :dindbox target. Leaf projects supply `deps:`
+// (source closure / scaffolding refs) and nothing else; override
+// cmd.builtin.do for non-default compose-up flags.
+ci: inject & {
+	activate: ""
+	cmd: "builtin": {
+		shell: "sh"
+		do:    *"exec docker compose up integrate --build --abort-on-container-failure --exit-code-from integrate --remove-orphans" | string
+	}
+	dockerfile: from: ref: *":dindbox" | string
+}
+
+// dindbox — thin FROM-base for sayt.ci. Pure preset wrap of
+// bayt.dindbox; nulls the cmd so no RUN line emits.
+dindbox: {
+	cmd: "builtin": null
+	dockerfile: bayt.dindbox
+}
+
 // =============================================================================
 // Standard sayt-verb mappings — bayt.#project shapes that wire the
 // verb fragments above to a specific toolchain stack.
