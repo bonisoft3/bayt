@@ -116,13 +116,27 @@ def atomic-write [target: string, content: string] {
 # gen_compose.cue would have been cleaner but cue tags don't propagate
 # to imported packages (cue-lang/cue#1530), so the rewrite happens
 # here at write time.
+#
+# Path points at `runtime/`, not the bayt project root — inner-bake
+# FS only has /monorepo/plugins/bayt/runtime, so any broader context
+# would hash differently outer-vs-inner and break the depot cache.
 def _inject-runtime [content: string, base: string]: nothing -> string {
 	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
 	if ($runtime_dir | is-empty) { return $content }
 	let depth = if ($base == "." or $base == "") { 0 } else { ($base | split row "/" | length) }
 	let prefix = (0..$depth | each {|_| "../" } | str join "")
-	let rel_path = $"($prefix)($runtime_dir)"
+	let rel_path = $"($prefix)($runtime_dir)/runtime"
 	$content | str replace --regex --all 'bayt: docker-image://[^\n"]+' $"bayt: ($rel_path)"
+}
+
+# Pair with `_inject-runtime`: when the context is rewritten to point
+# at `runtime/`, the COPY must take `.` (whole context) instead of the
+# `runtime` subdir-selector. Non-monorepo (OCI image) consumers keep
+# the selector — the published bayt image carries the full bayt tree.
+def _inject-dockerfile-runtime [content: string]: nothing -> string {
+	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
+	if ($runtime_dir | is-empty) { return $content }
+	$content | str replace --regex --all '(COPY --link --from=bayt) runtime ' '$1 . '
 }
 
 # Rewrite `bayt <subcommand>` invocations in Taskfile YAML to the
@@ -171,7 +185,7 @@ def write-bundle [bundle: record, base: string] {
 
 	# --- Dockerfile
 	for entry in ($bundle.docker.dockerfiles | transpose name body) {
-		atomic-write $"($prefix).bayt/Dockerfile.($entry.name)" $entry.body
+		atomic-write $"($prefix).bayt/Dockerfile.($entry.name)" (_inject-dockerfile-runtime $entry.body)
 	}
 
 	# --- compose

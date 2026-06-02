@@ -393,16 +393,25 @@ import (
 		let _depCopyLine = {
 			d: _
 			out: string
-			// `:bayt` consumers get a BULK-COPY of /monorepo from the
-			// dep's bayt synthetic. The synthetic's filesystem contains
-			// the dep's own .bayt/** plus chained transitive bayt content
-			// from cross-project deps (one COPY-from per direct dep in
-			// _renderSyntheticBayt). Anchoring at /monorepo brings all
-			// of that in one consumer COPY — no per-project enumeration.
+			// Three ref shapes, three COPY shapes:
 			//
-			// Plain workdir deps stay project-dir-anchored: dep's outs
-			// land at /monorepo/<dep.dir>/<glob>.
+			//   `:bayt` (project-level synth) — BULK COPY /monorepo /monorepo
+			//     from the bayt scratch synth. The synth's filesystem holds
+			//     this project's .bayt/Taskfile.yml/compose.yaml plus chained
+			//     transitive bayt content from every cross-project dep
+			//     (one COPY-from per direct dep in _renderSyntheticBayt).
+			//
+			//   `:foo` (plain target ref) — BULK COPY of the dep's project
+			//     workdir (/monorepo/<dep.dir>). Mental model: "give me what
+			//     this build produced." Cross-project consumers needing
+			//     narrow filtering opt into `:foo:outs` or `:foo:srcs`.
+			//
+			//   `:foo:srcs` / `:foo:outs` (synth) — per-glob filter using
+			//     the synth's outs.globs/exclude. The synth itself is a
+			//     scratch stage that only carries the filtered fileset.
 			let _dp          = [if d.dir != ""              {"\(d.dir)/"},        ""][0]
+			let _bulkDest    = [if d.dir != "" {"/monorepo/\(d.dir)"}, "/monorepo"][0]
+			let _isSynth     = strings.HasSuffix(d.name, "_srcs") || strings.HasSuffix(d.name, "_outs")
 			let _excludeTail = strings.Join([for e in d.outs.exclude {"--exclude=\(e)"}], " ")
 			let _excludeJ    = [if len(d.outs.exclude) > 0  {" \(_excludeTail)"}, ""][0]
 			let _globPaths   = strings.Join([for g in d.outs.globs {"/monorepo/\(_dp)\(g)"}], " ")
@@ -410,16 +419,22 @@ import (
 				if d.name == "bayt" {
 					"COPY --from=\(d.project)-\(d.name) --link /monorepo /monorepo"
 				},
+				if !_isSynth && d.name != "bayt" {
+					"COPY --from=\(d.project)-\(d.name) --link \(_bulkDest) \(_bulkDest)"
+				},
 				"COPY --from=\(d.project)-\(d.name)\(_excludeJ) --link --parents \(_globPaths) /",
 			][0]
 		}
 		let _emitForDep = {
 			d: _
 			out: bool
-			// Bayt synthetics are bulk-copied without per-glob filtering,
-			// so the outs.globs-non-empty check doesn't apply — they
-			// always emit when not inherited from the FROM chain.
-			out: !list.Contains(_inheritedDepKeys, "\(d.project)-\(d.name)") && (d.name == "bayt" || len(d.outs.globs) > 0)
+			// Synth refs (_srcs / _outs) require non-empty outs.globs (else
+			// there's nothing to filter and the COPY would emit garbage).
+			// Plain target refs and the bayt synth bulk-copy a fixed scope
+			// (workdir or /monorepo) and emit regardless of outs.globs.
+			let _isSynth = strings.HasSuffix(d.name, "_srcs") || strings.HasSuffix(d.name, "_outs")
+			out: !list.Contains(_inheritedDepKeys, "\(d.project)-\(d.name)") &&
+				(d.name == "bayt" || !_isSynth || len(d.outs.globs) > 0)
 		}
 		_depCopies: [
 			if t.dockerfile.from != null
@@ -919,8 +934,7 @@ import (
 	// from the build context + chained `COPY --link --from=<dep>-bayt
 	// /monorepo /monorepo` per cross-project dep.
 	//
-	// Scaffolding scope (matches what the hand-authored `:ops` graph
-	// used to carry):
+	// Scaffolding scope:
 	//   - `.bayt/**`     bayt-emitted Dockerfile/compose/Taskfile fragments
 	//   - `Taskfile.yml` project-root go-task launcher (cross-project
 	//                    consumers' setup stages COPY this from context)

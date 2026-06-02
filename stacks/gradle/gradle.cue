@@ -97,11 +97,19 @@ assemble: bayt.cache.full & {
 		// Project-local version catalog. No-op if absent.
 		"libs-versions":    {glob: "gradle/libs.versions.toml"}
 	}
+	// build/** + .gradle/** + project metadata. src/main/** is omitted
+	// on purpose — composite-build consumers find existing build/classes
+	// and hit gradle's NO-SOURCE skip rather than recompiling.
 	outs: {
-		globs: ["**/*"]
-		exclude: [
-			".bayt/**",
-			".git/**",
+		globs: [
+			"build/**/*",
+			".gradle/**/*",
+			"build.gradle.kts",
+			"settings.gradle.kts",
+			"gradle.properties",
+			"gradlew",
+			"gradle/wrapper/**/*",
+			"gradle/libs.versions.toml",
 		]
 	}
 	cmd: "builtin": {

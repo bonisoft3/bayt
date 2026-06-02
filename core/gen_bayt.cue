@@ -229,12 +229,6 @@ _expandLines: {
 	//      closure (libraries_logs, libraries_xproto, etc.) instead of
 	//      having to hand-enumerate.
 	//
-	// Bootstrap: on the first regen after this lands, depManifests on
-	// disk carry the OLD (direct-only) transitiveCrossDeps. So consumers
-	// see one extra hop only. After every project has regenerated once
-	// with the recursive walk, their manifests carry the fully-transitive
-	// set, and consumers pick up the rest on the next regen.
-	//
 	// Deduped by "<project>-<name>".
 	_transitiveCrossDeps: {
 		for n, t in G.project.targets if t != null {
@@ -469,11 +463,9 @@ _expandLines: {
 				project: G.project.name
 				dir:     G.project.dir
 				activate: ""
-				// Scaffolding scope mirrors the synthetic Dockerfile
-				// emitted by gen_compose._renderSyntheticBayt: .bayt/**
-				// (bayt-emitted) plus Taskfile.yml + compose.yaml
-				// (project-root scaffolding). Matches what the hand-
-				// authored `:ops` target used to carry.
+				// Scaffolding scope mirrors gen_compose._renderSyntheticBayt:
+				// .bayt/** (bayt-emitted) + Taskfile.yml + compose.yaml
+				// (project-root scaffolding).
 				srcs: {globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}
 				outs: {globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}
 				env: {}
