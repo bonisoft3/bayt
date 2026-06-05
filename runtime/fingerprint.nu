@@ -75,7 +75,8 @@ def platform-key []: nothing -> string {
   let arch = (uname | get machine)
   let flavor = (libc-flavor)
   let flavor_part = if ($flavor | is-empty) { "" } else { $"-($flavor)" }
-  $"($host.name)-($host.os_version)-($arch)($flavor_part)"
+  let major = ($host.os_version | split row "." | first)
+  $"($host.name)-($major)-($arch)($flavor_part)"
 }
 
 # Returns the first available xattr-reading CLI (`getfattr` on Linux,
