@@ -21,7 +21,7 @@ Pin the release in your project's `mise.toml`:
 
 ```toml
 [tools]
-"github:bonisoft3/bayt" = "0.10.0"
+"github:bonisoft3/bayt" = "0.11.0"
 ```
 
 `bayt` is then on PATH and the cue/nu tree lives next to it. Run from any directory containing a `bayt.cue`:
@@ -121,6 +121,18 @@ What flows from a producer to its consumers is declared by the producer, never b
 
 - **`outs.globs/exclude`** — the producer's public interface. Cross-project consumers (`deps: ["foo:build"]`) get exactly these files via per-glob `COPY --from=<producer>` in the consumer's Dockerfile. If the producer wants `.task/stamps/<target>.hash` to flow (so the consumer's task chain short-circuits the cross-project dep), they include it in outs. If not, they exclude it. No framework `--exclude=.task` magic.
 - **`visibility`** — `"internal"` (default) means same-project consumers only. `"public"` means cross-project consumers can `deps:` or `from:` reference this target. Generation fails at CUE-evaluation time if a cross-project dep targets an internal target.
+
+### Synthetic views: `:srcs`, `:outs`, `:bayt`
+
+Every target with a Dockerfile auto-emits three sibling synthetics consumers can address with the `:view` suffix:
+
+| Synthetic | Content |
+|---|---|
+| `:foo:srcs` | scratch image holding the target's `srcs.globs` — the input source closure |
+| `:foo:outs` | scratch image holding the target's `outs.globs` — the artifact view |
+| `:bayt` | per-project scratch image holding `.bayt/**`, `Taskfile.yml`, `compose.yaml` — the scaffolding fileset |
+
+`:srcs` is the typical source-closure dep for dindbox-cascade flows — the outer `ci` stage stays COPY-only while the inner bake reconstructs the chain. Transitive walking is implicit: a dep `:integrate:srcs` rolls in the upstream `:build:srcs` and each project's `:setup:srcs` (toolchain config files like `.mise.toml`, `mise.lock`, wrapper.properties), so consumers don't enumerate each upstream. The synthetic's manifest exposes the same-project chain as cross-project entries on its `transitiveCrossDeps`, letting internal upstreams ride along the public dep's surface.
 
 ### `dockerfile.from`: chain or fresh image
 

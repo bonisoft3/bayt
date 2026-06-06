@@ -402,15 +402,43 @@ Per-format translation:
 | **vscode** | `dependsOn: [<dep-label>]`, `dependsOrder: sequence`. | vscode runs in order. |
 | **bake** | `contexts: { <dep-name>: "target:<dep-name>" }` — bake-native cross-target wiring. | Bake native. |
 
-Cross-project deps (a target in project A depends on a target in project B) use CUE imports:
+### Bazel-style refs
+
+Deps use the same string-ref vocabulary across same- and cross-project:
 
 ```cue
-import xproto "bonisoft.org/libraries/xproto"
-
-#tracker: targets: "build": deps: [xproto.#x.targets.generate]
+"build": {
+    deps: [
+        ":setup",                      // same-project
+        "libraries_xproto:build",      // cross-project
+        "libraries_xproto:build:srcs", // cross-project synthetic view
+    ]
+}
 ```
 
-The generator resolves the imported reference to its emitted artifact path, relative-ized to the consuming project's `dir`. Copybara compatibility requires paths stay relative — no `/monorepo/absolute/path` leakage.
+Leading `:` = same-project. Bare `<project>:<target>` = cross-project. Three-segment refs (`<project>:<target>:<view>`) address synthetic views (next section). The emitted manifest carries `chainedDeps: [{name, project, dir, outs}]` resolved at CUE-emit time; nushell's `dep-to-dir` handles the runtime path math. Cross-project resolution happens via two CUE passes: pass 1 extracts the refs, nushell loads each referenced project's manifest, pass 2 federates the loaded manifests as `depManifestsIn`. No CUE imports between projects — keeps the dependency graph copybara-safe.
+
+### Synthetic views: `:srcs`, `:outs`, `:bayt`
+
+Every target with a dockerfile auto-emits three sibling synthetics that consumers can address with the `:view` suffix:
+
+| Synthetic | Content | Use case |
+|---|---|---|
+| `:foo:srcs` | A scratch image holding the target's `srcs.globs` (the input source closure). | Source-closure deps for dindbox cascades — the outer ci stage stays COPY-only while the inner bake reconstructs the dep's build chain. |
+| `:foo:outs` | A scratch image holding the target's `outs.globs` (the output artifact view). | Cross-project consumers that need only artifacts, not sources. |
+| `:bayt` | A project-level scratch image holding `.bayt/**`, `Taskfile.yml`, `compose.yaml` — the scaffolding fileset. | Containerized task-runner invocation (`task bayt:<n>` inside a RUN). |
+
+The generator emits each as its own compose service + Dockerfile fragment. From the consumer side they're addressed identically to regular targets — bayt's machinery picks the right COPY shape.
+
+### Transitive walking
+
+Transitivity is implicit at the dep-graph level. Three pipelines feed it:
+
+1. **Same-project chain.** A consumer `:a` whose target chains via `from: ref: ":b"` (or `deps: [":b"]`) inherits `:b`'s same-project transitive deps. The COPY emission walks `_transitiveDeps[a]` (resolved name list) and emits one COPY per transitive entry, sourcing each from its `outs.globs`.
+2. **Cross-project federation.** A cross-project dep `proj:b` brings its own `transitiveCrossDeps` via the dep's emitted manifest (loaded as `G.depManifests[proj:b].transitiveCrossDeps`). The consumer doesn't need to enumerate `proj:b`'s upstreams — they ride in via the manifest.
+3. **Synthetic `:srcs` federation.** A `:srcs` synthetic mirrors its parent's chain with each ref flipped to its `:srcs` sibling. Cross-project deps map `proj:b` → `proj:b:srcs`; same-project transitive deps in the dep's project surface in the manifest's `transitiveCrossDeps` (expressed as cross-project entries from the downstream's perspective) so a consumer of `:integrate:srcs` automatically pulls each upstream's `:setup:srcs` for toolchain config files (.mise.toml, mise.lock, wrapper.properties).
+
+Visibility (`public` vs `internal`) is checked at the direct consumer-to-dep boundary via `_buildCrossEntry`'s `_visibility & "public"` unification. Once that boundary is crossed, transitive deps flow regardless of their own visibility — internal upstreams ride along the public surface.
 
 ## Pure / impure split
 
