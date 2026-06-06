@@ -78,18 +78,10 @@ _expandLines: {
 		]}).out
 	}
 
-	// Per-target direct cross-project refs (precomputed once). Sources:
-	//   - `t.deps` strings (Bazel-style: ":X" same-project, "P:X" cross)
-	//   - `t.dockerfile.from.ref` (same syntax)
-	// Cross-project refs (no leading `:`) are kept; same-project refs
-	// drop. Values come from G.depManifests (injected by the nushell
-	// second pass via cross-dep-strings, which collects from BOTH sources
-	// too). Visibility gate fires uniformly: a cross-project dep or
-	// FROM-ref to an internal target fails CUE evaluation with
-	// `conflicting values "internal" and "public"`.
-	//
-	// Deduped by "<project>-<name>" so the established
-	// `deps + dockerfile.from.ref` pattern doesn't double-count.
+	// Builds a structured entry `{name, project, dir, outs}` for a
+	// cross-project ref. The visibility gate unifies the dep's visibility
+	// with "public", so any cross-project ref to an internal target
+	// fails with `conflicting values "internal" and "public"`.
 	_buildCrossEntry: {
 		ref: string
 		out: {
@@ -103,6 +95,10 @@ _expandLines: {
 			}
 		}
 	}
+
+	// Per-target direct cross-project deps. Collects from t.deps +
+	// t.dockerfile.from.ref (both Bazel-style: ":X" same-project drops;
+	// "P:X" cross-project keeps). Deduped by "<project>-<name>".
 	_targetCrossDeps: {
 		for n, t in G.project.targets if t != null {
 			let _depEntries = [
@@ -123,24 +119,37 @@ _expandLines: {
 			let _keys = [for x in _all {"\(x.project)-\(x.name)"}]
 			(n): [for i, x in _all if !list.Contains(list.Slice(_keys, 0, i), _keys[i]) {x}]
 		}
+		// Synthetic `<n>_srcs`: parent's cross-project deps flipped to
+		// their `:srcs` siblings. Entries whose name already ends with
+		// `_srcs` pass through (the parent already referenced the
+		// upstream's `:srcs` variant directly); `_outs` entries are
+		// dropped (compiled artifacts don't belong in a srcs closure);
+		// plain entries get the `:srcs` variant if it exists in
+		// G.depManifests (skip otherwise — parent had no srcs synthetic).
+		for n, t in G.project.targets if t != null
+			if t.dockerfile != _|_ {
+			"\(n)_srcs": list.Concat([
+				[for d in _targetCrossDeps[n] if strings.HasSuffix(d.name, "_srcs") {d}],
+				[for d in _targetCrossDeps[n]
+					if !strings.HasSuffix(d.name, "_srcs")
+					if !strings.HasSuffix(d.name, "_outs")
+					let _srcsRef = "\(d.project):\(d.name):srcs"
+					if G.depManifests[_srcsRef] != _|_ {
+						(_buildCrossEntry & {ref: _srcsRef}).out
+					}],
+			])
+		}
 	}
 
 	// Resolve a same-project ref `:X[:view]` (or `:bayt`) to the
-	// synthetic-aware compose service name. Map key for this struct is
-	// the ref string itself; the value is the resolved name. Computed
-	// once across every same-project ref used in any target's `deps:`,
-	// avoiding the template-evaluation pitfalls of a struct-with-args
-	// helper.
+	// synthetic-aware compose service name. Keyed by ref string,
+	// computed once across every same-project ref used in any target's
+	// deps or dockerfile.from.ref.
 	//
-	//   `:foo`       → "foo"          (today's behavior)
+	//   `:foo`       → "foo"
 	//   `:foo:srcs`  → "foo_srcs"     (synthetic name)
 	//   `:foo:outs`  → "foo_outs"     (synthetic name)
 	//   `:bayt`      → "bayt"         (project synthetic)
-	// Refs sourced from t.deps (same-project, leading `:`) PLUS
-	// t.dockerfile.from.ref when it's same-project. Both surface in
-	// `_sameProjectDepNames` below — the FROM-chain version is what
-	// drives scaffolding COPY emission for chained-but-not-in-deps
-	// targets (e.g. `dockerfile.from.ref: ":setup"`).
 	_sameProjectRefs: [
 		for n, t in G.project.targets if t != null
 		for d in t.deps if strings.HasPrefix(d, ":") {d},
@@ -168,46 +177,44 @@ _expandLines: {
 		}
 	}
 
-	// Outs (globs + exclude) for each same-project ref. Same keys as
-	// _sameProjectRefName. For `:bayt` returns the scaffolding fileset
-	// (`.bayt/**`, `Taskfile.yml`, `compose.yaml`); for view-suffix refs
-	// returns the corresponding view from the parent target; for plain
-	// refs returns the parent target's outs.
-	//
-	// BRANCH ORDER IS LOAD-BEARING. CUE's `[if c1 {v1}, if c2 {v2}, …][0]`
-	// evaluates every branch with a true condition; if `_target == "bayt"`
-	// were NOT checked first, the later `if _target != "" {…}` branch
-	// would also fire for `:bayt` and try to access
-	// `G.project.targets["bayt"]` (which is `_|_` — the reserved-name
-	// regex rejects "bayt" as a target name). That contaminates the
-	// list with `_|_` and breaks evaluation. Keep `:bayt` first.
-	_sameProjectRefOuts: {
-		for d in _sameProjectRefs {
-			let _bare = strings.TrimPrefix(d, ":")
-			let _parts = strings.Split(_bare, ":")
-			let _target = _parts[0]
-			let _view = [if len(_parts) >= 2 {_parts[1]}, ""][0]
-			(d): [
-				if _target == "bayt" {{globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}},
-				if _target != "bayt" && _view == "srcs" {
-					let _t = G.project.targets[_target]
-					{
-						globs:   list.Concat([(_expandGlobs & {in: _t.srcs.defaultGlobs}).out,   _t.srcs.globs])
-						exclude: list.Concat([(_expandGlobs & {in: _t.srcs.defaultExclude}).out, _t.srcs.exclude])
-					}
-				},
-				if _target != "bayt" && _view == "outs" {G.project.targets[_target].outs},
-				if _target != "bayt" && _view == "" {G.project.targets[_target].outs},
-				{globs: [], exclude: []},
-			][0]
+	// Outs lookup by resolved same-project name. Callers resolve a ref
+	// to a name via `_sameProjectRefName`, then look up outs here.
+	//   `<n>`        → target's outs
+	//   `<n>_srcs`   → target's expanded srcs (the synthetic's outs)
+	//   `<n>_outs`   → target's outs (the synthetic's outs)
+	//   `bayt`       → project scaffolding fileset
+	_sameProjectOutsByName: {
+		for n, t in G.project.targets if t != null {
+			(n): t.outs
+			if t.dockerfile != _|_ {
+				"\(n)_srcs": {
+					globs:   list.Concat([(_expandGlobs & {in: t.srcs.defaultGlobs}).out,   t.srcs.globs])
+					exclude: list.Concat([(_expandGlobs & {in: t.srcs.defaultExclude}).out, t.srcs.exclude])
+				}
+				"\(n)_outs": t.outs
+			}
+		}
+		bayt: {globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}
+	}
+
+	// Same-project chainedDeps entry from a resolved name. Mirrors
+	// _buildCrossEntry's shape so consumers treat same-project and
+	// cross-project entries uniformly.
+	_sameProjectEntry: N={
+		name: string
+		out: {
+			name:    N.name
+			project: G.project.name
+			dir:     G.project.dir
+			outs:    _sameProjectOutsByName[N.name]
 		}
 	}
 
 	// Same-project dep names per target — refs with the leading `:`
 	// stripped and view suffix folded into the synthetic name (so
-	// `:foo:srcs` → `foo_srcs`). Plain refs `:foo` produce `foo`,
-	// matching today's keying into G.project.targets[name]. Computed
-	// once and reused by _transitiveDeps + per-target files emission.
+	// `:foo:srcs` → `foo_srcs`). Plain refs `:foo` produce `foo`, the
+	// G.project.targets[name] key. Reused by _transitiveDeps + per-target
+	// files emission.
 	_sameProjectDepNames: {
 		for n, t in G.project.targets if t != null {
 			let _fromRef = [
@@ -235,39 +242,74 @@ _expandLines: {
 				[for name in _dn if _transitiveDeps[name] != _|_ {_transitiveDeps[name]}],
 			], 2)}).out
 		}
+		// Same-project synthetic `<n>_srcs` participation: a synthetic
+		// `:foo:srcs` carries the source closure of its parent target,
+		// so its same-project transitive deps mirror the parent's with
+		// each name flipped to its `_srcs` synthetic counterpart. Lets
+		// a downstream consumer `deps: [":foo:srcs"]` walk through and
+		// pick up `:bar:srcs` automatically when the parent foo chains
+		// to bar in same-project.
+		for n, t in G.project.targets if t != null
+			if t.dockerfile != _|_ {
+			"\(n)_srcs": (_uniqStrings & {in: [
+				for dep in _transitiveDeps[n] {"\(dep)_srcs"}
+			]}).out
+		}
 	}
 
-	// Transitive cross-project deps per target. Two layers:
-	//
-	//   1. Direct: walk the same-project chain (self + _transitiveDeps[n])
+	// Transitive cross-project closure for a target or synthetic name.
+	// Two layers:
+	//   1. Direct: walk the same-project chain (self + _transitiveDeps[name])
 	//      and collect each step's cross-project deps from _targetCrossDeps.
-	//
-	//   2. Recursive: for each direct cross-project dep, also pull its
-	//      OWN transitiveCrossDeps from the dep's manifest. Cross-project
+	//   2. Manifest pull: for each direct cross-project dep, federate its
+	//      own transitiveCrossDeps from G.depManifests. Cross-project
 	//      transitivity becomes implicit — a consumer that `deps: [":b"]`
-	//      a cross-project :b automatically gets :b's full transitive
-	//      closure (libraries_logs, libraries_xproto, etc.) instead of
-	//      having to hand-enumerate.
-	//
+	//      a cross-project :b auto-gets :b's full closure.
 	// Deduped by "<project>-<name>".
+	// Reconstruct the depManifest lookup ref from a chained-dep entry.
+	// Plain names go via "<project>:<name>"; synthetic suffix names map
+	// back to the 3-segment ref form so they match load-dep-manifests'
+	// keying ("foo_srcs" → "<project>:foo:srcs").
+	_manifestRef: D={
+		d: _
+		out: [
+			if strings.HasSuffix(D.d.name, "_srcs") {
+				"\(D.d.project):\(strings.TrimSuffix(D.d.name, "_srcs")):srcs"
+			},
+			if strings.HasSuffix(D.d.name, "_outs") {
+				"\(D.d.project):\(strings.TrimSuffix(D.d.name, "_outs")):outs"
+			},
+			"\(D.d.project):\(D.d.name)",
+		][0]
+	}
+
+	_computeTransitiveCross: N={
+		name: string
+		_selfPlusDeps: list.Concat([[N.name], _transitiveDeps[N.name]])
+		_direct: list.Concat([
+			for tn in _selfPlusDeps
+			if _targetCrossDeps[tn] != _|_ {_targetCrossDeps[tn]}
+		])
+		_viaManifests: list.Concat([
+			for d in _direct
+			let _ref = (_manifestRef & {"d": d}).out
+			if G.depManifests[_ref] != _|_
+			if G.depManifests[_ref].transitiveCrossDeps != _|_ {
+				G.depManifests[_ref].transitiveCrossDeps
+			}
+		])
+		_all:  list.Concat([_direct, _viaManifests])
+		_keys: [for x in _all {"\(x.project)-\(x.name)"}]
+		out:   [for i, x in _all if !list.Contains(list.Slice(_keys, 0, i), _keys[i]) {x}]
+	}
+
 	_transitiveCrossDeps: {
 		for n, t in G.project.targets if t != null {
-			let _selfPlusDeps = list.Concat([[n], _transitiveDeps[n]])
-			let _direct = list.Concat([
-				for tn in _selfPlusDeps
-				if _targetCrossDeps[tn] != _|_ {_targetCrossDeps[tn]}
-			])
-			let _viaManifests = list.Concat([
-				for d in _direct
-				let _ref = "\(d.project):\(d.name)"
-				if G.depManifests[_ref] != _|_
-				if G.depManifests[_ref].transitiveCrossDeps != _|_ {
-					G.depManifests[_ref].transitiveCrossDeps
-				}
-			])
-			let _all  = list.Concat([_direct, _viaManifests])
-			let _keys = [for x in _all {"\(x.project)-\(x.name)"}]
-			(n): [for i, x in _all if !list.Contains(list.Slice(_keys, 0, i), _keys[i]) {x}]
+			(n): (_computeTransitiveCross & {name: n}).out
+		}
+		for n, t in G.project.targets if t != null
+			if t.dockerfile != _|_ {
+			"\(n)_srcs": (_computeTransitiveCross & {name: "\(n)_srcs"}).out
 		}
 	}
 
@@ -330,6 +372,16 @@ _expandLines: {
 				// Dockerfile emitter's per-glob COPY emission has the
 				// producer's declared interface available without a
 				// second lookup.
+				let _directNames = list.Concat([
+					[
+						if t.dockerfile != _|_
+						if t.dockerfile.from != null
+						if t.dockerfile.from.ref != _|_
+						if strings.HasPrefix(t.dockerfile.from.ref, ":")
+						if !list.Contains(t.deps, t.dockerfile.from.ref) {_sameProjectRefName[t.dockerfile.from.ref]},
+					],
+					[for d in t.deps if strings.HasPrefix(d, ":") {_sameProjectRefName[d]}],
+				])
 				chainedDeps: list.Concat([
 					// FROM-chain ref leads when it's same-project (the
 					// chain head, conceptually). Cross-project FROM refs
@@ -341,29 +393,30 @@ _expandLines: {
 						if t.dockerfile.from != null
 						if t.dockerfile.from.ref != _|_
 						if strings.HasPrefix(t.dockerfile.from.ref, ":")
-						if !list.Contains(t.deps, t.dockerfile.from.ref) {{
-							name:    _sameProjectRefName[t.dockerfile.from.ref]
-							project: G.project.name
-							dir:     G.project.dir
-							outs:    _sameProjectRefOuts[t.dockerfile.from.ref]
-						}},
+						if !list.Contains(t.deps, t.dockerfile.from.ref) {
+							(_sameProjectEntry & {name: _sameProjectRefName[t.dockerfile.from.ref]}).out
+						},
 					],
 					[for d in t.deps {
 						[
-							if strings.HasPrefix(d, ":") {{
-								name:    _sameProjectRefName[d]
-								project: G.project.name
-								dir:     G.project.dir
-								outs:    _sameProjectRefOuts[d]
-							}},
-							{
-								name:    G.depManifests[d].name
-								project: G.depManifests[d].project
-								dir:     G.depManifests[d].dir
-								outs:    G.depManifests[d].outs
+							if strings.HasPrefix(d, ":") {
+								(_sameProjectEntry & {name: _sameProjectRefName[d]}).out
 							},
+							(_buildCrossEntry & {ref: d}).out,
 						][0]
 					}],
+					// Transitive same-project entries reached via the
+					// synthetic `:srcs` chain. Lets a consumer `deps:
+					// [":foo:srcs"]` pick up the upstream same-project
+					// chain (e.g. `:build:srcs` reached transitively from
+					// `:integrate:srcs`) without listing each step.
+					// Dedup against _directNames so a directly-listed
+					// dep keeps its outs unchanged.
+					[for tn in _transitiveDeps[n]
+						if !list.Contains(_directNames, tn)
+						if _sameProjectOutsByName[tn] != _|_ {
+							(_sameProjectEntry & {name: tn}).out
+						}],
 				])
 
 				// Priority-sorted commands. Each cmd's `srcs` is its
@@ -462,12 +515,38 @@ _expandLines: {
 					// Synthetic inherits parent visibility. Cross-project
 					// consumers of an internal target's _srcs fail the
 					// public-visibility unification at _buildCrossEntry.
-					visibility:          t.visibility
-					deps:                []
-					transitiveDeps:      []
-					transitiveCrossDeps: []
-					chainedDeps:         []
-					cmds:                []
+					visibility: t.visibility
+					deps:       []
+					// Synthetic transitive deps mirror the parent's
+					// (name suffix added) so a downstream `:foo:srcs`
+					// consumer transitively pulls the upstream `:srcs`
+					// closure. Cross-project entries are filtered to
+					// those whose `:srcs` synthetic exists in
+					// G.depManifests; missing ones drop silently.
+					transitiveDeps: _transitiveDeps["\(n)_srcs"]
+					// transitiveCrossDeps surfaces both the parent's
+					// cross-project closure (for downstream cross-project
+					// walking) AND the same-project transitive synthetic
+					// chain — the latter expressed as cross-project entries
+					// (project = this project's name) so a cross-project
+					// consumer of `:foo:srcs` pulls e.g. `:setup:srcs` from
+					// the same project too. Same-project consumers ignore
+					// the latter via in-memory _transitiveDeps walking.
+					transitiveCrossDeps: list.Concat([
+						_transitiveCrossDeps["\(n)_srcs"],
+						[for tn in _transitiveDeps["\(n)_srcs"]
+							if _sameProjectOutsByName[tn] != _|_
+							if len(_sameProjectOutsByName[tn].globs) > 0 {
+								{
+									project: G.project.name
+									name:    tn
+									dir:     G.project.dir
+									outs:    _sameProjectOutsByName[tn]
+								}
+							}],
+					])
+					chainedDeps: []
+					cmds:        []
 					cache: {full: false, similar: false}
 				}
 			}

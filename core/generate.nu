@@ -312,6 +312,9 @@ def cross-dep-strings [targets: record] {
 # dep. deps  — list of refs like ["libraries_logs:build"]
 #       index — project-name → workspace-root-relative-dir map
 #       workspace_root — absolute workspace root path
+#       optional — list of refs that silently skip when their manifest
+#                  file is absent (used for auto-derived `:srcs` variants
+#                  that may not exist if the upstream target has no srcs)
 #
 # Two- and three-segment ref support:
 #   "proj:foo"        → target = "foo"        → bayt.foo.json
@@ -321,7 +324,7 @@ def cross-dep-strings [targets: record] {
 #
 # The view suffix (srcs/outs) joins with the target name via underscore
 # so the on-disk file matches the synthetic stage's emitted name.
-def load-dep-manifests [deps: list<string>, index: record, workspace_root: string] {
+def load-dep-manifests [deps: list<string>, index: record, workspace_root: string, optional: list<string> = []] {
 	mut result = {}
 	for dep in $deps {
 		let parts = ($dep | split row ":")
@@ -333,11 +336,21 @@ def load-dep-manifests [deps: list<string>, index: record, workspace_root: strin
 			$"($workspace_root)/($dep_dir_rel)/.bayt/bayt.($target).json"
 		}
 		if not ($manifest_path | path exists) {
+			if ($dep in $optional) { continue }
 			error make {msg: $"bayt: dep manifest not found: ($manifest_path)\n  run `bayt generate` for ($dep_dir_rel) first, or use --recursive"}
 		}
 		$result = ($result | insert $dep (open $manifest_path))
 	}
 	$result
+}
+
+# srcs-variants takes a list of two-segment cross-project refs
+# ("proj:target") and returns their `:srcs` synthetic variants
+# ("proj:target:srcs"). Used by regen-project to auto-load synthetic
+# manifests for every cross-project dep, so consumers can transitively
+# walk `:srcs` closures without enumerating each one explicitly.
+def srcs-variants [deps: list<string>] {
+	$deps | where {|r| ($r | split row ":" | length) == 2 } | each {|r| $"($r):srcs" }
 }
 
 # find-workspace-root walks up from cwd to find the directory containing cue.mod/.
@@ -431,10 +444,17 @@ def topo-schedule [workspace_root: string, root_rel: string, index: record] {
 # regen-project runs both CUE passes for one project's bayt.cue and
 # writes the resulting bundle. Used by both single-project and recursive
 # modes.
+#
+# Auto-loads `<proj>:<target>:srcs` synthetic manifests for every
+# two-segment cross-project dep so transitive `:srcs` walking lands the
+# upstream source closures without consumers enumerating them. Missing
+# `:srcs` manifests (upstream target had no srcs) silently skip.
 def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_root: string] {
 	let targets = (pass1 $bayt_cue)
 	let cdeps = (cross-dep-strings $targets)
-	let dep_manifests = (load-dep-manifests $cdeps $index $workspace_root)
+	let auto_srcs = (srcs-variants $cdeps)
+	let all_deps = ($cdeps | append $auto_srcs | uniq)
+	let dep_manifests = (load-dep-manifests $all_deps $index $workspace_root $auto_srcs)
 	let bundle = (pass2 $bayt_cue $dep_manifests)
 	write-bundle $bundle $dir_rel
 }

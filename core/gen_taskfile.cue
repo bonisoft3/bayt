@@ -177,12 +177,11 @@ import (
 
 	// Per-target Taskfile files.
 	//
-	// Single-cmd target: emit one `default:` task that does it all
-	// (sources, status, cmds with defer hash-stamp, generates) — the
-	// flat shape, identical in spirit to today.
+	// Single-cmd target: emit one `default:` task with sources, status,
+	// cmds, and a defer hash-stamp.
 	//
-	// Multi-cmd target: emit N internal cmd-tasks (one per cmd, each
-	// with own sources/status/cmds + defer for per-cmd stamp) plus a
+	// Multi-cmd target: emit N internal cmd-tasks (each with its own
+	// sources/status/cmds + defer for the per-cmd stamp) plus a
 	// `default:` wrapper that deps on the last cmd and writes the
 	// target-level stamp. Cross-project consumers reading the target
 	// stamp via the merkle chain see correct invalidation because the

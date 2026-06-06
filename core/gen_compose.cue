@@ -550,21 +550,12 @@ import (
 			},
 		]
 
-		// Incremental: single RUN wrapping `task <n>:<n>`, target mounts
-		// + every cmd's mounts unioned (the RUN executes the whole chain
-		// inside go-task, so it needs every mount any chained cmd needs).
+		// Incremental: single RUN wrapping `task bayt:<n>`, target mounts
+		// + every cmd's mounts unioned (one RUN, all chained cmds).
 		// Non-incremental: one COPY+RUN block per cmd, each carrying
-		// only that cmd's mounts and its own srcs. Editing cmd B's
-		// inputs (e.g. package.json for pnpm install) doesn't bust
-		// cmd A's RUN layer (mise install) — the COPY for cmd B
-		// lands AFTER cmd A's RUN, so cmd A's input set hasn't moved.
-		// Target.srcs is COPY'd upfront in _srcCopies as the shared
-		// baseline; cmd-level srcs land per-cmd here.
-		// list.Concat with empty-list fallbacks because CUE's
-		// `[ if cond { for x in xs { y } } ]` collapses the inner
-		// list into a single positional slot, which conflicts on
-		// multi-cmd targets. Wrapping each branch in an explicit
-		// list keeps the nesting unambiguous.
+		// only that cmd's mounts and its own srcs. Layering per cmd
+		// keeps cmd A's RUN cached when only cmd B's inputs change.
+		// Target.srcs lands upfront in _srcCopies as the shared baseline.
 
 		// Persistent per-target cache slot for cache.nu's content-
 		// addressable task store. Cross-project / cross-build reuse
@@ -587,22 +578,11 @@ import (
 			},
 			if !t.dockerfile.incremental {[]},
 			if !t.dockerfile.incremental {
-				// Non-incremental: emit COPY-then-RUN per cmd, with the
-				// cmd's own srcs landing just before its RUN. Editing
-				// cmd B's srcs (e.g. package.json for pnpm install)
-				// leaves cmd A's RUN layer (mise install) cached because
-				// cmd B's COPY lands AFTER cmd A's RUN — A's input set
-				// hasn't moved. Target.srcs lands earlier in _srcCopies
-				// as the shared baseline for all cmds.
-				//
 				// gen_bayt.cue unions target.srcs into each cmd's
-				// srcs.globs for fingerprint.nu's stamp logic. We're
-				// here in the Dockerfile path, where target.srcs already
-				// landed in _srcCopies — so subtract via list.Contains
-				// to recover the cmd's own contribution. Same shape for
-				// exclude (cmd-level adds, target-level already on the
-				// _srcCopies COPY).
-				//
+				// srcs.globs for fingerprint.nu's stamp logic. Here in
+				// the Dockerfile path target.srcs already landed in
+				// _srcCopies — subtract via list.Contains to recover
+				// the cmd's own contribution. Same shape for exclude.
 				// Empty cmd-only globs → no COPY emitted, RUN only.
 				// list.FlattenN(_, 1) flattens the per-cmd
 				// [optional-COPY, RUN] sublists into one flat list.
@@ -824,17 +804,12 @@ import (
 		][0]
 	}
 
-	// Helper: does this dep have a non-empty srcs.globs? Used to decide
-	// whether T_srcs should COPY --from=<dep>_srcs (would fail at build
-	// time if dep's _srcs stage doesn't exist).
-	// Predicate: does this dep have a non-empty srcs.globs?
-	//
-	// Nested guards rather than `&&` because CUE's `&&` does not
-	// short-circuit. With `_dm != _|_ && len(_dm.srcs.globs) > 0`, when
-	// _dm is bottom, `len(_dm.srcs.globs)` also evaluates to bottom and
-	// the whole expression becomes bottom — the list element exists at
-	// [0] as `_|_` and contaminates downstream consumers (_depCopies /
-	// additional_contexts emissions).
+	// Predicate: does this dep have a non-empty srcs.globs? Used to gate
+	// `COPY --from=<dep>_srcs` emission (would fail at build time if the
+	// dep's _srcs stage doesn't exist). Nested guards rather than `&&`
+	// because CUE's `&&` doesn't short-circuit — `_dm != _|_ &&
+	// len(_dm.srcs.globs) > 0` poisons the whole expression with `_|_`
+	// when _dm is bottom.
 	_depHasSrcs: D={
 		d:   _
 		out: bool
@@ -867,8 +842,6 @@ import (
 		// Skip same-project `:bayt` deps: the bayt synthetic is a project-
 		// level scratch image with no `_srcs` variant. Emitting
 		// `<proj>-bayt_srcs` would reference a non-existent service.
-		// (Today this is latent — no target both has `srcs.globs` AND
-		// deps `:bayt` — but the guard is cheap defensive scaffolding.)
 		_depCopies: [
 			for d in R.t.chainedDeps
 			if d.name != "bayt"

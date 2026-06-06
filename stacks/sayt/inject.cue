@@ -100,6 +100,20 @@ inject: {
 		// the value from a host-gateway probe; the GHA action's
 		// inline equivalent does the same.
 		testcontainers_host:       environment: "TESTCONTAINERS_HOST_OVERRIDE"
+		// cache_scope + cache_scope_fallback — composed (branch,
+		// buildkit version, platform) identifiers from dind.nu's
+		// buildx-fingerprint. The dindbox sandbox env-sources them so
+		// the inner's `docker compose config` interpolates the same
+		// CACHE_SCOPE the outer used, keeping registry cache refs
+		// aligned across the outer/inner boundary.
+		cache_scope:               environment: "CACHE_SCOPE"
+		cache_scope_fallback:      environment: "CACHE_SCOPE_FALLBACK"
+		// SAYT_NO_CACHE — when truthy, propagates `--no-cache` to the
+		// inner bake (suppresses both cache-from import and cache-to
+		// export). Set by integrate.nu --no-cache. Useful for forcing
+		// cold builds when chasing chain-ID drift or poisoned cache
+		// entries.
+		sayt_no_cache:             environment: "SAYT_NO_CACHE"
 	}
 
 	// Cmd-level inject: mounts + setup body around the cmd.do invocation.
@@ -113,6 +127,9 @@ inject: {
 			{id: "docker_host",         var: contents: "DOCKER_HOST"},
 			{id: "buildx_builder",      var: contents: "BUILDX_BUILDER"},
 			{id: "testcontainers_host", var: contents: "TESTCONTAINERS_HOST_OVERRIDE"},
+			{id: "cache_scope",          var: contents: "CACHE_SCOPE"},
+			{id: "cache_scope_fallback", var: contents: "CACHE_SCOPE_FALLBACK"},
+			{id: "sayt_no_cache",        var: contents: "SAYT_NO_CACHE"},
 			// $BUILDX_BUILDER is expanded by the heredoc shell at RUN
 			// time — gets the value just exported above via var.contents.
 			// Don't hardcode "sayt-builder": GHA setup-buildx-action

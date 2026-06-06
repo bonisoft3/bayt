@@ -216,15 +216,25 @@ lint: {
 }
 
 // ci — bake-driven dindbox-cascade entry. Composes sayt.inject's dind
-// plumbing with the canonical `compose up integrate --build` RUN body
-// and FROMs the project's :dindbox target. Leaf projects supply `deps:`
-// (source closure / scaffolding refs) and nothing else; override
-// cmd.builtin.do for non-default compose-up flags.
+// plumbing with a bake-then-compose-up RUN body and FROMs the
+// project's :dindbox target. Leaf projects supply `deps:` (source
+// closure / scaffolding refs); override cmd.builtin.do for non-default
+// flags.
+//
+// Split into two steps so registry cache works inside the dindbox:
+//   1. `docker compose config | docker buildx bake … integrate` —
+//      explicit bake honors compose `x-bake.cache-from` registry refs;
+//      `compose up --build` under COMPOSE_BAKE=true drops them.
+//   2. `compose up integrate` (without --build) — runs the image step
+//      1 already materialized via --load.
 ci: inject & {
 	activate: ""
 	cmd: "builtin": {
 		shell: "sh"
-		do:    *"exec docker compose up integrate --build --abort-on-container-failure --exit-code-from integrate --remove-orphans" | string
+		do:    *#"""
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} --load -f - integrate
+			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
+			"""# | string
 	}
 	dockerfile: from: ref: *":dindbox" | string
 }
@@ -260,12 +270,12 @@ gradle: bayt.#project & {
 	// conflict with the inherited concrete struct.
 	targets: {
 		"setup": *(Mise.install & {
-			// target.srcs = gradle setup files (build.gradle.kts,
-			// gradle wrapper, etc.) — these are baseline for any cmd
-			// in this target. Mise's manifest files (.mise.toml,
-			// mise.lock) live on its cmd-level srcs and land in their
-			// own COPY just before the mise-install RUN.
-			srcs: globs: Gradle.setupSrcs.globs
+			// Lift mise's manifest files (`.mise.toml`, `mise.lock`) into
+			// target.srcs so the `:setup:srcs` / `:build:srcs` synthetic
+			// scratch images include them. _srcs walks target.srcs only,
+			// so without this any downstream consumer COPYing :build:srcs
+			// runs `mise install` blind and resolves the wrong toolchain.
+			srcs: globs: list.Concat([Gradle.setupSrcs.globs, Mise.installFiles.globs])
 			// Outs unions target.srcs + mise's installFiles (the
 			// effective set the stage stages) so cross-project
 			// consumers depending on `:setup` get every file mise
