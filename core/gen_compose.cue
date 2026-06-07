@@ -1401,21 +1401,29 @@ import (
 		// top-level secrets/volumes would collide across federated
 		// graphs). Cross-project includes also use the deps variant.
 		bayt_deps_root: {
-			// User-target deps (minus `integrate`, whose top-level
-			// secrets/volumes collide across federation) + synthetic
-			// stages. The `integrate_srcs` / `integrate_outs` synthetics
-			// reference the user `integrate` service via additional_contexts;
-			// since `integrate` is excluded here, those synthetics MUST
-			// be too, or compose load fails with "unknown service
-			// integrate" when a cross-project consumer includes this
-			// deps root. `_bayt` is project-wide with no per-target
-			// dependency, so it federates safely.
+			// User-target `integrate` is excluded — its top-level
+			// secrets/volumes/networks (host docker socket, testcontainers,
+			// buildx instance) would collide across federation.
+			//
+			// `integrate_outs` is excluded too: `_syntheticOutsService`
+			// references the parent `integrate` service via
+			// additional_contexts, so federating outs without integrate
+			// fails compose load with "unknown service integrate".
+			//
+			// `integrate_srcs` IS federated: `_syntheticSrcsService` has
+			// no parent reference (synthetics carry empty chainedDeps),
+			// so the srcs scratch image is standalone. Letting it
+			// federate is what makes a `:ci` target with `deps:
+			// [":integrate:srcs", ...]` work across project boundaries.
+			//
+			// `_bayt` is project-wide with no per-target dependency, so
+			// it federates safely.
 			let _baytInclude = [
 				if len(_emit) > 0 {{path: "./compose._bayt.yaml", required: false}},
 			]
 			let _localIncludes = list.Concat([
 				[for n, _ in _emit if n != "integrate" {{path: "./compose.\(n).yaml", required: false}}],
-				[for n, _ in _srcsEmit if n != "integrate_srcs" {{path: "./compose.\(n).yaml", required: false}}],
+				[for n, _ in _srcsEmit {{path: "./compose.\(n).yaml", required: false}}],
 				[for n, _ in _outsEmit if n != "integrate_outs" {{path: "./compose.\(n).yaml", required: false}}],
 				_baytInclude,
 			])
