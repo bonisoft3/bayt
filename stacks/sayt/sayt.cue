@@ -221,18 +221,25 @@ lint: {
 // closure / scaffolding refs); override cmd.builtin.do for non-default
 // flags.
 //
-// Split into two steps so registry cache works inside the dindbox:
-//   1. `docker compose config | docker buildx bake … integrate` —
-//      explicit bake honors compose `x-bake.cache-from` registry refs;
-//      `compose up --build` under COMPOSE_BAKE=true drops them.
-//   2. `compose up integrate` (without --build) — runs the image step
-//      1 already materialized via --load.
+// Two-step shape:
+//   1. `bake … integrate` walks integrate's additional_contexts
+//      closure (depends_on entries are auto-mirrored into it by
+//      gen_compose.cue). Each target's per-service `x-bake.output`
+//      decides loading: compose-runnable targets (those with
+//      `compose: {}` set) emit `output: ["type=docker"]` and land in
+//      the dindbox daemon; build-only stages (no compose runtime)
+//      stay cacheonly under the docker-container driver default.
+//      Explicit bake (not `compose up --build`) keeps
+//      `x-bake.cache-from` registry refs honored — COMPOSE_BAKE=true
+//      strips them.
+//   2. `compose up integrate` (no --build) runs the loaded integrate
+//      against its loaded depends_on chain.
 ci: inject & {
 	activate: ""
 	cmd: "builtin": {
 		shell: "sh"
 		do:    *#"""
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} --load -f - integrate
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} -f - integrate
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""# | string
 	}

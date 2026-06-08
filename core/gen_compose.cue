@@ -1122,6 +1122,21 @@ import (
 						if len(t.bake.cache.to) > 0 {
 							"cache-to": t.bake.cache.to
 						}
+						// Targets carrying compose runtime config
+						// (`compose: {}` set on the target) emit
+						// `output: ["type=docker"]` so the inner bake's
+						// positional `<target>` invocation loads them
+						// into the dindbox's daemon — what `compose up`
+						// needs to actually start the container.
+						// Build-only stages (no compose runtime —
+						// build, test, release-*) skip this and stay
+						// cacheonly under the docker-container driver
+						// default. Warm/aggregator phases override with
+						// `--set "*.output=type=cacheonly"` to suppress
+						// all loading; the wildcard wins.
+						if t.compose != _|_ {
+							output: ["type=docker"]
+						}
 					}
 				}
 			}
