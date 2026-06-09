@@ -161,9 +161,16 @@ def _inject-taskfile-runtime [content: string, base: string]: nothing -> string 
 }
 
 # Generated-from header. JSON gets a field (no comment syntax).
+# Dockerfile lands the header on line 2: BuildKit only honors the
+# `# syntax=` directive when it's literally line 1.
 def _hash-header       [c: string]: nothing -> string { "# generated from bayt.cue — do not edit\n"  + $c }
 def _slash-header      [c: string]: nothing -> string { "// generated from bayt.cue — do not edit\n" + $c }
-def _dockerfile-header [c: string]: nothing -> string { "# generated from bayt.cue — do not edit\n" + $c }
+def _dockerfile-header [c: string]: nothing -> string {
+	let lines = ($c | lines)
+	let first = ($lines | first)
+	let rest  = ($lines | skip 1 | str join "\n")
+	$"($first)\n# generated from bayt.cue — do not edit\n($rest)\n"
+}
 def _json-header  [d: any]: nothing -> any { {_generated_from: "bayt.cue (do not edit)"} | merge $d }
 
 def write-bundle [bundle: record, base: string] {

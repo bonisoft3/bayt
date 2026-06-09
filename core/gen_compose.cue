@@ -299,6 +299,12 @@ import (
 		][0]
 	}
 
+	// Dockerfile frontend pin. Pinned to a manifest-list digest so
+	// BuildKit's content-addressable cache services the frontend image
+	// without a registry tag→digest roundtrip on each build. Shared by
+	// every emitted Dockerfile (user targets + synthetic stages).
+	_dockerfileSyntax: "# syntax=docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"
+
 	// Helper: render the full Dockerfile body for one target.
 	_renderDockerfile: {
 		t: _
@@ -444,7 +450,7 @@ import (
 		]
 		_excludeJoin: [if len(_excludeFlags) > 0 {strings.Join(_excludeFlags, " ") + " "}, ""][0]
 
-		// `--parents` (stable since Dockerfile 1.7) preserves source path
+		// `--parents` preserves source path
 		// structure in the destination. Without it we'd have to emit
 		// `COPY --link src/**/*.kt ./src/**/*.kt` — the glob in the
 		// destination breaks BuildKit ("lstat /src: no such file") and
@@ -737,6 +743,7 @@ import (
 		][0]
 
 		_lines: [
+			_dockerfileSyntax,
 			_from,
 			"WORKDIR \(_workdir)",
 			for p in _copyLines {p},
@@ -839,6 +846,7 @@ import (
 			},
 		]
 		_lines: [
+			_dockerfileSyntax,
 			"FROM scratch AS \(_stage)",
 			"WORKDIR \(_workdir)",
 			for l in _srcCopy {l},
@@ -866,6 +874,7 @@ import (
 			},
 		]
 		_lines: [
+			_dockerfileSyntax,
 			"FROM scratch AS \(_stage)",
 			"WORKDIR \(_workdir)",
 			for l in _copy {l},
@@ -912,6 +921,7 @@ import (
 			},
 		]
 		_lines: [
+			_dockerfileSyntax,
 			"FROM scratch AS bayt",
 			"WORKDIR \(_workdir)",
 			"COPY --link --parents .bayt/** [T]askfile.y[m]l [T]askfile.y[a]ml [c]ompose.y[m]l [c]ompose.y[a]ml [d]ocker-compose.y[m]l [d]ocker-compose.y[a]ml ./",
