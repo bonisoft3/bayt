@@ -46,8 +46,9 @@ install: {
 // e.g. wsroot's `cmd: "builtin": do: "true"` placeholder) can
 // reference the same list.
 installFiles: globs: [
-	".mise.toml",
-	"mise.lock",
+	"[m]ise.toml",
+	"[.]mise.toml",
+	"[m]ise.lock",
 ]
 
 // exec — sets `activate: "mise x --"` so emitted command lines

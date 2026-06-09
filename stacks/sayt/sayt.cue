@@ -456,7 +456,7 @@ pnpmWorkspace: bayt.#project & {
 		"setup": P=setup & {
 			activate: ""
 			srcs: globs: list.Concat([
-				[".mise.toml", "mise.lock"],
+				Mise.installFiles.globs,
 				Pnpm.workspaceFiles.globs,
 				[
 					// JVM composite builds resolve catalog plugin via
