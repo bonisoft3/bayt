@@ -94,8 +94,7 @@ assemble: bayt.cache.full & {
 		"gradle-properties": {glob: "gradle.properties"}
 		"gradlew":          {glob: "gradlew"}
 		"gradle-wrapper":   {glob: "gradle/wrapper/gradle-wrapper.jar"}
-		// Project-local version catalog. No-op if absent.
-		"libs-versions":    {glob: "gradle/libs.versions.toml"}
+		"libs-versions":    {glob: "gradle/lib[s].versions.toml"}
 	}
 	// build/** + .gradle/** + project metadata. src/main/** is omitted
 	// on purpose — composite-build consumers find existing build/classes
@@ -109,7 +108,7 @@ assemble: bayt.cache.full & {
 			"gradle.properties",
 			"gradlew",
 			"gradle/wrapper/**/*",
-			"gradle/libs.versions.toml",
+			"gradle/lib[s].versions.toml",
 		]
 	}
 	cmd: "builtin": {

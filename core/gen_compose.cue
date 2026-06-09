@@ -302,13 +302,6 @@ import (
 	// Helper: render the full Dockerfile body for one target.
 	_renderDockerfile: {
 		t: _
-		// 1.7-labs unlocks COPY --parents (path-preserving structure).
-		// Pinned to a manifest-list digest so BuildKit's content-
-		// addressable cache services the frontend image without a
-		// registry tag→digest roundtrip on each build. Bump as needed:
-		//   docker buildx imagetools inspect docker/dockerfile:1.7-labs
-		_syntax: "# syntax=docker/dockerfile:1.7-labs@sha256:b99fecfe00268a8b556fad7d9c37ee25d716ae08a5d7320e6d51c4dd83246894"
-
 		// `from: null` → `FROM scratch AS <target>` with no
 		// additional_contexts entry (Docker's parser-level keyword).
 		// `from != null` → `FROM <name> AS <target>` with the
@@ -451,7 +444,7 @@ import (
 		]
 		_excludeJoin: [if len(_excludeFlags) > 0 {strings.Join(_excludeFlags, " ") + " "}, ""][0]
 
-		// `--parents` (Dockerfile syntax 1.7-labs) preserves source path
+		// `--parents` (stable since Dockerfile 1.7) preserves source path
 		// structure in the destination. Without it we'd have to emit
 		// `COPY --link src/**/*.kt ./src/**/*.kt` — the glob in the
 		// destination breaks BuildKit ("lstat /src: no such file") and
@@ -744,7 +737,6 @@ import (
 		][0]
 
 		_lines: [
-			_syntax,
 			_from,
 			"WORKDIR \(_workdir)",
 			for p in _copyLines {p},
@@ -773,9 +765,6 @@ import (
 	// project workdir for COPY --parents consistency with the existing
 	// _srcCopies emission; absolute-path COPYs ignore WORKDIR anyway.
 	// =========================================================================
-
-	// Shared Dockerfile syntax pin — matches _renderDockerfile.
-	_syntheticSyntax: "# syntax=docker/dockerfile:1.7-labs@sha256:b99fecfe00268a8b556fad7d9c37ee25d716ae08a5d7320e6d51c4dd83246894"
 
 	// Stage WORKDIR for a project. Mirrors _renderDockerfile's _workdir
 	// rule: dir=="" → /monorepo (workspaceroot); else /monorepo/<dir>.
@@ -850,7 +839,6 @@ import (
 			},
 		]
 		_lines: [
-			_syntheticSyntax,
 			"FROM scratch AS \(_stage)",
 			"WORKDIR \(_workdir)",
 			for l in _srcCopy {l},
@@ -878,7 +866,6 @@ import (
 			},
 		]
 		_lines: [
-			_syntheticSyntax,
 			"FROM scratch AS \(_stage)",
 			"WORKDIR \(_workdir)",
 			for l in _copy {l},
@@ -925,10 +912,9 @@ import (
 			},
 		]
 		_lines: [
-			_syntheticSyntax,
 			"FROM scratch AS bayt",
 			"WORKDIR \(_workdir)",
-			"COPY --link --parents .bayt/** Taskfile.yml compose.yaml ./",
+			"COPY --link --parents .bayt/** [T]askfile.y[m]l [T]askfile.y[a]ml [c]ompose.y[m]l [c]ompose.y[a]ml [d]ocker-compose.y[m]l [d]ocker-compose.y[a]ml ./",
 			for l in _depCopies {l},
 		]
 		out: string
