@@ -160,17 +160,10 @@ def _inject-taskfile-runtime [content: string, base: string]: nothing -> string 
 	$content | str replace --regex --all '\bbayt (cache|fingerprint|where)\b' $"($rel_path) $1"
 }
 
-# Generated-from header. JSON gets a field (no comment syntax).
-# Dockerfile lands the header on line 2: BuildKit only honors the
-# `# syntax=` directive when it's literally line 1.
+# Generated-from header, line 1 of every hash-comment file. JSON gets
+# a field instead (no comment syntax).
 def _hash-header       [c: string]: nothing -> string { "# generated from bayt.cue — do not edit\n"  + $c }
 def _slash-header      [c: string]: nothing -> string { "// generated from bayt.cue — do not edit\n" + $c }
-def _dockerfile-header [c: string]: nothing -> string {
-	let lines = ($c | lines)
-	let first = ($lines | first)
-	let rest  = ($lines | skip 1 | str join "\n")
-	$"($first)\n# generated from bayt.cue — do not edit\n($rest)\n"
-}
 def _json-header  [d: any]: nothing -> any { {_generated_from: "bayt.cue (do not edit)"} | merge $d }
 
 def write-bundle [bundle: record, base: string] {
@@ -198,7 +191,7 @@ def write-bundle [bundle: record, base: string] {
 
 	# --- Dockerfile
 	for entry in ($bundle.docker.dockerfiles | transpose name body) {
-		atomic-write $"($prefix).bayt/Dockerfile.($entry.name)" (_dockerfile-header (_inject-dockerfile-runtime $entry.body))
+		atomic-write $"($prefix).bayt/Dockerfile.($entry.name)" (_hash-header (_inject-dockerfile-runtime $entry.body))
 	}
 
 	# --- compose

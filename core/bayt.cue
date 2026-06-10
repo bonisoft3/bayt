@@ -962,18 +962,24 @@ noop: #cmd & {
 						"type=gha,scope=\(_c.scope)-\(_t)",
 					]},
 					if _c.type == "registry" {[
-						// CACHE_SCOPE is a composed (branch, buildkit
-						// version, platform) identifier emitted by
-						// dind.nu / dind buildx-fingerprint into host.env;
-						// CACHE_SCOPE_FALLBACK is the same fingerprint
-						// at main branch. Feature branches read their
-						// own scope first then main's as fallback;
-						// merging to main promotes the cache forward
-						// without cross-branch contention. The version
-						// + platform suffix prevents depot's and
-						// local's writes from poisoning each other.
-						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE:-branch-bkversion-os-arch}-\(_t)",
-						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE_FALLBACK:-branch-bkversion-os-arch}-\(_t)",
+						// CACHE_SCOPE — branch + builder identity
+						// (engine, frontend, platform) of whichever
+						// builder runs THIS bake, composed host-side by
+						// sayt (dind.nu for local builders, the
+						// sayt/depot action for depot) and interpolated
+						// here by compose. bayt only transports it into
+						// dindbox sandboxes via the env-sourced
+						// cache_scope secret — never derive it
+						// in-sandbox. CACHE_SCOPE_FALLBACK is the same
+						// identity at main: branches read their own
+						// scope first, then main's, so PRs never
+						// pollute main's writes. The `unscoped` default
+						// quarantines invocations outside the sayt env
+						// plumbing — they collide only with each other,
+						// and mismatched reads degrade to graceful
+						// chain-ID misses.
+						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE:-unscoped}-\(_t)",
+						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(_t)",
 					]},
 				][0]
 				to: [
@@ -983,7 +989,7 @@ noop: #cmd & {
 						"type=gha,mode=max,scope=\(_c.scope)-\(_t)",
 					]},
 					if _c.type == "registry" {[
-						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE:-branch-bkversion-os-arch}-\(_t),mode=min,image-manifest=true,oci-mediatypes=true",
+						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE:-unscoped}-\(_t),mode=min,image-manifest=true,oci-mediatypes=true",
 					]},
 				][0]
 			}

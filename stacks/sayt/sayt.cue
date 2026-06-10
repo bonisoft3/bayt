@@ -239,7 +239,7 @@ ci: inject & {
 	cmd: "builtin": {
 		shell: "sh"
 		do:    *#"""
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} -f - integrate
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_BUILDKIT_SYNTAX:+--set "*.args.BUILDKIT_SYNTAX=$SAYT_BUILDKIT_SYNTAX"} -f - integrate
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""# | string
 	}

@@ -299,11 +299,13 @@ import (
 		][0]
 	}
 
-	// Dockerfile frontend pin. Pinned to a manifest-list digest so
-	// BuildKit's content-addressable cache services the frontend image
-	// without a registry tag→digest roundtrip on each build. Shared by
-	// every emitted Dockerfile (user targets + synthetic stages).
-	_dockerfileSyntax: "# syntax=docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"
+	// The Dockerfile frontend is the invoker's decision: bakes that
+	// want an external frontend pass the BUILDKIT_SYNTAX build-arg and
+	// the built-in frontend delegates to the named image; absent, the
+	// built-in frontend runs. Keep it out of generation — a `# syntax=`
+	// line here would force one frontend onto every engine's cache
+	// chain. The frontend lowers the LLB that chain IDs hash, which is
+	// why the CACHE_SCOPE producers carry a frontend dimension.
 
 	// Helper: render the full Dockerfile body for one target.
 	_renderDockerfile: {
@@ -743,7 +745,6 @@ import (
 		][0]
 
 		_lines: [
-			_dockerfileSyntax,
 			_from,
 			"WORKDIR \(_workdir)",
 			for p in _copyLines {p},
@@ -846,7 +847,6 @@ import (
 			},
 		]
 		_lines: [
-			_dockerfileSyntax,
 			"FROM scratch AS \(_stage)",
 			"WORKDIR \(_workdir)",
 			for l in _srcCopy {l},
@@ -874,7 +874,6 @@ import (
 			},
 		]
 		_lines: [
-			_dockerfileSyntax,
 			"FROM scratch AS \(_stage)",
 			"WORKDIR \(_workdir)",
 			for l in _copy {l},
@@ -921,7 +920,6 @@ import (
 			},
 		]
 		_lines: [
-			_dockerfileSyntax,
 			"FROM scratch AS bayt",
 			"WORKDIR \(_workdir)",
 			"COPY --link --parents .bayt/** [T]askfile.y[m]l [T]askfile.y[a]ml [c]ompose.y[m]l [c]ompose.y[a]ml [d]ocker-compose.y[m]l [d]ocker-compose.y[a]ml ./",
