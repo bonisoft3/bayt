@@ -1160,6 +1160,7 @@ import (
 				if len(r.depends_on) > 0 {depends_on: r.depends_on}
 				if r.network_mode != _|_ {network_mode: r.network_mode}
 				if r.extra_hosts != _|_ {extra_hosts: r.extra_hosts}
+				if r.pull_policy != _|_ {pull_policy: r.pull_policy}
 				// healthcheck is open-struct ({...}) in #compose so users
 				// pass compose-spec values verbatim — bayt doesn't
 				// re-validate compose's own schema for this.

@@ -527,6 +527,7 @@ noop: #cmd & {
 	depends_on:   {[string]: _}
 	network_mode?: string
 	extra_hosts?: [...string]
+	pull_policy?: string
 	healthcheck?: {...}
 	develop?: {
 		watch: [...#watch]
