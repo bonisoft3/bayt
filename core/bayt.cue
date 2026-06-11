@@ -526,6 +526,7 @@ noop: #cmd & {
 	// don't have to write the build-tree mirror by hand.
 	depends_on:   {[string]: _}
 	network_mode?: string
+	extra_hosts?: [...string]
 	healthcheck?: {...}
 	develop?: {
 		watch: [...#watch]
