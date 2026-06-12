@@ -117,6 +117,16 @@ inject: {
 		// cold builds when chasing chain-ID drift or poisoned cache
 		// entries.
 		sayt_no_cache:             environment: "SAYT_NO_CACHE"
+		// bayt_image_tag / bayt_pull_policy — the host decides image
+		// tag and pull policy; the inner compose interpolates the same
+		// refs the warmup pushed. Empty → latest, build.
+		bayt_image_tag:            environment: "BAYT_IMAGE_TAG"
+		bayt_pull_policy:          environment: "BAYT_PULL_POLICY"
+		// SAYT_NO_CACHE_TO — when truthy, the inner bake exports no
+		// cache (--set "*.cache-to="). Set by integrate.nu
+		// --no-cache-to: single-writer cache discipline — the warmup
+		// writes, every other bake reads.
+		sayt_no_cache_to:          environment: "SAYT_NO_CACHE_TO"
 	}
 
 	// Cmd-level inject: mounts + setup body around the cmd.do invocation.
@@ -134,6 +144,9 @@ inject: {
 			{id: "cache_scope_fallback", var: contents: "CACHE_SCOPE_FALLBACK"},
 			{id: "sayt_buildkit_syntax", var: contents: "SAYT_BUILDKIT_SYNTAX"},
 			{id: "sayt_no_cache",        var: contents: "SAYT_NO_CACHE"},
+			{id: "bayt_image_tag",       var: contents: "BAYT_IMAGE_TAG"},
+			{id: "bayt_pull_policy",     var: contents: "BAYT_PULL_POLICY"},
+			{id: "sayt_no_cache_to",     var: contents: "SAYT_NO_CACHE_TO"},
 			// $BUILDX_BUILDER is expanded by the heredoc shell at RUN
 			// time — gets the value just exported above via var.contents.
 			// Don't hardcode "sayt-builder": GHA setup-buildx-action

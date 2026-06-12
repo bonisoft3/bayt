@@ -728,6 +728,17 @@ noop: #cmd & {
 			to:   []
 		}
 	}
+	// images.pull — compose pulls launch-dep images instead of the ci
+	// cascade's inner bake building them. Image refs become
+	// `<registry>/bayt-<target>:${BAYT_IMAGE_TAG:-latest}`; CI
+	// supplies BAYT_PULL_POLICY=missing and the tag for the pushed
+	// refs, while with no env set everything builds locally under the
+	// same names. registry defaults to cache.registry (image blobs
+	// dedup against cache blobs). Read at #project.bake only.
+	images?: {
+		pull:      *false | bool
+		registry?: string
+	}
 }
 
 // =============================================================================

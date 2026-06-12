@@ -959,6 +959,18 @@ import (
 		svc: (_svcName & {pn: t.project, tn: n}).out
 
 		out: {
+			let _imagesPull = [
+				if G.project.bake != _|_ if G.project.bake.images != _|_ {G.project.bake.images.pull},
+				false,
+			][0]
+			// Registry prefix for pull-mode image refs: images.registry,
+			// else cache.registry (image blobs dedup against cache
+			// blobs in the same repository).
+			let _imagesRegistry = [
+				if _imagesPull if G.project.bake.images.registry != _|_ {G.project.bake.images.registry + "/"},
+				if _imagesPull if G.project.bake.cache.registry != _|_ {G.project.bake.cache.registry + "/"},
+				"",
+			][0]
 			// Build block: context is one up from .bayt/ (= project root)
 			// so `COPY --link src/...` in the Dockerfile reaches real files.
 			build: {
@@ -1020,7 +1032,11 @@ import (
 				// so mirroring direct depends_on is sufficient — each
 				// service self-extends the chain. Same discipline applies
 				// in hand-maintained compose.yaml.
+				// images:pull suppresses the depends_on mirror: launch
+				// deps are pulled by compose (registry refs interpolated
+				// at config time), not built by the inner bake walk.
 				let _runtimeDeps = [
+					if _imagesPull {[]},
 					if t.compose == _|_ {[]},
 					if t.compose != _|_ {[for k, _ in t.compose.depends_on {k}]},
 				][0]
@@ -1139,15 +1155,20 @@ import (
 				secrets: [for k, _ in t.dockerfile.secrets {k}]
 			}
 
-			// Deterministic image tag. Bake reads `image:` and uses it
-			// to tag the loaded image; compose's `up`/`run` (without
-			// `--build`) looks up images by the same name. Dropping
-			// this field makes compose fall back to an implicit
-			// `<project>-<service>` tag that doesn't match what bake
-			// loaded, so `compose up` would rebuild. User-supplied
-			// `compose.image:` wins via the guarded emission below.
+			// Deterministic image ref. Bake reads `image:` to tag the
+			// loaded image (or push it, under output=type=registry);
+			// compose's `up`/`run` (without `--build`) looks up images
+			// by the same name — without the field, compose falls back
+			// to an implicit `<project>-<service>` tag that misses
+			// what bake loaded and rebuilds. Under images:pull the name
+			// is registry-qualified, identically in dev and CI; the tag
+			// is the host's (empty env → latest). User `compose.image:`
+			// wins via the guarded emission below.
 			if t.compose == _|_ || t.compose.image == _|_ {
-				image: "bayt-\(svc):latest"
+				image: "\(_imagesRegistry)bayt-\(svc):${BAYT_IMAGE_TAG:-latest}"
+			}
+			if _imagesPull && (t.compose == _|_ || t.compose.pull_policy == _|_) {
+				pull_policy: "${BAYT_PULL_POLICY:-build}"
 			}
 			if t.compose != _|_ {
 				let r = t.compose
