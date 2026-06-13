@@ -959,8 +959,8 @@ noop: #cmd & {
 		project: P.name
 		dir:     P.dir
 		// Compose per-target cache strings with this target's name
-		// baked into the scope key (mode=max writers from sibling
-		// targets would otherwise clobber). Sugar at P.bake.cache
+		// baked into the scope key (sibling targets sharing a scope key
+		// would otherwise clobber each other's cache manifest). Sugar at P.bake.cache
 		// (type + scope [+ registry]) selects a backend recipe;
 		// explicit P.bake.cache.from / to win when non-empty.
 		if P.bake != _|_ {
@@ -999,7 +999,11 @@ noop: #cmd & {
 					if len(_c.to) > 0 {_c.to},
 					if _c.type == _|_ {[]},
 					if _c.type == "gha" {[
-						"type=gha,mode=max,scope=\(_c.scope)-\(_t)",
+						// mode=min, matching the registry recipe: every bayt
+						// stage is its own target with its own cache-to, so
+						// per-target min already covers what max would on a
+						// monolith — without the extra layer descriptors.
+						"type=gha,mode=min,scope=\(_c.scope)-\(_t)",
 					]},
 					if _c.type == "registry" {[
 						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE:-unscoped}-\(_t),mode=min,image-manifest=true,oci-mediatypes=true",
