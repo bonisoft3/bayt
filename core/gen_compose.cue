@@ -1120,7 +1120,11 @@ import (
 						if len(t.bake.platforms) > 0 {
 							platforms: t.bake.platforms
 						}
-						if len(t.bake.tags) > 0 {
+						// Daemon-local aliases for the type=docker load
+						// flow. Under images:pull nothing loads
+						// locally, and a registry push would resolve
+						// their bare names to docker.io and fail.
+						if !_imagesPull && len(t.bake.tags) > 0 {
 							tags: t.bake.tags
 						}
 						if len(t.bake.args) > 0 {
