@@ -929,10 +929,9 @@ noop: #cmd & {
 
 	// Project-level bake config. Same #bake schema as #target.bake;
 	// the cache.from/to lists (whether typed directly or derived from
-	// the type+scope[+ref] sugar) propagate down to every target with
-	// {target} substituted to `<project>-<target>` so each target's
-	// mode=max writer doesn't clobber its siblings. Optional —
-	// non-release projects leave this unset.
+	// the type+scope[+ref] sugar) propagate down to every target keyed
+	// by its target name so each target's writer doesn't clobber its
+	// siblings. Optional — non-release projects leave this unset.
 	bake?: #bake
 
 	// Targets. Map key becomes target.name; project name + dir are
@@ -958,14 +957,26 @@ noop: #cmd & {
 		name:    Name & !~"^bayt$|_(srcs|outs|bayt)$"
 		project: P.name
 		dir:     P.dir
-		// Compose per-target cache strings with this target's name
-		// baked into the scope key (sibling targets sharing a scope key
-		// would otherwise clobber each other's cache manifest). Sugar at P.bake.cache
-		// (type + scope [+ registry]) selects a backend recipe;
-		// explicit P.bake.cache.from / to win when non-empty.
+		// Compose per-target cache strings keyed by this target's name
+		// (sibling targets sharing a key would clobber each other's cache
+		// manifest). Project identity is already carried by the per-project
+		// registry + scope, so the key is the bare target name — a
+		// `<project>-` prefix here would only duplicate it and eat into the
+		// 128-char OCI tag budget. Sugar at P.bake.cache (type + scope
+		// [+ registry]) selects a backend recipe; explicit
+		// P.bake.cache.from / to win when non-empty.
 		if P.bake != _|_ {
-			let _t = "\(P.name)-\(Name)"
+			let _t = Name
 			let _c = P.bake.cache
+			// Guard the registry tag length at generation. The tag is
+			// `<scope>-${CACHE_SCOPE}-<_t>`; CACHE_SCOPE is host-bounded to
+			// ≤64 chars (sayt dind.nu / sayt-depot action), so scope+_t must
+			// fit the remaining budget or the build hits Docker's 128-char
+			// tag cap. Shorten bake.cache.scope or the target name if this
+			// fails generation.
+			if _c.type == "registry" {
+				_cacheTagBudgetOK: true & (len(_c.scope)+len(_t)+66 <= 128)
+			}
 			bake: cache: {
 				from: [
 					if len(_c.from) > 0 {_c.from},
