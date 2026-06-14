@@ -517,6 +517,7 @@ noop: #cmd & {
 	command?:    null | [...string] | string
 	entrypoint?: null | [...string] | string
 	environment:  [string]: string
+	env_file?: string | [...(string | {path: string, required?: bool})]
 	ports:        [...string]
 	volumes:      [...string]
 	// Compose-spec long form: map keyed by service name with per-dep
@@ -526,8 +527,24 @@ noop: #cmd & {
 	// don't have to write the build-tree mirror by hand.
 	depends_on:   {[string]: _}
 	network_mode?: string
+	networks?: [...string] | {[string]: null | {
+		aliases?: [...string]
+		ipv4_address?: string
+		ipv6_address?: string
+		priority?: int
+	}}
 	extra_hosts?: [...string]
 	pull_policy?: string
+	container_name?: string
+	restart?:        string
+	working_dir?:    string
+	user?:           string
+	ulimits?: [string]: int | {soft: int, hard: int}
+	// shm_size: a size string ("2gb") or a byte count.
+	shm_size?:    string | int
+	security_opt?: [...string]
+	devices?:      [...string]
+	cap_add?:      [...string]
 	healthcheck?: {...}
 	develop?: {
 		watch: [...#watch]

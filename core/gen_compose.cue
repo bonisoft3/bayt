@@ -1180,12 +1180,23 @@ import (
 				if r.command != _|_ {command: r.command}
 				if r.entrypoint != _|_ {entrypoint: r.entrypoint}
 				if len(r.environment) > 0 {environment: r.environment}
+				if r.env_file != _|_ {env_file: r.env_file}
 				if len(r.ports) > 0 {ports: r.ports}
 				if len(r.volumes) > 0 {volumes: r.volumes}
 				if len(r.depends_on) > 0 {depends_on: r.depends_on}
 				if r.network_mode != _|_ {network_mode: r.network_mode}
+				if r.networks != _|_ {networks: r.networks}
 				if r.extra_hosts != _|_ {extra_hosts: r.extra_hosts}
 				if r.pull_policy != _|_ {pull_policy: r.pull_policy}
+				if r.container_name != _|_ {container_name: r.container_name}
+				if r.restart != _|_ {restart: r.restart}
+				if r.working_dir != _|_ {working_dir: r.working_dir}
+				if r.user != _|_ {user: r.user}
+				if r.ulimits != _|_ {ulimits: r.ulimits}
+				if r.shm_size != _|_ {shm_size: r.shm_size}
+				if r.security_opt != _|_ {security_opt: r.security_opt}
+				if r.devices != _|_ {devices: r.devices}
+				if r.cap_add != _|_ {cap_add: r.cap_add}
 				// healthcheck is open-struct ({...}) in #compose so users
 				// pass compose-spec values verbatim — bayt doesn't
 				// re-validate compose's own schema for this.
