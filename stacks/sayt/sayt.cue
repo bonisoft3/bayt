@@ -238,8 +238,20 @@ ci: inject & {
 	activate: ""
 	cmd: "builtin": {
 		shell: "sh"
+		// Pin the frontend via the `# syntax=` headline, not BUILDKIT_SYNTAX. On depot, that var
+		// (env or build.args) is dropped on timeouts and the embedded fallback can't be disabled,
+		// so it parses with the built-in frontend, which lacks COPY --parents → `unknown flag:
+		// parents`. The `# syntax` directive lives in file content, so it survives. On regular
+		// buildkit fallback IS disablable, but a non-embedded parser crashes under enough parallel
+		// parsers — so inject the headline ONLY when $BUILDKIT_SYNTAX is set (sayt/depot pins it;
+		// unset elsewhere keeps the crash-free embedded parser, which already supports --parents).
+		// Per-file -exec (not {} +): busybox sed -i doesn't reset line numbers across files.
 		do:    *#"""
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} ${SAYT_BUILDKIT_SYNTAX:+--set "*.args.BUILDKIT_SYNTAX=$SAYT_BUILDKIT_SYNTAX"} -f - integrate
+			if [ -n "$BUILDKIT_SYNTAX" ]; then
+			  # depot frontend-pin workaround (full rationale in stacks/sayt/sayt.cue)
+			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
+			fi
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} -f - integrate
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""# | string
 	}

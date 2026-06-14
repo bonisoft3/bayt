@@ -110,7 +110,7 @@ inject: {
 		// sayt_buildkit_syntax — external dockerfile frontend pin; the
 		// inner bake applies it via the BUILDKIT_SYNTAX build-arg.
 		// Empty → the builder's built-in frontend.
-		sayt_buildkit_syntax:      environment: "SAYT_BUILDKIT_SYNTAX"
+		sayt_buildkit_syntax:      environment: "BUILDKIT_SYNTAX"
 		// SAYT_NO_CACHE — when truthy, propagates `--no-cache` to the
 		// inner bake (suppresses both cache-from import and cache-to
 		// export). Set by integrate.nu --no-cache. Useful for forcing
@@ -142,7 +142,7 @@ inject: {
 			{id: "testcontainers_host", var: contents: "TESTCONTAINERS_HOST_OVERRIDE"},
 			{id: "cache_scope",          var: contents: "CACHE_SCOPE"},
 			{id: "cache_scope_fallback", var: contents: "CACHE_SCOPE_FALLBACK"},
-			{id: "sayt_buildkit_syntax", var: contents: "SAYT_BUILDKIT_SYNTAX"},
+			{id: "sayt_buildkit_syntax", var: contents: "BUILDKIT_SYNTAX"},
 			{id: "sayt_no_cache",        var: contents: "SAYT_NO_CACHE"},
 			{id: "bayt_image_tag",       var: contents: "BAYT_IMAGE_TAG"},
 			{id: "bayt_pull_policy",     var: contents: "BAYT_PULL_POLICY"},
