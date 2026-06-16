@@ -84,8 +84,9 @@ _v1: #project & {
 }
 _v1_vs: (#vscodeGen & {project: _v1, depManifests: {}})
 _v1_vs: files: build: version: "2.0.0"
+// Default label is the bare verb (sayt's vscode_runner exact-matches it).
 _v1_vs: files: build: tasks: [{
-	label:   "v1 build"
+	label:   "build"
 	type:    "shell"
 	command: "task bayt:build"
 	options: cwd: "${workspaceFolder}/guis/v1"
@@ -128,8 +129,8 @@ _bk1: #project & {
 _bk1_bk: (#bakeGen & {project: _bk1, depManifests: {}})
 _bk1_bk: files: release: string
 
-// --- B2: custom tags + args flow through into the HCL output. (No
-// `image` here so `tags` is used directly instead of `[IMAGE]`.)
+// --- B2: a bake block without `image` is compose-x-bake-only, so
+// #bakeGen emits no HCL for it (gated on `t.bake.image != _|_`).
 _bk2: #project & {
 	name: "bk2"
 	dir:  "bk2"
@@ -145,7 +146,8 @@ _bk2: #project & {
 	}
 }
 _bk2_bk: (#bakeGen & {project: _bk2, depManifests: {}})
-_bk2_bk: files: release: string
+// No image → no HCL file emitted (closed-field check on files).
+_bk2_bk: files: {[_]: _|_}
 
 // Public aggregator forces evaluation of the hidden bindings.
 Tests: skaffold_vscode_bake: {

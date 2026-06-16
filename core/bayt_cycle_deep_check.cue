@@ -1,32 +1,14 @@
 // bayt_cycle_deep_check.cue — deeper stress patterns beyond
 // bayt_cycle_check.cue. Pushes on the less obvious cycle traps:
-// long chains, defaults that touch every target, priority-tie
-// stability, and renamed targets via map keys.
+// long chains, priority-tie stability, and renamed targets via map
+// keys.
+//
+// (The former C14/C17 exercised a project-level `defaults:` struct that
+// propagated env/srcs into every target. That field was removed in the
+// idiomatic-schema redesign — project-wide config is now the top-level
+// `activate` plus stack-fragment composition (stacks/{sayt,jvm,mise}),
+// not a `#project.defaults` field — so those two cases were dropped.)
 package bayt
-
-// --- C14: defaults touching env + srcs propagate into every target
-// without introducing cycles, even though every target unifies the
-// same defaults struct.
-_cycle_c14: #project & {
-	name: "c14"
-	dir:  "test/c14"
-	defaults: {
-		activate: "devbox run --"
-		env: {
-			RUSTFLAGS:  "-C opt-level=2"
-			CARGO_HOME: "/root/.cargo"
-		}
-		srcs: globs: [".mise.lock", "rust-toolchain.toml"]
-	}
-	targets: {
-		"setup": {cmd: "builtin": do: "true"}
-		"build": {cmd: "builtin": do: "cargo build"}
-		"test":  {cmd: "builtin": do: "cargo test"}
-	}
-}
-_cycle_c14: targets: build: env: RUSTFLAGS:    "-C opt-level=2"
-_cycle_c14: targets: test:  env: CARGO_HOME:   "/root/.cargo"
-_cycle_c14: targets: test:  srcs: globs:       [".mise.lock", "rust-toolchain.toml"]
 
 // --- C15: 10-level deep dep chain. Forces CUE to resolve transitive
 // deps at depth in one unification pass.
@@ -76,37 +58,6 @@ _cycle_c16: targets: build: cmds: [
 	{name: "ee",      shell: "nu", do: "ee",           stop: false, ...},
 	{name: "yy",      shell: "nu", do: "yy",           stop: false, ...},
 	{name: "zz",      shell: "nu", do: "zz",           stop: false, ...},
-]
-
-// --- C17: fragment-on-fragment in defaults. Three layered structs
-// (gradle base + jvm base + mise base) compose without conflict and
-// each contribution lands on every target.
-_c17_gradleBase: {
-	cmd: "builtin": dockerfile: mounts: [
-		{type: "cache", target: "/root/.gradle"},
-	]
-}
-_c17_jvmBase: {
-	env: JAVA_OPTS: "-Xmx2g"
-}
-_c17_miseBase: {
-	env: MISE_TRUSTED_CONFIG_PATHS: "/monorepo"
-}
-_cycle_c17: #project & {
-	name: "c17"
-	dir:  "test/c17"
-	defaults: _c17_gradleBase & _c17_jvmBase & _c17_miseBase
-	targets: {
-		"build": {
-			srcs: globs: ["src/**/*.kt"]
-			cmd: "builtin": do: "./gradlew build"
-		}
-	}
-}
-_cycle_c17: targets: build: env: JAVA_OPTS:                 "-Xmx2g"
-_cycle_c17: targets: build: env: MISE_TRUSTED_CONFIG_PATHS: "/monorepo"
-_cycle_c17: targets: build: cmd: "builtin": dockerfile: mounts: [
-	{type: "cache", target: "/root/.gradle"},
 ]
 
 // --- C18: dep strings to the same name resolve consistently across
@@ -163,10 +114,8 @@ _cycle_c20: targets: "hot-launch":      name: "hot-launch"
 
 // Public aggregator forces evaluation of the hidden bindings.
 Tests: cycle_deep: {
-	c14: _cycle_c14
 	c15: _cycle_c15
 	c16: _cycle_c16
-	c17: _cycle_c17
 	c18: _cycle_c18
 	c19: _cycle_c19
 	c20: _cycle_c20

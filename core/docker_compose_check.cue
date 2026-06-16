@@ -37,6 +37,8 @@ _d1_dc: compose: bayt_root: include: [
 _d1_dc: compose: files: build: services: "d1-build": build: context:    ".."
 _d1_dc: compose: files: build: services: "d1-build": build: dockerfile: ".bayt/Dockerfile.build"
 _d1_dc: compose: files: build: services: "d1-build": build: target:     "build"
+// Depless target → no include (only services:).
+_d1_dc: compose: files: build: {[!="services"]: _|_}
 
 // --- D2: dep chain — build depends on setup, both have dockerfile
 // blocks. The build service gets `additional_contexts: { d2-setup:
@@ -59,6 +61,9 @@ _d2: #project & {
 }
 _d2_dc: (#dockerComposeGen & {project: _d2, depManifests: {}})
 _d2_dc: compose: files: build: services: "d2-build": build: additional_contexts: "d2-setup": "service:d2-setup"
+// build includes setup's file so its `service:d2-setup` context resolves standalone.
+_d2_dc: compose: files: build: include: [{path: "./compose.setup.yaml", required: false}]
+_d2_dc: compose: files: setup: {[!="services"]: _|_}
 
 // --- D3: targets without a dockerfile block don't appear in the
 // emitter output at all. A pure setup-only project produces an empty
@@ -194,6 +199,11 @@ _d9_outs_stage:  strings.Contains(_d9_outs_body, "FROM scratch AS build_outs") &
 _d9_outs_from:   strings.Contains(_d9_outs_body, "COPY --from=d1-build") & true
 _d9_bayt_stage:  strings.Contains(_d9_bayt_body, "FROM scratch AS bayt") & true
 _d9_bayt_scope:  strings.Contains(_d9_bayt_body, ".bayt/** Taskfile.yml compose.yaml") & true
+// Synthetic-file includes: _outs → parent build file; _srcs/_bayt have
+// no deps in this fixture → no include.
+_d1_dc: compose: files: build_outs: include: [{path: "./compose.build.yaml", required: false}]
+_d1_dc: compose: files: build_srcs: {[!="services"]: _|_}
+_d1_dc: compose: files: "_bayt": {[!="services"]: _|_}
 
 // --- D10: `:bayt` ref consumer. A target depending on `:bayt` (the
 // project-level synthetic) gets a bulk-COPY `--from=<proj>-bayt

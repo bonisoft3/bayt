@@ -160,10 +160,12 @@ def local-entry [key: string]: nothing -> path {
 def restore-outs-from [outs_dir: path] {
 	if not ($outs_dir | path exists) { return }
 	let cwd = (pwd)
+	# Canonicalize so symlink-resolved glob results stay relative to base.
+	let base = ($outs_dir | path expand)
 	# Same `path type == "file"` filter as expand-globs — `--no-dir`
 	# alone misses symlinks-to-directories.
-	for src in (glob ($outs_dir | path join "**/*") --no-dir | where { |p| ($p | path type) == "file" }) {
-		let dst = ($cwd | path join ($src | path relative-to $outs_dir))
+	for src in (glob ($base | path join "**/*") --no-dir | where { |p| ($p | path type) == "file" }) {
+		let dst = ($cwd | path join ($src | path relative-to $base))
 		mkdir ($dst | path dirname)
 		cp $src $dst
 	}

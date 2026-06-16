@@ -148,6 +148,53 @@ import (
 		][0]
 	}
 
+	// One optional `include:` entry to a dep's per-target compose file.
+	// Same-project deps are local; cross-project deps resolve via
+	// _rootFromBayt + the dep's dir.
+	_includeEntry: F={
+		ownDir: string
+		depDir: string
+		file:   string
+		let _dp = [if F.depDir != "" {"\(F.depDir)/"}, ""][0]
+		out: {
+			path: [
+				if F.depDir == F.ownDir {"./compose.\(F.file).yaml"},
+				"\(_rootFromBayt)\(_dp).bayt/compose.\(F.file).yaml",
+			][0]
+			required: false
+		}
+	}
+
+	// include: every build-context dep's file so a per-target file loads
+	// standalone. Walk _targetDeps UNFILTERED — a ref-arm FROM upstream is
+	// absent from the additional_contexts dep loop yet still referenced,
+	// so adding the _inheritedDepKeys filter here would drop its file.
+	_composeDepIncludes: I={
+		t: _
+		out: [
+			for d in (_targetDeps & {"t": I.t}).out {
+				// `bayt` resolves to compose._bayt.yaml; compose.bayt.yaml is
+				// the federation root and would form an include cycle.
+				let _file = [if d.name == "bayt" {"_bayt"}, d.name][0]
+				(_includeEntry & {ownDir: I.t.dir, depDir: d.dir, file: _file}).out
+			},
+		]
+	}
+
+	// include: each srcs-bearing dep's `_srcs` file (mirrors the _srcs
+	// synthetic's additional_contexts).
+	_composeSrcsIncludes: I={
+		n: string
+		t: _
+		out: [
+			for d in I.t.chainedDeps
+			if d.name != "bayt"
+			if (_depHasSrcs & {"d": d}).out {
+				(_includeEntry & {ownDir: I.t.dir, depDir: d.dir, file: "\(d.name)_srcs"}).out
+			},
+		]
+	}
+
 	// _mount renders one `--mount=...` directive. Cache-mount id and
 	// sharing are synthesised from `scope` + target; the #mount
 	// schema's disjunction already disallows user-supplied id on
@@ -1338,6 +1385,11 @@ import (
 					let svc = (_svcName & {pn: t.project, tn: n}).out
 					services: (svc): (_service & {"n": n, "t": t}).out
 
+					let _incs = (_composeDepIncludes & {"t": t}).out
+					if len(_incs) > 0 {
+						include: _incs
+					}
+
 					if len(t.dockerfile.secrets) > 0 {
 						secrets: {
 							for s, src in t.dockerfile.secrets {
@@ -1366,12 +1418,20 @@ import (
 				(n): {
 					let svc = "\(t.project)-\(n)"
 					services: (svc): (_syntheticSrcsService & {"n": n, "t": t}).out
+
+					let _incs = (_composeSrcsIncludes & {"n": n, "t": t}).out
+					if len(_incs) > 0 {
+						include: _incs
+					}
 				}
 			}
 			for n, t in _outsEmit {
 				(n): {
 					let svc = "\(t.project)-\(n)"
 					services: (svc): (_syntheticOutsService & {"n": n, "t": t}).out
+
+					// _outs pulls from its same-project parent build stage.
+					include: [(_includeEntry & {ownDir: t.dir, depDir: t.dir, file: t.name}).out]
 				}
 			}
 			// Leading underscore avoids colliding with the federation
@@ -1383,6 +1443,17 @@ import (
 				"_bayt": {
 					let svc = "\(G.project.name)-bayt"
 					services: (svc): _syntheticBaytService.out
+
+					// The bayt synthetic COPYs --from each cross-project
+					// dep's _bayt; include those files.
+					let _incs = [
+						for dep in G._m.projectManifest.crossProjectDirs {
+							(_includeEntry & {ownDir: G.project.dir, depDir: dep, file: "_bayt"}).out
+						},
+					]
+					if len(_incs) > 0 {
+						include: _incs
+					}
 				}
 			}
 		}
@@ -1425,15 +1496,12 @@ import (
 				[for n, _ in _outsEmit {{path: "./compose.\(n).yaml", required: false}}],
 				_baytInclude,
 			])
+			// Cross-project deps include the OTHER project's dep-only root
+			// (compose.bayt.deps.yaml) — its integrate is excluded, whose
+			// top-level secrets/volumes would collide across federation.
 			let _crossIncludes = [
 				for dep in G._m.projectManifest.crossProjectDirs {
-					let _dp = [if dep != "" {"\(dep)/"}, ""][0]
-					// Cross-project deps include the OTHER project's
-					// dep-only root (compose.bayt.deps.yaml). Integrate
-					// composes carry top-level secrets/networks/volumes
-					// that would collide across federated graphs — they
-					// stay out of the deps chain.
-					{path: "\(G._rootFromBayt)\(_dp).bayt/compose.bayt.deps.yaml", required: false}
+					(_includeEntry & {ownDir: G.project.dir, depDir: dep, file: "bayt.deps"}).out
 				},
 			]
 			let _allIncludes = list.Concat([_localIncludes, _crossIncludes])
@@ -1476,8 +1544,7 @@ import (
 			])
 			let _crossIncludes = [
 				for dep in G._m.projectManifest.crossProjectDirs {
-					let _dp = [if dep != "" {"\(dep)/"}, ""][0]
-					{path: "\(G._rootFromBayt)\(_dp).bayt/compose.bayt.deps.yaml", required: false}
+					(_includeEntry & {ownDir: G.project.dir, depDir: dep, file: "bayt.deps"}).out
 				},
 			]
 			let _allIncludes = list.Concat([_localIncludes, _crossIncludes])

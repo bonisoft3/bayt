@@ -1,8 +1,8 @@
 #!/usr/bin/env nu
-# bayt — forwards args to runtime/generate-bayt.nu.
+# bayt — dev-convenience entry; forwards to bayt.nu (PATH shim: bin/bayt).
 
 const BAYT_ROOT = (path self | path dirname)
 
 def --wrapped main [...args] {
-	nu ($BAYT_ROOT | path join runtime generate-bayt.nu) ...$args
+	nu ($BAYT_ROOT | path join bayt.nu) ...$args
 }
