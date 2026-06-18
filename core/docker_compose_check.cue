@@ -24,10 +24,10 @@ _d1: #project & {
 	}
 }
 _d1_dc: (#dockerComposeGen & {project: _d1, depManifests: {}})
-// Each user target with non-empty srcs / outs auto-spawns scratch _srcs
-// and _outs synthetic stages; the project gets a single _bayt synthetic
-// carrying its .bayt/ tree. Order matches the emitter's list.Concat:
-// user targets, then _srcs, then _outs, then _bayt.
+// The federation root (compose.bayt.yaml) is a flat list of every local
+// fragment (user targets, then _srcs, then _outs, then _bayt) plus
+// cross-project federation roots (none here). The per-target closures are
+// emitted as compose.<n>.closure.yaml siblings, not unioned in here.
 _d1_dc: compose: bayt_root: include: [
 	{path: "./compose.build.yaml", required: false},
 	{path: "./compose.build_srcs.yaml", required: false},
@@ -61,9 +61,18 @@ _d2: #project & {
 }
 _d2_dc: (#dockerComposeGen & {project: _d2, depManifests: {}})
 _d2_dc: compose: files: build: services: "d2-build": build: additional_contexts: "d2-setup": "service:d2-setup"
-// build includes setup's file so its `service:d2-setup` context resolves standalone.
-_d2_dc: compose: files: build: include: [{path: "./compose.setup.yaml", required: false}]
+// Per-target files are fragments — services only, no include. Standalone
+// loadability lives in the sibling per-target closure (compose.<n>.closure.yaml).
+_d2_dc: compose: files: build: {[!="services"]: _|_}
 _d2_dc: compose: files: setup: {[!="services"]: _|_}
+// compose.build.closure.yaml: build's own fragment + the closure of each
+// dep its service references (here just the same-project setup), recursive
+// so setup.closure pulls setup's own deps. Resolves standalone, no
+// federation root.
+_d2_dc: compose: files: "build.closure": include: [
+	{path: "./compose.build.yaml", required: false},
+	{path: "./compose.setup.closure.yaml", required: false},
+]
 
 // --- D3: targets without a dockerfile block don't appear in the
 // emitter output at all. A pure setup-only project produces an empty
@@ -199,9 +208,8 @@ _d9_outs_stage:  strings.Contains(_d9_outs_body, "FROM scratch AS build_outs") &
 _d9_outs_from:   strings.Contains(_d9_outs_body, "COPY --from=d1-build") & true
 _d9_bayt_stage:  strings.Contains(_d9_bayt_body, "FROM scratch AS bayt") & true
 _d9_bayt_scope:  strings.Contains(_d9_bayt_body, ".bayt/** Taskfile.yml compose.yaml") & true
-// Synthetic-file includes: _outs → parent build file; _srcs/_bayt have
-// no deps in this fixture → no include.
-_d1_dc: compose: files: build_outs: include: [{path: "./compose.build.yaml", required: false}]
+// Synthetic per-target files are fragments too (no include).
+_d1_dc: compose: files: build_outs: {[!="services"]: _|_}
 _d1_dc: compose: files: build_srcs: {[!="services"]: _|_}
 _d1_dc: compose: files: "_bayt": {[!="services"]: _|_}
 

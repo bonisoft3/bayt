@@ -197,7 +197,6 @@ def write-bundle [bundle: record, base: string] {
 	# --- compose
 	atomic-write $"($prefix).bayt/compose.yaml" (_hash-header (_inject-runtime ($bundle.docker.compose.root | to yaml) $base))
 	atomic-write $"($prefix).bayt/compose.bayt.yaml" (_hash-header (_inject-runtime ($bundle.docker.compose.bayt_root | to yaml) $base))
-	atomic-write $"($prefix).bayt/compose.bayt.deps.yaml" (_hash-header (_inject-runtime ($bundle.docker.compose.bayt_deps_root | to yaml) $base))
 	for entry in ($bundle.docker.compose.files | transpose name data) {
 		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" (_hash-header (_inject-runtime ($entry.data | to yaml) $base))
 	}

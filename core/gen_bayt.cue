@@ -76,6 +76,7 @@ _expandLines: {
 			for n, t in G.project.targets if t != null
 			for d in _transitiveCrossDeps[n] {d.dir}
 		]}).out
+
 	}
 
 	// Builds a structured entry `{name, project, dir, outs}` for a
@@ -572,8 +573,7 @@ _expandLines: {
 
 		// Project-bayt synthetic: one per project, gated on at least one
 		// dockerfile-emitting target (matches gen_compose's `_bayt` gate).
-		// Always public — replaces the user-authored <proj>:ops graph
-		// that was always public.
+		// Always public.
 		let _anyDockerfile = len([for n, t in G.project.targets if t != null if t.dockerfile != _|_ {n}]) > 0
 		if _anyDockerfile {
 			"bayt": {
