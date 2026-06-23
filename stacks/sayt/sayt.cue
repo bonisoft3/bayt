@@ -270,10 +270,20 @@ ci: inject & {
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} -f - integrate
+			export BAYT_COMPOSE_OUTPUT=registry
+			# Build + push exactly the runtime closure the run phase pulls:
+			# integrate's transitive depends_on, derived from compose config
+			# (excludes build-only stages and the ci/dindbox orchestration
+			# targets, which carry no depends_on edge into this set). Each is a
+			# positional bake target, so each gets output=type=registry.
+			targets="$(docker compose config --format json | jq -r '.services as $s | def walk($seen; $front): if ($front|length)==0 then $seen else ($front[0]) as $c | (($s[$c].depends_on // {}) | keys) as $d | walk(($seen + [$c]); (($front[1:]) + ($d - $seen - $front))) end; walk([]; ["integrate"]) | join(" ")')"
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} -f - $targets
 			"""#
 		let _do_run = #"""
-			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
+			if [ -n "$BUILDKIT_SYNTAX" ]; then
+			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
+			fi
+			BAYT_PULL_POLICY=missing exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""#
 		let _do = [
 			if _build && _run {_do_both},
@@ -285,6 +295,17 @@ ci: inject & {
 	}
 	dockerfile: from: ref: *":dindbox" | string
 }
+
+// ciBuild / ciRun — the two phases of a build/run split, for projects whose
+// run pulls a composed-up stack (depot/DESIGN-phases.md). Declared here, in the
+// same file as ci's hidden `_build`/`_run`, so the override actually unifies
+// (hidden fields are package-scoped — `sayt.ci & {_run: false}` in a consumer's
+// file would mint a new field, not override this one). A consumer adds its deps:
+// `"ci-build": sayt.ciBuild & {deps: [...]}`.
+//   ciBuild → bake + push the compose-runtime closure, no compose-up.
+//   ciRun   → compose-up (pulls via pull_policy=missing), no bake.
+ciBuild: ci & {cmd: "builtin": _run:   false}
+ciRun:   ci & {cmd: "builtin": _build: false}
 
 // dindbox — thin FROM-base for sayt.ci. Pure preset wrap of
 // bayt.dindbox; nulls the cmd so no RUN line emits.

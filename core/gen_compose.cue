@@ -1047,11 +1047,15 @@ import (
 				// so mirroring direct depends_on is sufficient — each
 				// service self-extends the chain. Same discipline applies
 				// in hand-maintained compose.yaml.
-				// images:pull suppresses the depends_on mirror: launch
-				// deps are pulled by compose (registry refs interpolated
-				// at config time), not built by the inner bake walk.
+				// depends_on is mirrored into additional_contexts so the
+				// inner bake walk builds the runtime stack (transitively —
+				// each service self-extends the chain). Kept on under
+				// images:pull too: a baking phase (dev, or a build phase
+				// with BAYT_COMPOSE_OUTPUT=registry) needs the deps built to
+				// load/push them; the run phase only `compose up`s (no bake),
+				// so the mirror is inert there and it still pulls the deps via
+				// pull_policy=missing.
 				let _runtimeDeps = [
-					if _imagesPull {[]},
 					if t.compose == _|_ {[]},
 					if t.compose != _|_ {[for k, _ in t.compose.depends_on {k}]},
 				][0]

@@ -15,8 +15,9 @@ _i3_scratch: scratch
 _i3_scratch: from: null
 
 // --- I4: dindbox COPYs the socat binary + readline/ncurses libs from
-// alpine/socat. Two entries: the socat binary itself and the runtime libs.
-_i4_dindbox_copy: len(dindbox.copy) & 2
+// alpine/socat, plus the jq binary from jqlang/jq (used by the ci build
+// phase to derive the runtime closure). Three entries.
+_i4_dindbox_copy: len(dindbox.copy) & 3
 
 // --- I6: presets unify into a target's dockerfile block. Project-level
 // composition: each leaf target picks a preset (or chains via from.ref).
