@@ -246,14 +246,42 @@ ci: inject & {
 		// parsers — so inject the headline ONLY when $BUILDKIT_SYNTAX is set (sayt/depot pins it;
 		// unset elsewhere keeps the crash-free embedded parser, which already supports --parents).
 		// Per-file -exec (not {} +): busybox sed -i doesn't reset line numbers across files.
-		do:    *#"""
+		// _build / _run gate the two RUN lines; output derives from the pair.
+		// Hidden (non-emitted) so a target can override one for a phase without
+		// the field leaking into bayt.*.json. Generation-time → distinct phases
+		// emit distinct RUN bodies → distinct RUN-layer cache keys (see
+		// depot/DESIGN-phases.md):
+		//   _build && _run  → bake-load + up         (dev/local, default)
+		//   _build && !_run → bake + push (registry) (build phase)
+		//   !_build && _run → up only, pulls         (run phase)
+		_build: *true | bool
+		_run:   *true | bool
+		// _do_both is VERBATIM the prior single `do` — its text is part of every
+		// project's ci RUN-layer cache key; do not perturb it.
+		let _do_both = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  # depot frontend-pin workaround (full rationale in stacks/sayt/sayt.cue)
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
 			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} -f - integrate
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
-			"""# | string
+			"""#
+		let _do_build = #"""
+			if [ -n "$BUILDKIT_SYNTAX" ]; then
+			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
+			fi
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} --set "integrate.output=type=registry" -f - integrate
+			"""#
+		let _do_run = #"""
+			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
+			"""#
+		let _do = [
+			if _build && _run {_do_both},
+			if _build && !_run {_do_build},
+			if !_build && _run {_do_run},
+			if !_build && !_run {""},
+		][0]
+		do: *_do | string
 	}
 	dockerfile: from: ref: *":dindbox" | string
 }
