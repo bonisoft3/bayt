@@ -270,7 +270,7 @@ ci: inject & {
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} --set "integrate.output=type=registry" -f - integrate
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} -f - integrate
 			"""#
 		let _do_run = #"""
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans

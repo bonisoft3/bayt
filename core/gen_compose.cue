@@ -1152,19 +1152,22 @@ import (
 							"cache-to": t.bake.cache.to
 						}
 						// Targets carrying compose runtime config
-						// (`compose: {}` set on the target) emit
-						// `output: ["type=docker"]` so the inner bake's
-						// positional `<target>` invocation loads them
-						// into the dindbox's daemon — what `compose up`
-						// needs to actually start the container.
-						// Build-only stages (no compose runtime —
-						// build, test, release-*) skip this and stay
-						// cacheonly under the docker-container driver
-						// default. Warm/aggregator phases override with
-						// `--set "*.output=type=cacheonly"` to suppress
-						// all loading; the wildcard wins.
+						// (`compose: {}` set on the target) emit an output
+						// so the inner bake's positional `<target>`
+						// invocation materializes them — by default
+						// `type=docker`, loading them into the dindbox's
+						// daemon, what `compose up` needs to start the
+						// container. BAYT_COMPOSE_OUTPUT switches that for
+						// the build phase of a build/run split: set it to
+						// `registry` and the bake pushes exactly this set
+						// (the composed-up images the run phase pulls), since
+						// build-only stages (no compose runtime — build,
+						// test, release-*, *_srcs) skip this and stay
+						// cacheonly. Warm/aggregator phases still override
+						// with `--set "*.output=type=cacheonly"`; the
+						// wildcard wins.
 						if t.compose != _|_ {
-							output: ["type=docker"]
+							output: ["type=${BAYT_COMPOSE_OUTPUT:-docker}"]
 						}
 					}
 				}
