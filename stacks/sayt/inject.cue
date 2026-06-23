@@ -156,7 +156,9 @@ inject: {
 			// ~/.docker/buildx/instances/<name> permissions. var.path
 			// emission uses `cp -p` so the mount mode propagates verbatim.
 			{id: "buildx_instance", var: path:     "/root/.docker/buildx/instances/$BUILDX_BUILDER", mode: "0600"},
-			{id: "docker_config",   var: path:     "/root/.docker/config.json",                      mode: "0600"},
+			// path writes config.json for this CLI; contents re-exports
+			// DOCKER_AUTH_CONFIG so a nested compose-up re-derives the creds.
+			{id: "docker_config",   var: {contents: "DOCKER_AUTH_CONFIG", path: "/root/.docker/config.json"}, mode: "0600"},
 		]
 		defaultSteps: "unix-socket-forward": {
 			priority: 10
