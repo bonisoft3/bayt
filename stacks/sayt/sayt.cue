@@ -271,12 +271,18 @@ ci: inject & {
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
 			export BAYT_COMPOSE_OUTPUT=registry
-			# Build + push exactly the runtime closure the run phase pulls:
-			# integrate's transitive depends_on, derived from compose config
-			# (excludes build-only stages and the ci/dindbox orchestration
-			# targets, which carry no depends_on edge into this set). Each is a
-			# positional bake target, so each gets output=type=registry.
-			targets="$(docker compose config --format json | jq -r '.services as $s | def walk($seen; $front): if ($front|length)==0 then $seen else ($front[0]) as $c | (($s[$c].depends_on // {}) | keys) as $d | walk(($seen + [$c]); (($front[1:]) + ($d - $seen - $front))) end; walk([]; ["integrate"]) | join(" ")')"
+			# Push the runtime closure the run phase pulls. bake --print resolves
+			# integrate's build graph; depends_on is auto-mirrored into
+			# additional_contexts (under images.pull), so the compose-runtime stack —
+			# including a testcontainers stack wired via additional_contexts but not
+			# depends_on — is in the closure, and nothing outside integrate's graph is.
+			# Baking the whole closure positionally makes each target's own output
+			# apply: compose-runtime push (type=registry), build-only stay cacheonly.
+			# Closure = the print JSON's `.target` keys (4-space-indented), scraped
+			# with sed/grep so the dindbox needs no JSON tool.
+			targets="$(docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | sed -n '/^  "target": {/,/^  }/p' | grep -E '^    "' | sed -E 's/^    "([^"]+)".*/\1/' | tr '\n' ' ')"
+			# Empty would let bake fall back to the default group and push everything.
+			[ -n "$targets" ] || { echo "ci-build: empty target closure for integrate" >&2; exit 1; }
 			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} -f - $targets
 			"""#
 		let _do_run = #"""

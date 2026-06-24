@@ -76,15 +76,6 @@ dindbox: {
 			srcs: ["/usr/lib/libreadline.so.8", "/usr/lib/libncursesw.so.6"]
 			dst:  "/usr/lib/"
 		},
-		// jq — used by the ci build phase to derive the runtime closure
-		// (integrate's transitive depends_on) from `docker compose config`,
-		// so the bake pushes exactly the services the run pulls. Static
-		// binary from the scratch jqlang/jq image, lives at /jq.
-		{
-			from: {name: lock.images.jq}
-			srcs: ["/jq"]
-			dst:  "/usr/local/bin/jq"
-		},
 	]
 }
 
