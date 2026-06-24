@@ -167,7 +167,7 @@ inject: {
 				  ulimit -n 1048576 2>/dev/null || true
 				  addr=${DOCKER_HOST#tcp://}
 				  [ -n "$addr" ] || { echo "dindbox: DOCKER_HOST=$DOCKER_HOST has no tcp:// address" >&2; exit 1; }
-				  socat -d0 UNIX-LISTEN:/var/run/docker.sock,fork,backlog=1024,reuseaddr "TCP:$addr" &
+				  socat -d0 UNIX-LISTEN:/var/run/docker.sock,fork,backlog=1024,reuseaddr "TCP:$addr,keepalive,keepidle=30,keepintvl=15,keepcnt=4" &
 				  SOCAT_PID=$!
 				  trap 'kill $SOCAT_PID 2>/dev/null || true' EXIT INT TERM
 				  socat -u OPEN:/dev/null UNIX-CONNECT:/var/run/docker.sock,retry=20,interval=0.2 >/dev/null 2>&1 \\
