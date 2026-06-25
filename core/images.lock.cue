@@ -41,6 +41,8 @@ lock: images: {
 	busybox:      "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
 	docker:       "docker:29.2.0-cli@sha256:ae2609c051339b48c157d97edc4f1171026251607b29a2b0f25f990898586334"
 	alpine_socat: "alpine/socat:latest@sha256:bfd2550379212e087dc18db2f4611f43477be4b575d660c8f18c5b9a1b2e2757"
+	// depot CLI — static binary for the dindbox's inner depot bake. Multiplatform digest.
+	depot_cli:    "ghcr.io/depot/cli:2.101.65@sha256:08d7a79775468e59711cc8269b6830bb0c8bd0091a36c049cdc1534b44e4c3e5"
 	leap: "opensuse/leap:16.0@sha256:859560554b625c225fa767b76d61253d529b95d082c2d68579ad69168d5e3da7"
 	// envoyproxy/envoy ships /usr/local/bin/envoy and /usr/bin/envsubst.
 	// Both are glibc-linked, so they COPY into any glibc-based stage

@@ -14,11 +14,9 @@ _i1_dindbox: dindbox & {from: name: lock.images.docker}
 _i3_scratch: scratch
 _i3_scratch: from: null
 
-// --- I4: dindbox COPYs the socat binary + readline/ncurses libs from
-// alpine/socat. Two entries. (The ci build phase derives its push closure
-// from `docker buildx bake --print`, scraped with sed/grep — no JSON tool
-// in the image.)
-_i4_dindbox_copy: len(dindbox.copy) & 2
+// --- I4: dindbox COPYs socat (binary + readline/ncurses libs) and the
+// depot CLI — three entries.
+_i4_dindbox_copy: len(dindbox.copy) & 3
 
 // --- I6: presets unify into a target's dockerfile block. Project-level
 // composition: each leaf target picks a preset (or chains via from.ref).

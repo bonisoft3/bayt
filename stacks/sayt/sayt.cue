@@ -256,14 +256,18 @@ ci: inject & {
 		//   !_build && _run → up only, pulls         (run phase)
 		_build: *true | bool
 		_run:   *true | bool
-		// _do_both is VERBATIM the prior single `do` — its text is part of every
-		// project's ci RUN-layer cache key; do not perturb it.
+		// _do_both / _do_build bake inline: select `depot bake` when $DEPOT_TOKEN
+		// is set else `docker buildx bake`, and pipe `buildx bake --print` JSON
+		// into it (depot bake needs compose's service:X rewritten to target:X,
+		// which --print does). No --allow: BUILDX_BAKE_ENTITLEMENTS_FS=0
+		// (inject.cue) covers fs-read. _do_run has no bake.
 		let _do_both = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  # depot frontend-pin workaround (full rationale in stacks/sayt/sayt.cue)
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} -f - integrate
+			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} integrate
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""#
 		let _do_build = #"""
@@ -283,7 +287,8 @@ ci: inject & {
 			targets="$(docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | sed -n '/^  "target": {/,/^  }/p' | grep -E '^    "' | sed -E 's/^    "([^"]+)".*/\1/' | tr '\n' ' ')"
 			# Empty would let bake fall back to the default group and push everything.
 			[ -n "$targets" ] || { echo "ci-build: empty target closure for integrate" >&2; exit 1; }
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} -f - $targets
+			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print $targets | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $targets
 			"""#
 		let _do_run = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then

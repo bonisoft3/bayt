@@ -76,6 +76,11 @@ dindbox: {
 			srcs: ["/usr/lib/libreadline.so.8", "/usr/lib/libncursesw.so.6"]
 			dst:  "/usr/lib/"
 		},
+		{
+			from: {name: lock.images.depot_cli}
+			srcs: ["/usr/bin/depot"]
+			dst:  "/usr/local/bin/depot"
+		},
 	]
 }
 

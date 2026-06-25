@@ -127,6 +127,14 @@ inject: {
 		// --no-cache-to: single-writer cache discipline — the warmup
 		// writes, every other bake reads.
 		sayt_no_cache_to:          environment: "SAYT_NO_CACHE_TO"
+		// depot_token / depot_project_id — credentials for the inner bake's
+		// depot path. Build secrets (not ENV) so the token never lands in a layer.
+		depot_token:               environment: "DEPOT_TOKEN"
+		depot_project_id:          environment: "DEPOT_PROJECT_ID"
+		// depot_disable_otel — integrate.nu sets DEPOT_DISABLE_OTEL=1; injected
+		// here so the inner `depot bake` doesn't abort on the OTEL schema clash
+		// from the trace-context vars depot's builder puts in RUN steps.
+		depot_disable_otel:        environment: "DEPOT_DISABLE_OTEL"
 	}
 
 	// Cmd-level inject: mounts + setup body around the cmd.do invocation.
@@ -147,6 +155,9 @@ inject: {
 			{id: "bayt_image_tag",       var: contents: "BAYT_IMAGE_TAG"},
 			{id: "bayt_pull_policy",     var: contents: "BAYT_PULL_POLICY"},
 			{id: "sayt_no_cache_to",     var: contents: "SAYT_NO_CACHE_TO"},
+			{id: "depot_token",          var: contents: "DEPOT_TOKEN"},
+			{id: "depot_project_id",     var: contents: "DEPOT_PROJECT_ID"},
+			{id: "depot_disable_otel",   var: contents: "DEPOT_DISABLE_OTEL"},
 			// $BUILDX_BUILDER is expanded by the heredoc shell at RUN
 			// time — gets the value just exported above via var.contents.
 			// Don't hardcode "sayt-builder": GHA setup-buildx-action
