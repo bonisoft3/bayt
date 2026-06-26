@@ -122,10 +122,12 @@ inject: {
 		// refs the warmup pushed. Empty → latest, build.
 		bayt_image_tag:            environment: "BAYT_IMAGE_TAG"
 		bayt_pull_policy:          environment: "BAYT_PULL_POLICY"
-		// SAYT_NO_CACHE_TO — when truthy, the inner bake exports no
-		// cache (--set "*.cache-to="). Set by integrate.nu
-		// --no-cache-to: single-writer cache discipline — the warmup
-		// writes, every other bake reads.
+		// SAYT_NO_CACHE_FROM / SAYT_NO_CACHE_TO — when truthy, the inner
+		// bake skips cache import (--set "*.cache-from=") / export (--set
+		// "*.cache-to="). Set by integrate.nu --no-cache-from / --no-cache-to:
+		// single-writer cache discipline — the warmup writes, every other bake
+		// reads; or skip reads when a stale/unauthed cache must be bypassed.
+		sayt_no_cache_from:        environment: "SAYT_NO_CACHE_FROM"
 		sayt_no_cache_to:          environment: "SAYT_NO_CACHE_TO"
 		// depot_token / depot_project_id — credentials for the inner bake's
 		// depot path. Build secrets (not ENV) so the token never lands in a layer.
@@ -154,6 +156,7 @@ inject: {
 			{id: "sayt_no_cache",        var: contents: "SAYT_NO_CACHE"},
 			{id: "bayt_image_tag",       var: contents: "BAYT_IMAGE_TAG"},
 			{id: "bayt_pull_policy",     var: contents: "BAYT_PULL_POLICY"},
+			{id: "sayt_no_cache_from",   var: contents: "SAYT_NO_CACHE_FROM"},
 			{id: "sayt_no_cache_to",     var: contents: "SAYT_NO_CACHE_TO"},
 			{id: "depot_token",          var: contents: "DEPOT_TOKEN"},
 			{id: "depot_project_id",     var: contents: "DEPOT_PROJECT_ID"},

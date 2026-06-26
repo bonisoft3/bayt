@@ -267,7 +267,7 @@ ci: inject & {
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
 			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} integrate
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} integrate
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""#
 		let _do_build = #"""
@@ -288,7 +288,7 @@ ci: inject & {
 			# Empty would let bake fall back to the default group and push everything.
 			[ -n "$targets" ] || { echo "ci-build: empty target closure for integrate" >&2; exit 1; }
 			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print $targets | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $targets
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print $targets | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $targets
 			"""#
 		let _do_run = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
