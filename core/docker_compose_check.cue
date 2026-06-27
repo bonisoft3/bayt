@@ -237,6 +237,51 @@ _d10_ci_has_bulk_copy: strings.Contains(_d10_ci_body, "COPY --from=d10-bayt --li
 // Additional context wires the bayt synthetic.
 _d10_dc: compose: files: ci: services: "d10-ci": build: additional_contexts: "d10-bayt": "service:d10-bayt"
 
+// --- D11: synthetic _srcs / _outs inherit the parent target's
+// cache-from / cache-to from #project.bake.cache (registry sugar),
+// re-scoped to their own suffixed tag (`build_srcs` / `build_outs`) so
+// they memoize separately instead of clobbering the parent `build` key.
+// Selecting the emitted list forces a "field not found" error if no
+// x-bake was emitted; the literal unification then pins the exact refs.
+_d11: #project & {
+	name: "d11"
+	dir:  "d11"
+	bake: cache: {type: "registry", registry: "reg.example/p", scope: "sc"}
+	targets: {
+		"build": {
+			srcs: globs: ["src/**"]
+			outs: globs: ["target/d11"]
+			cmd: "builtin": do: "cargo build"
+			dockerfile: busybox
+		}
+	}
+}
+_d11_dc: (#dockerComposeGen & {project: _d11, depManifests: {}})
+
+// Parent target keeps the bare `-build` tag.
+_d11_parent_from: _d11_dc.compose.files.build.services."d11-build".build."x-bake"."cache-from"
+_d11_parent_from: [
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-build",
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-build",
+]
+
+// _srcs synthetic inherits with the `_srcs` suffix (from + to).
+_d11_srcs_from: _d11_dc.compose.files.build_srcs.services."d11-build_srcs".build."x-bake"."cache-from"
+_d11_srcs_from: [
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-build_srcs",
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-build_srcs",
+]
+_d11_srcs_to: _d11_dc.compose.files.build_srcs.services."d11-build_srcs".build."x-bake"."cache-to"
+_d11_srcs_to: [
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-build_srcs,mode=min,image-manifest=true,oci-mediatypes=true",
+]
+
+// _outs synthetic inherits with the `_outs` suffix.
+_d11_outs_to: _d11_dc.compose.files.build_outs.services."d11-build_outs".build."x-bake"."cache-to"
+_d11_outs_to: [
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-build_outs,mode=min,image-manifest=true,oci-mediatypes=true",
+]
+
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
 	d1: _d1_dc
@@ -255,4 +300,8 @@ Tests: docker_compose: {
 	d9_bayt_scope:  _d9_bayt_scope
 	d10:            _d10_dc
 	d10_has_bulk_copy: _d10_ci_has_bulk_copy
+	d11_parent_from:   _d11_parent_from
+	d11_srcs_from:     _d11_srcs_from
+	d11_srcs_to:       _d11_srcs_to
+	d11_outs_to:       _d11_outs_to
 }

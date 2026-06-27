@@ -440,7 +440,7 @@ import (
 				if !_isSynth && d.name != "bayt" {
 					"COPY --from=\(d.project)-\(d.name) --link \(_bulkDest) \(_bulkDest)"
 				},
-				"COPY --from=\(d.project)-\(d.name)\(_excludeJ) --link --parents \(_globPaths) /",
+				"COPY --from=\(d.project)-\(d.name)\(_excludeJ) --parents \(_globPaths) /",
 			][0]
 		}
 		let _emitForDep = {
@@ -471,10 +471,10 @@ import (
 
 		// `--parents` preserves source path
 		// structure in the destination. Without it we'd have to emit
-		// `COPY --link src/**/*.kt ./src/**/*.kt` — the glob in the
+		// `COPY src/**/*.kt ./src/**/*.kt` — the glob in the
 		// destination breaks BuildKit ("lstat /src: no such file") and
 		// even when it doesn't, empty glob matches can fail. With
-		// --parents we emit `COPY --link --parents src/**/*.kt ./` and
+		// --parents we emit `COPY --parents src/**/*.kt ./` and
 		// BuildKit places matched files at their original paths while
 		// gracefully handling zero-match globs (e.g. libstoml has no
 		// *.java files — glob matches nothing, COPY succeeds silently).
@@ -493,7 +493,7 @@ import (
 		// cross-project dep instead of reaching across with `..`.
 		_srcCopies: [
 			if len(t.srcs.globs) > 0 {
-				"COPY --link --parents \(_excludeJoin)\(strings.Join(t.srcs.globs, " ")) ./"
+				"COPY --parents \(_excludeJoin)\(strings.Join(t.srcs.globs, " ")) ./"
 			},
 		]
 
@@ -535,8 +535,8 @@ import (
 			".bayt/init.gradle.kts",
 		]
 		_selfTaskfileCopies: [
-			"COPY --link Taskfile.yml ./Taskfile.yml",
-			"COPY --link \(strings.Join(_selfTaskfileSources, " ")) ./.bayt/",
+			"COPY Taskfile.yml ./Taskfile.yml",
+			"COPY \(strings.Join(_selfTaskfileSources, " ")) ./.bayt/",
 		]
 
 		// bayt-runtime COPY lines come through the standard `_copyLines` path:
@@ -545,7 +545,7 @@ import (
 		_incrementalCopies: list.Concat([
 			if t.dockerfile.incremental {[
 				for d in t.transitiveDeps if G._m.files[d] != _|_ {
-					"COPY --link .bayt/Taskfile.\(d).yaml .bayt/bayt.\(d).json ./.bayt/"
+					"COPY .bayt/Taskfile.\(d).yaml .bayt/bayt.\(d).json ./.bayt/"
 				},
 			]},
 			if !t.dockerfile.incremental {[]},
@@ -610,7 +610,7 @@ import (
 						let _cExcludeJ = [if len(_cExcludeFlags) > 0 {strings.Join(_cExcludeFlags, " ") + " "}, ""][0]
 						let _cCopy = [
 							if len(_cmdOnlyGlobs) > 0 {
-								"COPY --link --parents \(_cExcludeJ)\(strings.Join(_cmdOnlyGlobs, " ")) ./"
+								"COPY --parents \(_cExcludeJ)\(strings.Join(_cmdOnlyGlobs, " ")) ./"
 							},
 						]
 						list.Concat([_cCopy, [(_runLine & {"t": t, "c": c}).out]])
@@ -704,14 +704,17 @@ import (
 		_postRun: [if !t.dockerfile.incremental {_selfTaskfileCopies}, []][0]
 
 		// Structured COPY directives from t.dockerfile.copy. Each entry
-		// renders to one COPY line. --link defaults on (BuildKit overlay
-		// copies). For from-COPYs, the alias is computed from the entry:
+		// renders to one COPY line; --link is set by the _cLink rule
+		// below. For from-COPYs, the alias is computed from the entry:
 		// external uses from.name directly; internal uses the bayt
 		// target's qualified name (matching deps' aliasing).
 		_copyLine: {
 			c: _
 			out: string
-			let _cLink    = [if c.link {"--link "}, ""][0]
+			// --link only on a --from stage rebase (preserves source mtimes -> stable
+			// content-addressed output) and never with --parents (synthesizes parent
+			// dirs at build time -> output drifts -> --link cache reuse breaks).
+			let _cLink    = [if c.from != null if !c.parents {"--link "}, ""][0]
 			let _cChmod   = [if c.chmod != _|_ {"--chmod=\(c.chmod) "}, ""][0]
 			let _cChown   = [if c.chown != _|_ {"--chown=\(c.chown) "}, ""][0]
 			let _cParents = [if c.parents {"--parents "}, ""][0]
@@ -848,7 +851,7 @@ import (
 		_excludeJoin: [if len(_excludeFlags) > 0 {strings.Join(_excludeFlags, " ") + " "}, ""][0]
 		_srcCopy: [
 			if len(R.t.srcs.globs) > 0 {
-				"COPY --link --parents \(_excludeJoin)\(strings.Join(R.t.srcs.globs, " ")) ./"
+				"COPY --parents \(_excludeJoin)\(strings.Join(R.t.srcs.globs, " ")) ./"
 			},
 		]
 		// Skip same-project `:bayt` deps: the bayt synthetic is a project-
@@ -885,7 +888,7 @@ import (
 		_outsPaths: strings.Join([for g in R.t.outs.globs {"/monorepo/\(_dirPath)\(g)"}], " ")
 		_copy: [
 			if len(R.t.outs.globs) > 0 {
-				"COPY --from=\(R.t.project)-\(R.t.name)\(_excludeJoin) --link --parents \(_outsPaths) /"
+				"COPY --from=\(R.t.project)-\(R.t.name)\(_excludeJoin) --parents \(_outsPaths) /"
 			},
 		]
 		_lines: [
@@ -937,7 +940,7 @@ import (
 		_lines: [
 			"FROM scratch AS bayt",
 			"WORKDIR \(_workdir)",
-			"COPY --link --parents .bayt/** [T]askfile.y[m]l [T]askfile.y[a]ml [c]ompose.y[m]l [c]ompose.y[a]ml [d]ocker-compose.y[m]l [d]ocker-compose.y[a]ml ./",
+			"COPY --parents .bayt/** [T]askfile.y[m]l [T]askfile.y[a]ml [c]ompose.y[m]l [c]ompose.y[a]ml [d]ocker-compose.y[m]l [d]ocker-compose.y[a]ml ./",
 			for l in _depCopies {l},
 		]
 		out: string
@@ -987,7 +990,7 @@ import (
 				"",
 			][0]
 			// Build block: context is one up from .bayt/ (= project root)
-			// so `COPY --link src/...` in the Dockerfile reaches real files.
+			// so `COPY src/...` in the Dockerfile reaches real files.
 			build: {
 				context:    ".."
 				dockerfile: ".bayt/Dockerfile.\(n)"
@@ -1302,6 +1305,18 @@ import (
 					}
 				}
 			}
+			if G.project.bake != _|_ {
+				// Inherit the parent's cache at this synthetic's suffixed tag.
+				let _r = (#bakeCacheRefs & {c: G.project.bake.cache, t: S.n})
+				build: "x-bake": {
+					if len(_r.from) > 0 {"cache-from": _r.from}
+					if len(_r.to) > 0 {"cache-to": _r.to}
+				}
+				// Budget guard kept here (see #bakeCacheRefs).
+				if G.project.bake.cache.type == "registry" {
+					_cacheTagBudgetOK: true & (len(G.project.bake.cache.scope)+len(S.n)+66 <= 128)
+				}
+			}
 			image: "bayt-\(_svc):latest"
 		}
 	}
@@ -1320,6 +1335,18 @@ import (
 				target:     S.n
 				additional_contexts: {
 					(_parent): "service:\(_parent)"
+				}
+			}
+			if G.project.bake != _|_ {
+				// Inherit the parent's cache at this synthetic's suffixed tag.
+				let _r = (#bakeCacheRefs & {c: G.project.bake.cache, t: S.n})
+				build: "x-bake": {
+					if len(_r.from) > 0 {"cache-from": _r.from}
+					if len(_r.to) > 0 {"cache-to": _r.to}
+				}
+				// Budget guard kept here (see #bakeCacheRefs).
+				if G.project.bake.cache.type == "registry" {
+					_cacheTagBudgetOK: true & (len(G.project.bake.cache.scope)+len(S.n)+66 <= 128)
 				}
 			}
 			image: "bayt-\(_svc):latest"

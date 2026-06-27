@@ -759,6 +759,56 @@ noop: #cmd & {
 }
 
 // =============================================================================
+// #bakeCacheRefs resolves cache-from / cache-to ref lists for one bake
+// tag from #project.bake.cache sugar. Shared by the per-target loop and
+// the synthetic _srcs/_outs emitters so a target and its synthetics get
+// identical refs differing only by the tag (siblings never clobber each
+// other). The tag-length guard must stay at each call site: a hidden
+// guard in this let-bound helper is not validated.
+// =============================================================================
+#bakeCacheRefs: X={
+	c: _ // #project.bake.cache sugar
+	t: string
+	from: [
+		if len(X.c.from) > 0 {X.c.from},
+		if X.c.type == _|_ {[]},
+		if X.c.type == "gha" {[
+			"type=gha,scope=main-\(X.t)",
+			"type=gha,scope=\(X.c.scope)-\(X.t)",
+		]},
+		if X.c.type == "registry" {[
+			// CACHE_SCOPE — branch + builder identity (engine, frontend,
+			// platform) of whichever builder runs THIS bake, composed
+			// host-side by sayt (dind.nu for local builders, the sayt/depot
+			// action for depot) and interpolated here by compose. bayt only
+			// transports it into dindbox sandboxes via the env-sourced
+			// cache_scope secret — never derive it in-sandbox.
+			// CACHE_SCOPE_FALLBACK is the same identity at main: branches
+			// read their own scope first, then main's, so PRs never pollute
+			// main's writes. The `unscoped` default quarantines invocations
+			// outside the sayt env plumbing — they collide only with each
+			// other, and mismatched reads degrade to graceful chain-ID misses.
+			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE:-unscoped}-\(X.t)",
+			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(X.t)",
+		]},
+	][0]
+	to: [
+		if len(X.c.to) > 0 {X.c.to},
+		if X.c.type == _|_ {[]},
+		if X.c.type == "gha" {[
+			// mode=min, matching the registry recipe: every bayt stage is its
+			// own target with its own cache-to, so per-target min already
+			// covers what max would on a monolith — without the extra layer
+			// descriptors.
+			"type=gha,mode=min,scope=\(X.c.scope)-\(X.t)",
+		]},
+		if X.c.type == "registry" {[
+			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE:-unscoped}-\(X.t),mode=min,image-manifest=true,oci-mediatypes=true",
+		]},
+	][0]
+}
+
+// =============================================================================
 // #target — the build unit.
 //
 // Identity (name, project) is bound by the enclosing #project. Everything
@@ -994,49 +1044,10 @@ noop: #cmd & {
 			if _c.type == "registry" {
 				_cacheTagBudgetOK: true & (len(_c.scope)+len(_t)+66 <= 128)
 			}
+			let _refs = (#bakeCacheRefs & {c: _c, t: _t})
 			bake: cache: {
-				from: [
-					if len(_c.from) > 0 {_c.from},
-					if _c.type == _|_ {[]},
-					if _c.type == "gha" {[
-						"type=gha,scope=main-\(_t)",
-						"type=gha,scope=\(_c.scope)-\(_t)",
-					]},
-					if _c.type == "registry" {[
-						// CACHE_SCOPE — branch + builder identity
-						// (engine, frontend, platform) of whichever
-						// builder runs THIS bake, composed host-side by
-						// sayt (dind.nu for local builders, the
-						// sayt/depot action for depot) and interpolated
-						// here by compose. bayt only transports it into
-						// dindbox sandboxes via the env-sourced
-						// cache_scope secret — never derive it
-						// in-sandbox. CACHE_SCOPE_FALLBACK is the same
-						// identity at main: branches read their own
-						// scope first, then main's, so PRs never
-						// pollute main's writes. The `unscoped` default
-						// quarantines invocations outside the sayt env
-						// plumbing — they collide only with each other,
-						// and mismatched reads degrade to graceful
-						// chain-ID misses.
-						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE:-unscoped}-\(_t)",
-						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(_t)",
-					]},
-				][0]
-				to: [
-					if len(_c.to) > 0 {_c.to},
-					if _c.type == _|_ {[]},
-					if _c.type == "gha" {[
-						// mode=min, matching the registry recipe: every bayt
-						// stage is its own target with its own cache-to, so
-						// per-target min already covers what max would on a
-						// monolith — without the extra layer descriptors.
-						"type=gha,mode=min,scope=\(_c.scope)-\(_t)",
-					]},
-					if _c.type == "registry" {[
-						"type=registry,ref=\(_c.registry):\(_c.scope)-${CACHE_SCOPE:-unscoped}-\(_t),mode=min,image-manifest=true,oci-mediatypes=true",
-					]},
-				][0]
+				from: _refs.from
+				to:   _refs.to
 			}
 		}
 	}) | null
