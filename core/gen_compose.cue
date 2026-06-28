@@ -845,9 +845,13 @@ import (
 	// dep's _srcs already contains its own transitive chain). Both
 	// same- and cross-project deps participate.
 	_renderSyntheticSrcs: R={
-		t:        _
-		_workdir: (_syntheticWorkdir & {dir: R.t.dir}).out
-		_stage:   "\(R.t.name)_srcs"
+		t:          _
+		_workdir:   (_syntheticWorkdir & {dir: R.t.dir}).out
+		_stage:     "\(R.t.name)_srcs"
+		// Shared (not project-qualified) on purpose: per-project ctxs names
+		// destabilise the outer bake cache key on deep graphs. See
+		// docs/bayt-synthetic-digest-investigation.md.
+		_ctxsStage: "\(R.t.name)_ctxs"
 		_excludeFlags: [for e in R.t.srcs.exclude {"--exclude=\(e)"}]
 		_excludeJoin: [if len(_excludeFlags) > 0 {strings.Join(_excludeFlags, " ") + " "}, ""][0]
 		_srcCopy: [
@@ -855,21 +859,35 @@ import (
 				"COPY --parents \(_excludeJoin)\(strings.Join(R.t.srcs.globs, " ")) ./"
 			},
 		]
-		// Skip same-project `:bayt` deps: the bayt synthetic is a project-
-		// level scratch image with no `_srcs` variant. Emitting
-		// `<proj>-bayt_srcs` would reference a non-existent service.
+		// Skip same-project `:bayt` deps: the bayt synthetic has no `_srcs`
+		// variant, so `<proj>-bayt_srcs` would reference a missing service.
+		// Non-link: the clamp below normalises mtimes anyway, and a `--link`
+		// cross-stage copy re-synthesises the dest parent chain.
 		_depCopies: [
 			for d in R.t.chainedDeps
 			if d.name != "bayt"
 			if (_depHasSrcs & {"d": d}).out {
-				"COPY --link --from=\(d.project)-\(d.name)_srcs /monorepo /monorepo"
+				"COPY --from=\(d.project)-\(d.name)_srcs /monorepo /monorepo"
 			},
 		]
+		// Two stages. `_ctxs` (a local stage, not a compose service) is the
+		// sole disk reader: it assembles the source closure and clamps all
+		// mtimes to SOURCE_DATE_EPOCH, since buildkit leaves implicitly-created
+		// dirs at build time and the digest would otherwise float. The
+		// `FROM scratch` flatten collapses the result into one reproducible
+		// layer, giving `_srcs` a stable digest for service-graph dedup; an
+		// inline normalise can't (the underlying COPY layers still float).
+		// busybox `find` lacks `-newermt`, hence the reference-file clamp.
+		// See docs/bayt-synthetic-digest-investigation.md.
 		_lines: [
-			"FROM scratch AS \(_stage)",
+			"FROM \(lock.images.busybox) AS \(_ctxsStage)",
 			"WORKDIR \(_workdir)",
 			for l in _srcCopy {l},
 			for l in _depCopies {l},
+			"ARG SOURCE_DATE_EPOCH",
+			"RUN touch -hd @${SOURCE_DATE_EPOCH:-0} /tmp/ref && find /monorepo -newer /tmp/ref -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && rm /tmp/ref",
+			"FROM scratch AS \(_stage)",
+			"COPY --from=\(_ctxsStage) /monorepo /monorepo",
 		]
 		out: string
 		out: strings.Join(_lines, "\n") + "\n"
@@ -933,16 +951,23 @@ import (
 	// closure of these three filesets in a single bulk-COPY.
 	_renderSyntheticBayt: {
 		_workdir: (_syntheticWorkdir & {dir: G.project.dir}).out
+		_baytCtxs: "bayt_ctxs"
 		_depCopies: [
 			for p in _baytCrossProjects {
-				"COPY --link --from=\(p)-bayt /monorepo /monorepo"
+				"COPY --from=\(p)-bayt /monorepo /monorepo"
 			},
 		]
+		// Same `_ctxs`→flatten dance as _renderSyntheticSrcs (see there), over
+		// the scaffolding filesets + cross-project bayt closures.
 		_lines: [
-			"FROM scratch AS bayt",
+			"FROM \(lock.images.busybox) AS \(_baytCtxs)",
 			"WORKDIR \(_workdir)",
 			"COPY --parents .bayt/** [T]askfile.y[m]l [T]askfile.y[a]ml [c]ompose.y[m]l [c]ompose.y[a]ml [d]ocker-compose.y[m]l [d]ocker-compose.y[a]ml ./",
 			for l in _depCopies {l},
+			"ARG SOURCE_DATE_EPOCH",
+			"RUN touch -hd @${SOURCE_DATE_EPOCH:-0} /tmp/ref && find /monorepo -newer /tmp/ref -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && rm /tmp/ref",
+			"FROM scratch AS bayt",
+			"COPY --from=\(_baytCtxs) /monorepo /monorepo",
 		]
 		out: string
 		out: strings.Join(_lines, "\n") + "\n"
@@ -1306,18 +1331,8 @@ import (
 					}
 				}
 			}
-			if G.project.bake != _|_ {
-				// Inherit the parent's cache at this synthetic's suffixed tag.
-				let _r = (#bakeCacheRefs & {c: G.project.bake.cache, t: S.n})
-				build: "x-bake": {
-					if len(_r.from) > 0 {"cache-from": _r.from}
-					if len(_r.to) > 0 {"cache-to": _r.to}
-				}
-				// Budget guard kept here (see #bakeCacheRefs).
-				if G.project.bake.cache.type == "registry" {
-					_cacheTagBudgetOK: true & (len(G.project.bake.cache.scope)+len(S.n)+66 <= 128)
-				}
-			}
+			// No x-bake cache: registry-caching this synthetic cascades the
+			// consuming build. See docs/bayt-synthetic-digest-investigation.md.
 			image: "bayt-\(_svc):latest"
 		}
 	}
@@ -1338,18 +1353,7 @@ import (
 					(_parent): "service:\(_parent)"
 				}
 			}
-			if G.project.bake != _|_ {
-				// Inherit the parent's cache at this synthetic's suffixed tag.
-				let _r = (#bakeCacheRefs & {c: G.project.bake.cache, t: S.n})
-				build: "x-bake": {
-					if len(_r.from) > 0 {"cache-from": _r.from}
-					if len(_r.to) > 0 {"cache-to": _r.to}
-				}
-				// Budget guard kept here (see #bakeCacheRefs).
-				if G.project.bake.cache.type == "registry" {
-					_cacheTagBudgetOK: true & (len(G.project.bake.cache.scope)+len(S.n)+66 <= 128)
-				}
-			}
+			// No x-bake cache: pure FROM-scratch COPY synthetic (see _srcs/_bayt).
 			image: "bayt-\(_svc):latest"
 		}
 	}
@@ -1373,6 +1377,7 @@ import (
 					}
 				}
 			}
+			// No x-bake cache (see _syntheticSrcsService).
 			image: "bayt-\(_svc):latest"
 		}
 	}
