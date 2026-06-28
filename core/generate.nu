@@ -136,7 +136,7 @@ def _inject-runtime [content: string, base: string]: nothing -> string {
 def _inject-dockerfile-runtime [content: string]: nothing -> string {
 	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
 	if ($runtime_dir | is-empty) { return $content }
-	$content | str replace --regex --all '(COPY --link --from=bayt) runtime ' '$1 . '
+	$content | str replace --regex --all '(COPY (?:--link )?--from=bayt) runtime ' '$1 . '
 }
 
 # Rewrite `bayt <subcommand>` invocations in Taskfile YAML to the
