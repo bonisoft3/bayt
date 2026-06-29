@@ -9,7 +9,11 @@
 // (#MapAsList / #MapToList). No string-keyed indirection, no inherits:.
 package bayt
 
-import "strings"
+import (
+	"strings"
+	"crypto/sha256"
+	"encoding/hex"
+)
 
 // #MapAsList / #MapToList live in mapaslist.cue.
 // _uniqStrings (and other list comprehensions) live in listutils.cue.
@@ -769,6 +773,10 @@ noop: #cmd & {
 #bakeCacheRefs: X={
 	c: _ // #project.bake.cache sugar
 	t: string
+	// cache-to mode. Use "min": bayt models the full dependency graph, so min
+	// exports every modelled stage. Use "max" only for local dependencies bayt
+	// cannot see — an intermediate stage that is not its own modelled target.
+	mode: *"min" | "max"
 	from: [
 		if len(X.c.from) > 0 {X.c.from},
 		if X.c.type == _|_ {[]},
@@ -796,15 +804,28 @@ noop: #cmd & {
 		if len(X.c.to) > 0 {X.c.to},
 		if X.c.type == _|_ {[]},
 		if X.c.type == "gha" {[
-			// mode=min, matching the registry recipe: every bayt stage is its
-			// own target with its own cache-to, so per-target min already
-			// covers what max would on a monolith — without the extra layer
-			// descriptors.
-			"type=gha,mode=min,scope=\(X.c.scope)-\(X.t)",
+			"type=gha,mode=\(X.mode),scope=\(X.c.scope)-\(X.t)",
 		]},
 		if X.c.type == "registry" {[
-			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE:-unscoped}-\(X.t),mode=min,image-manifest=true,oci-mediatypes=true",
+			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE:-unscoped}-\(X.t),mode=\(X.mode),image-manifest=true,oci-mediatypes=true",
 		]},
+	][0]
+}
+
+// #cacheTagSeg bounds segment `t` so the full `<scope>-${CACHE_SCOPE}-<t>` tag
+// stays under Docker's 128-char cap. CACHE_SCOPE is host-bounded to ≤64, so the
+// budget is 62 − len(scope). Over budget, collapse to a budget-filling name
+// prefix + 8 bytes (16 hex) of the full name's sha256 for uniqueness — keeping
+// as much of the readable name as fits rather than truncating hard.
+#cacheTagSeg: X={
+	in:     string
+	scope:  string
+	_max:   62 - len(X.scope)
+	_hash:  16 // hex chars = 8 bytes of sha256
+	_slug:  X._max - 1 - X._hash
+	out: [
+		if len(X.in) <= X._max {X.in},
+		strings.SliceRunes(X.in, 0, X._slug) + "-" + strings.SliceRunes(hex.Encode(sha256.Sum256(X.in)), 0, X._hash),
 	][0]
 }
 

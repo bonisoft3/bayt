@@ -1295,12 +1295,31 @@ import (
 	}
 
 	// =========================================================================
-	// Synthetic-stage compose service helpers. Minimal: just the build
-	// block + image tag. No runtime fields (image/command/env/...), no
-	// x-bake (synthetics have no `bake.image`, gen_bake.cue skips them
-	// naturally), no secrets. additional_contexts wires the COPY --from
-	// refs each stage needs.
+	// Synthetic-stage compose service helpers. The build block + image tag +
+	// per-target x-bake cache. No runtime fields (image/command/env/...), no
+	// secrets. additional_contexts wires the COPY --from refs each stage needs.
 	// =========================================================================
+
+	// _xbakeCache: a synthetic's x-bake cache block — a project-qualified,
+	// length-bounded tag (so each synthetic under a shared scope is distinct) at
+	// the caller's cache-to mode.
+	_xbakeCache: X={
+		svc:  string
+		mode: *"min" | "max"
+		out: {
+			if G.project.bake != _|_ {
+				let _r = (#bakeCacheRefs & {
+					c:    G.project.bake.cache
+					t:    (#cacheTagSeg & {in: X.svc, scope: G.project.bake.cache.scope}).out
+					mode: X.mode
+				})
+				"x-bake": {
+					if len(_r.from) > 0 {"cache-from": _r.from}
+					if len(_r.to) > 0 {"cache-to": _r.to}
+				}
+			}
+		}
+	}
 
 	// T_srcs service: pulls from each direct dep's _srcs image via
 	// additional_contexts. Transitive content flows through each dep's
@@ -1331,8 +1350,7 @@ import (
 					}
 				}
 			}
-			// No x-bake cache: registry-caching this synthetic cascades the
-			// consuming build. See docs/bayt-synthetic-digest-investigation.md.
+			build: (_xbakeCache & {svc: _svc, mode: "max"}).out
 			image: "bayt-\(_svc):latest"
 		}
 	}
@@ -1353,7 +1371,7 @@ import (
 					(_parent): "service:\(_parent)"
 				}
 			}
-			// No x-bake cache: pure FROM-scratch COPY synthetic (see _srcs/_bayt).
+			build: (_xbakeCache & {svc: _svc}).out
 			image: "bayt-\(_svc):latest"
 		}
 	}
@@ -1377,7 +1395,7 @@ import (
 					}
 				}
 			}
-			// No x-bake cache (see _syntheticSrcsService).
+			build: (_xbakeCache & {svc: _svc, mode: "max"}).out
 			image: "bayt-\(_svc):latest"
 		}
 	}

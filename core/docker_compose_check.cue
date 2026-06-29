@@ -265,31 +265,33 @@ _d11_parent_from: [
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-build",
 ]
 
-// No synthetic carries x-bake cache (only the parent compute target does):
-// registry-caching a synthetic cascades the consuming build. close() each
-// build so a re-added x-bake fails the test. See
-// docs/bayt-synthetic-digest-investigation.md.
-_d11_srcs_nocache: _d11_dc.compose.files.build_srcs.services."d11-build_srcs".build
-_d11_srcs_nocache: close({
-	context!:             string
-	dockerfile!:          string
-	target!:              string
-	additional_contexts?: _
-})
-_d11_outs_nocache: _d11_dc.compose.files.build_outs.services."d11-build_outs".build
-_d11_outs_nocache: close({
-	context!:             string
-	dockerfile!:          string
-	target!:              string
-	additional_contexts?: _
-})
-_d11_bayt_nocache: _d11_dc.compose.files._bayt.services."d11-bayt".build
-_d11_bayt_nocache: close({
-	context!:             string
-	dockerfile!:          string
-	target!:              string
-	additional_contexts?: _
-})
+// Each synthetic's x-bake cache tag is keyed by its project-qualified service
+// name (`d11-build_srcs`), so synthetics under a cache scope shared across
+// projects each get a distinct tag.
+_d11_srcs_from: _d11_dc.compose.files.build_srcs.services."d11-build_srcs".build."x-bake"."cache-from"
+_d11_srcs_from: [
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_srcs",
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-build_srcs",
+]
+_d11_outs_from: _d11_dc.compose.files.build_outs.services."d11-build_outs".build."x-bake"."cache-from"
+_d11_outs_from: [
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs",
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-build_outs",
+]
+_d11_bayt_from: _d11_dc.compose.files."_bayt".services."d11-bayt".build."x-bake"."cache-from"
+_d11_bayt_from: [
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-bayt",
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-bayt",
+]
+
+// cache-to mode: max for synthetics that flatten an unmodelled `_ctxs`
+// intermediate (_srcs, _bayt), min for the single-stage _outs.
+_d11_srcs_to: _d11_dc.compose.files.build_srcs.services."d11-build_srcs".build."x-bake"."cache-to"
+_d11_srcs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_srcs,mode=max,image-manifest=true,oci-mediatypes=true"]
+_d11_outs_to: _d11_dc.compose.files.build_outs.services."d11-build_outs".build."x-bake"."cache-to"
+_d11_outs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs,mode=min,image-manifest=true,oci-mediatypes=true"]
+_d11_bayt_to: _d11_dc.compose.files."_bayt".services."d11-bayt".build."x-bake"."cache-to"
+_d11_bayt_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-bayt,mode=max,image-manifest=true,oci-mediatypes=true"]
 
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
@@ -310,7 +312,10 @@ Tests: docker_compose: {
 	d10:            _d10_dc
 	d10_has_bulk_copy: _d10_ci_has_bulk_copy
 	d11_parent_from:   _d11_parent_from
-	d11_srcs_nocache:  _d11_srcs_nocache
-	d11_outs_nocache:  _d11_outs_nocache
-	d11_bayt_nocache:  _d11_bayt_nocache
+	d11_srcs_from:     _d11_srcs_from
+	d11_outs_from:     _d11_outs_from
+	d11_bayt_from:     _d11_bayt_from
+	d11_srcs_to:       _d11_srcs_to
+	d11_outs_to:       _d11_outs_to
+	d11_bayt_to:       _d11_bayt_to
 }
