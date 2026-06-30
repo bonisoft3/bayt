@@ -54,7 +54,7 @@ import (
 	// the naming convention for user targets. Empty-srcs targets emit
 	// no _srcs image (a zero-COPY scratch is useless); same for empty
 	// outs.
-	_srcsEmit: {for n, t in _emit if len(t.srcs.globs) > 0 {"\(n)_srcs": t}}
+	_srcsEmit: {for n, t in _emit if t.emitsSrcs {"\(n)_srcs": t}}
 	_outsEmit: {for n, t in _emit if len(t.outs.globs) > 0 {"\(n)_outs": t}}
 
 	// Depth of project.dir so we can walk back to the monorepo root from
@@ -820,19 +820,21 @@ import (
 		][0]
 	}
 
-	// Predicate: does this dep have a non-empty srcs.globs? Used to gate
-	// `COPY --from=<dep>_srcs` emission (would fail at build time if the
-	// dep's _srcs stage doesn't exist). Nested guards rather than `&&`
-	// because CUE's `&&` doesn't short-circuit — `_dm != _|_ &&
-	// len(_dm.srcs.globs) > 0` poisons the whole expression with `_|_`
-	// when _dm is bottom.
+	// Gates `COPY --from=<dep>_srcs` (the stage must exist): the dep manifest's
+	// `emitsSrcs` field. Nested guards, not `&&` — CUE's `&&` doesn't
+	// short-circuit, so `_dm != _|_ && _dm.emitsSrcs` poisons to `_|_`.
 	_depHasSrcs: D={
 		d:   _
 		out: bool
 		let _dm = (_depManifest & {"d": D.d}).out
 		out: [
 			if _dm != _|_ {[
-				if len(_dm.srcs.globs) > 0 {true},
+				// A cross manifest may lack the field (stale on-disk regen);
+				// `!= _|_` treats that as false.
+				if _dm.emitsSrcs != _|_ {[
+					if _dm.emitsSrcs {true},
+					false,
+				][0]},
 				false,
 			][0]},
 			false,
@@ -973,24 +975,19 @@ import (
 		out: strings.Join(_lines, "\n") + "\n"
 	}
 
-	// Per-target Dockerfile bodies (user targets + synthetics).
+	// Per-target Dockerfile bodies. A target's `<n>_srcs`/`<n>_outs` are
+	// appended as extra `FROM` stages in Dockerfile.<n> (compose services point
+	// distinct `target:` at them). Plain concatenation is valid only because no
+	// `# syntax=` line is emitted (see above) — don't add one. The project
+	// `bayt` synthetic is its own Dockerfile.bayt.
 	dockerfiles: {
 		for n, t in _emit {
-			(n): (_renderDockerfile & {"t": t}).out
+			(n): (_renderDockerfile & {"t": t}).out +
+				[if t.emitsSrcs {"\n" + (_renderSyntheticSrcs & {"t": t}).out}, ""][0] +
+				[if len(t.outs.globs) > 0 {"\n" + (_renderSyntheticOuts & {"t": t}).out}, ""][0]
 		}
-		for n, t in _srcsEmit {
-			(n): (_renderSyntheticSrcs & {"t": t}).out
-		}
-		for n, t in _outsEmit {
-			(n): (_renderSyntheticOuts & {"t": t}).out
-		}
-		// `_bayt` (leading underscore) avoids colliding with the
-		// federation root file path `compose.bayt.yaml` — Dockerfile.bayt
-		// would be technically free but we keep the leading-underscore
-		// convention so all synthetic file names cluster together.
-		// Gated on `_emit` being non-empty (same rule as compose.files).
 		if len(_emit) > 0 {
-			"_bayt": _renderSyntheticBayt.out
+			"bayt": _renderSyntheticBayt.out
 		}
 	}
 
@@ -1339,8 +1336,9 @@ import (
 		]
 		out: {
 			build: {
-				context:    ".."
-				dockerfile: ".bayt/Dockerfile.\(S.n)"
+				context: ".."
+				// `<n>_srcs` stage lives in the parent target's Dockerfile.
+				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
 				if len(_depCtxEntries) > 0 {
 					additional_contexts: {
@@ -1364,8 +1362,9 @@ import (
 		_parent: "\(S.t.project)-\(S.t.name)"
 		out: {
 			build: {
-				context:    ".."
-				dockerfile: ".bayt/Dockerfile.\(S.n)"
+				context: ".."
+				// `<n>_outs` stage lives in the parent target's Dockerfile.
+				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
 				additional_contexts: {
 					(_parent): "service:\(_parent)"
@@ -1385,7 +1384,7 @@ import (
 		out: {
 			build: {
 				context:    ".."
-				dockerfile: ".bayt/Dockerfile._bayt"
+				dockerfile: ".bayt/Dockerfile.bayt"
 				target:     "bayt"
 				if len(_baytCrossProjects) > 0 {
 					additional_contexts: {
@@ -1408,14 +1407,25 @@ import (
 		files: {
 			for n, t in _emit {
 				(n): {
-					// Fragment: service only, no includes — so the federation
-					// root (which lists every fragment) stays a flat tree and
-					// `docker compose config` doesn't re-expand a dense include
-					// graph (compose-go's ApplyInclude has no dedup; nested
-					// includes cost is per-path, i.e. exponential). Standalone
-					// loadability lives in the sibling compose.<n>.self.yaml.
+					// Fragment: the target's service plus its `<n>_srcs` /
+					// `<n>_outs` services (each a distinct `target:` into
+					// Dockerfile.<n>). No includes — the federation root stays a
+					// flat tree; compose-go's ApplyInclude has no dedup, so
+					// nested includes cost per-path (exponential).
 					let svc = (_svcName & {pn: t.project, tn: n}).out
-					services: (svc): (_service & {"n": n, "t": t}).out
+					// `let` the names: inside `{n: "\(n)_srcs"}` the `\(n)` would
+					// bind the struct's own `n` field (CUE scoping) → cycle.
+					let _srcsName = "\(n)_srcs"
+					let _outsName = "\(n)_outs"
+					services: {
+						(svc): (_service & {"n": n, "t": t}).out
+						if t.emitsSrcs {
+							"\(t.project)-\(_srcsName)": (_syntheticSrcsService & {n: _srcsName, "t": t}).out
+						}
+						if len(t.outs.globs) > 0 {
+							"\(t.project)-\(_outsName)": (_syntheticOutsService & {n: _outsName, "t": t}).out
+						}
+					}
 
 					if len(t.dockerfile.secrets) > 0 {
 						secrets: {
@@ -1438,35 +1448,8 @@ import (
 				}
 			}
 
-			// Synthetic compose service files: one each per emitted _srcs /
-			// _outs (per target), plus one per-project `_bayt`. File names
-			// match the dockerfiles map keys (compose.<key>.yaml).
-			for n, t in _srcsEmit {
-				(n): {
-					let svc = "\(t.project)-\(n)"
-					services: (svc): (_syntheticSrcsService & {"n": n, "t": t}).out
-
-				}
-			}
-			for n, t in _outsEmit {
-				(n): {
-					let svc = "\(t.project)-\(n)"
-					services: (svc): (_syntheticOutsService & {"n": n, "t": t}).out
-
-				}
-			}
-			// Leading underscore avoids colliding with the federation
-			// root filename `compose.bayt.yaml`. Gated on `_emit` being
-			// non-empty: a project with no dockerfile-emitting targets
-			// has no consumers that would ever reach its scaffolding via
-			// cross-stage COPY, so skip the synthetic.
-			if len(_emit) > 0 {
-				"_bayt": {
-					let svc = "\(G.project.name)-bayt"
-					services: (svc): _syntheticBaytService.out
-
-				}
-			}
+			// (Synthetic services live in their parent fragment; the bayt
+			// service in bayt_root. No per-synthetic fragments.)
 
 			// Per-target closure: the standalone build graph for one target, e.g.
 			// `docker compose -f .bayt/compose.<T>.closure.yaml bake <svc>`.
@@ -1517,29 +1500,29 @@ import (
 					}],
 				])
 			}
-			// _srcs dep set must mirror _syntheticSrcsService's additional_contexts.
+			// Mirror _syntheticSrcsService's additional_contexts. First include
+			// is the parent fragment (compose.<t.name>.yaml) — it holds the
+			// `<n>_srcs` service.
 			for n, t in _srcsEmit {
 				"\(n).closure": include: list.Concat([
-					[{path: "./compose.\(n).yaml", required: false}],
+					[{path: "./compose.\(t.name).yaml", required: false}],
 					[for d in t.chainedDeps if d.name != "bayt" if (_depHasSrcs & {"d": d}).out {
 						(_closureInc & {dir: d.dir, fname: "\(d.name)_srcs"}).out
 					}],
 				])
 			}
-			// _outs references only its parent target (same project).
+			// _outs references only its parent (same project); the parent
+			// fragment also holds the `<n>_outs` service.
 			for n, t in _outsEmit {
 				"\(n).closure": include: [
-					{path: "./compose.\(n).yaml", required: false},
+					{path: "./compose.\(t.name).yaml", required: false},
 					(_closureInc & {dir: t.dir, fname: t.name}).out,
 				]
 			}
+			// The bayt service lives in the federation root (which already
+			// cross-includes every dep's bayt_root) — so its closure is that root.
 			if len(_emit) > 0 {
-				"_bayt.closure": include: list.Concat([
-					[{path: "./compose._bayt.yaml", required: false}],
-					[for dir in G._m.projectManifest.crossProjectDirs {
-						(_closureInc & {"dir": dir, fname: "_bayt"}).out
-					}],
-				])
+				"_bayt.closure": include: [{path: "./compose.bayt.yaml", required: false}]
 			}
 		}
 
@@ -1551,12 +1534,9 @@ import (
 		// No `integrate` filter on the cross-include either: integrate is a graph
 		// sink, and sibling integrates share the sayt compose resources and merge.
 		bayt_root: {
-			let _localIncludes = list.Concat([
-				[for n, _ in _emit {{path: "./compose.\(n).yaml", required: false}}],
-				[for n, _ in _srcsEmit {{path: "./compose.\(n).yaml", required: false}}],
-				[for n, _ in _outsEmit {{path: "./compose.\(n).yaml", required: false}}],
-				[if len(_emit) > 0 {{path: "./compose._bayt.yaml", required: false}}],
-			])
+			// One include per parent fragment; each carries its target's
+			// service plus its `_srcs`/`_outs` services.
+			let _localIncludes = [for n, _ in _emit {{path: "./compose.\(n).yaml", required: false}}]
 			let _crossIncludes = [
 				for dep in G._m.projectManifest.crossProjectDirs {
 					(_includeEntry & {ownDir: G.project.dir, depDir: dep, file: "bayt"}).out
@@ -1567,6 +1547,12 @@ import (
 				include: _allIncludes
 			}
 
+			// The bayt synthetic service lives inline in the federation root.
+			// Its additional_contexts wire each cross-project `<dep>-bayt`
+			// service, resolved through the cross-project bayt_root includes.
+			if len(_emit) > 0 {
+				services: "\(G.project.name)-bayt": _syntheticBaytService.out
+			}
 		}
 
 		// User root: federation root + one short-name `extends` alias per local

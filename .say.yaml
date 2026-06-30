@@ -29,9 +29,10 @@ say:
     do: "nu tests/test-bayt.nu"
   test:
     do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu"
-  # integrate adds the docker-backed cache-hit test (needs a docker daemon).
+  # integrate adds the docker-backed integration tests (need a docker daemon):
+  # the cache-hit guard and the diamond-dedup ("expensive bottom runs once") guard.
   integrate:
-    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu ; nu tests/cache_hit_integration_test.nu"
+    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu ; nu tests/cache_hit_integration_test.nu ; nu tests/diamond_dedup_integration_test.nu"
   launch:
     do: "true"
   release:

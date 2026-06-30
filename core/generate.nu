@@ -175,10 +175,13 @@ def write-bundle [bundle: record, base: string] {
 	}
 	mkdir $bayt_dir
 
-	# --- canonical per-target manifests
+	# --- canonical per-target manifests. Synthetics nest under
+	# `.synthetics.{srcs,outs}`; uniq the nested srcs transitiveDeps (outs has none).
 	for entry in ($bundle.manifest.files | transpose name data) {
-		let data = $entry.data
-			| update transitiveDeps {|it| $it.transitiveDeps | uniq}
+		mut data = ($entry.data | update transitiveDeps {|it| $it.transitiveDeps | uniq})
+		if (($data | get --optional synthetics | get --optional srcs) != null) {
+			$data = ($data | update synthetics.srcs.transitiveDeps {|it| $it.synthetics.srcs.transitiveDeps | uniq})
+		}
 		atomic-write $"($prefix).bayt/bayt.($entry.name).json" (_json-header $data | to json --indent 2)
 	}
 
@@ -308,30 +311,43 @@ def cross-dep-strings [targets: record] {
 #                  file is absent (used for auto-derived `:srcs` variants
 #                  that may not exist if the upstream target has no srcs)
 #
-# Two- and three-segment ref support:
-#   "proj:foo"        → target = "foo"        → bayt.foo.json
-#   "proj:foo:srcs"   → target = "foo_srcs"   → bayt.foo_srcs.json
-#   "proj:foo:outs"   → target = "foo_outs"   → bayt.foo_outs.json
-#   "proj:bayt"       → target = "bayt"       → bayt.bayt.json (project synth)
+# Resolve a dep ref to its manifest. The file is the SECOND ref segment; a
+# third segment (srcs/outs) indexes into `.synthetics.<view>`:
+#   "proj:foo"        → bayt.foo.json                (whole entry)
+#   "proj:foo:srcs"   → bayt.foo.json .synthetics.srcs
+#   "proj:foo:outs"   → bayt.foo.json .synthetics.outs
+#   "proj:bayt"       → bayt.bayt.json
 #
-# The view suffix (srcs/outs) joins with the target name via underscore
-# so the on-disk file matches the synthetic stage's emitted name.
+# Result is keyed by the ref string. A missing synthetic view (target has no
+# srcs) is treated like a missing file: skipped if `optional`, else a hard error.
 def load-dep-manifests [deps: list<string>, index: record, workspace_root: string, optional: list<string> = []] {
 	mut result = {}
 	for dep in $deps {
 		let parts = ($dep | split row ":")
-		let target = ($parts | skip 1 | str join "_")
+		let file_target = ($parts | get 1)
+		let view = if ($parts | length) >= 3 { ($parts | get 2) } else { null }
 		let dep_dir_rel = (dep-to-dir $dep $index)
 		let manifest_path = if $dep_dir_rel == "." {
-			$"($workspace_root)/.bayt/bayt.($target).json"
+			$"($workspace_root)/.bayt/bayt.($file_target).json"
 		} else {
-			$"($workspace_root)/($dep_dir_rel)/.bayt/bayt.($target).json"
+			$"($workspace_root)/($dep_dir_rel)/.bayt/bayt.($file_target).json"
 		}
 		if not ($manifest_path | path exists) {
 			if ($dep in $optional) { continue }
 			error make {msg: $"bayt: dep manifest not found: ($manifest_path)\n  run `bayt generate` for ($dep_dir_rel) first, or use --recursive"}
 		}
-		$result = ($result | insert $dep (open $manifest_path))
+		let full = (open $manifest_path)
+		let value = if $view == null {
+			$full
+		} else {
+			let synth = ($full | get --optional synthetics)
+			if $synth == null { null } else { $synth | get --optional $view }
+		}
+		if $value == null {
+			if ($dep in $optional) { continue }
+			error make {msg: $"bayt: synthetic view '($view)' not found in ($manifest_path) for ref ($dep)\n  the upstream target may not emit a '($view)' synthetic"}
+		}
+		$result = ($result | insert $dep $value)
 	}
 	$result
 }

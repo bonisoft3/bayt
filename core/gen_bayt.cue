@@ -258,6 +258,25 @@ _expandLines: {
 		}
 	}
 
+	// True iff the target has a dockerfile and a non-empty same-project source
+	// closure (own srcs, or a direct dep that itself emits a `_srcs`). Surfaced
+	// as the `emitsSrcs` manifest field; every srcs gate (_srcsEmit,
+	// _depHasSrcs, the synthetic-manifest stub) reads it. Recurse on DIRECT
+	// deps, not flat over transitiveDeps: a non-srcs intermediate must still
+	// emit a `_srcs` when a deeper dep has srcs, or the COPY chain breaks.
+	_emitsSrcs: {
+		for n, t in G.project.targets if t != null {
+			(n): [
+				if t.dockerfile == _|_ {false},
+				if len(list.Concat([(_expandGlobs & {in: t.srcs.defaultGlobs}).out, t.srcs.globs])) > 0 {true},
+				// `!= _|_` skips dep names that aren't targets (e.g. the `bayt`
+				// synthetic from `:bayt`) — never part of the `_srcs` closure.
+				if len([for dn in _sameProjectDepNames[n] if _emitsSrcs[dn] != _|_ if _emitsSrcs[dn] {dn}]) > 0 {true},
+				false,
+			][0]
+		}
+	}
+
 	// Transitive cross-project closure for a target or synthetic name.
 	// Two layers:
 	//   1. Direct: walk the same-project chain (self + _transitiveDeps[name])
@@ -351,6 +370,9 @@ _expandLines: {
 				outs:       t.outs
 				env:        t.env
 				visibility: t.visibility
+				// The one srcs-emission gate (read here, in gen_compose, and by
+				// cross-project consumers via G.depManifests). See _emitsSrcs.
+				emitsSrcs: _emitsSrcs[n]
 
 				// Deps normalized to name strings (direct only).
 				deps: _depNames
@@ -491,25 +513,29 @@ _expandLines: {
 		// A target without a dockerfile has no compose service for
 		// consumers to reference; no synthetic, no manifest.
 		//
-		// File names: `bayt.<n>_srcs.json`, `bayt.<n>_outs.json`,
-		// `bayt.bayt.json`. Nushell's load-dep-manifests joins ref
-		// segments after the first with `_` to derive the filename
-		// (`proj:foo:srcs` → `bayt.foo_srcs.json`, `proj:bayt` →
-		// `bayt.bayt.json`).
+		// `<n>_srcs`/`<n>_outs` nest under the parent as
+		// `files.<n>.synthetics.{srcs,outs}`; load-dep-manifests reads a cross
+		// ref `proj:foo:srcs` from `bayt.foo.json` `.synthetics.srcs`. `bayt`
+		// is top-level → `bayt.bayt.json`.
 		for n, t in G.project.targets if t != null
 			if t.dockerfile != _|_ {
-			let _srcsGlobs   = list.Concat([(_expandGlobs & {in: t.srcs.defaultGlobs}).out,   t.srcs.globs])
+			// outs = the full transitive source closure the `_srcs` image
+			// carries: union own-srcs globs over {self} ∪ same-project
+			// transitive deps, so a dep-fed target still reports what it packages.
+			let _srcsGlobs = (_uniqStrings & {in: list.FlattenN([
+				for x in list.Concat([[n], _transitiveDeps[n]])
+				if _sameProjectOutsByName["\(x)_srcs"] != _|_ {_sameProjectOutsByName["\(x)_srcs"].globs}
+			], 1)}).out
 			let _srcsExclude = list.Concat([(_expandGlobs & {in: t.srcs.defaultExclude}).out, t.srcs.exclude])
-			if len(_srcsGlobs) > 0 {
-				"\(n)_srcs": {
+			if _emitsSrcs[n] {
+				(n): synthetics: srcs: {
 					name:    "\(n)_srcs"
 					project: G.project.name
 					dir:     G.project.dir
 					// Synthetic carries no toolchain; activate empty.
 					activate: ""
-					// outs == parent srcs so consumer COPYs land the
-					// dep's srcs at their natural paths (matches what
-					// gen_compose._depCopies builds via `outs.globs`).
+					// Consumer COPYs land every chained dep's srcs at their
+					// natural paths via these globs.
 					srcs: {globs: [], exclude: []}
 					outs: {globs: _srcsGlobs, exclude: _srcsExclude}
 					env: {}
@@ -552,7 +578,7 @@ _expandLines: {
 				}
 			}
 			if len(t.outs.globs) > 0 {
-				"\(n)_outs": {
+				(n): synthetics: outs: {
 					name:    "\(n)_outs"
 					project: G.project.name
 					dir:     G.project.dir

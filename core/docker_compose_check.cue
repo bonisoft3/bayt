@@ -25,14 +25,11 @@ _d1: #project & {
 }
 _d1_dc: (#dockerComposeGen & {project: _d1, depManifests: {}})
 // The federation root (compose.bayt.yaml) is a flat list of every local
-// fragment (user targets, then _srcs, then _outs, then _bayt) plus
-// cross-project federation roots (none here). The per-target closures are
-// emitted as compose.<n>.closure.yaml siblings, not unioned in here.
+// parent fragment plus cross-project federation roots (none here). The bayt
+// service is inline in bayt_root.services; closures are sibling files, not
+// unioned here.
 _d1_dc: compose: bayt_root: include: [
 	{path: "./compose.build.yaml", required: false},
-	{path: "./compose.build_srcs.yaml", required: false},
-	{path: "./compose.build_outs.yaml", required: false},
-	{path: "./compose._bayt.yaml", required: false},
 ]
 _d1_dc: compose: files: build: services: "d1-build": build: context:    ".."
 _d1_dc: compose: files: build: services: "d1-build": build: dockerfile: ".bayt/Dockerfile.build"
@@ -193,25 +190,24 @@ _d8_dc: compose: files: launch: services: "d8-launch": healthcheck: {
 	retries:  3
 }
 
-// --- D9: synthetic-stage emission. Each target with non-empty
-// srcs.globs spawns `<n>_srcs` (FROM scratch + COPY srcs from host);
-// each with non-empty outs.globs spawns `<n>_outs` (FROM scratch +
-// COPY --from=<n> outs). Per-project `_bayt` synthetic always emitted
-// when at least one dockerfile target exists. Containment-checked on
-// the rendered Dockerfile bodies — exact-string equality is brittle
-// across glob orderings.
-_d9_srcs_body:   _d1_dc.dockerfiles.build_srcs
-_d9_outs_body:   _d1_dc.dockerfiles.build_outs
-_d9_bayt_body:   _d1_dc.dockerfiles._bayt
+// --- D9: synthetic-stage emission. `<n>_srcs` (FROM scratch + COPY srcs)
+// and `<n>_outs` (FROM scratch + COPY --from=<n> outs) are stages in
+// Dockerfile.<n>; the per-project `bayt` synthetic is Dockerfile.bayt
+// (emitted when ≥1 dockerfile target exists). Containment-checked — exact
+// equality is brittle across glob orderings.
+_d9_srcs_body:   _d1_dc.dockerfiles.build
+_d9_outs_body:   _d1_dc.dockerfiles.build
+_d9_bayt_body:   _d1_dc.dockerfiles.bayt
 _d9_srcs_stage:  strings.Contains(_d9_srcs_body, "FROM scratch AS build_srcs") & true
 _d9_outs_stage:  strings.Contains(_d9_outs_body, "FROM scratch AS build_outs") & true
 _d9_outs_from:   strings.Contains(_d9_outs_body, "COPY --from=d1-build") & true
 _d9_bayt_stage:  strings.Contains(_d9_bayt_body, "FROM scratch AS bayt") & true
-_d9_bayt_scope:  strings.Contains(_d9_bayt_body, ".bayt/** Taskfile.yml compose.yaml") & true
-// Synthetic per-target files are fragments too (no include).
-_d1_dc: compose: files: build_outs: {[!="services"]: _|_}
-_d1_dc: compose: files: build_srcs: {[!="services"]: _|_}
-_d1_dc: compose: files: "_bayt": {[!="services"]: _|_}
+_d9_bayt_scope:  strings.Contains(_d9_bayt_body, "COPY --parents .bayt/**") & true
+// Synthetic services live in the parent fragment; the bayt service in the
+// federation root.
+_d9_srcs_svc: _d1_dc.compose.files.build.services."d1-build_srcs".build.target & "build_srcs"
+_d9_outs_svc: _d1_dc.compose.files.build.services."d1-build_outs".build.target & "build_outs"
+_d9_bayt_svc: _d1_dc.compose.bayt_root.services."d1-bayt".build.target & "bayt"
 
 // --- D10: `:bayt` ref consumer. A target depending on `:bayt` (the
 // project-level synthetic) gets a bulk-COPY `--from=<proj>-bayt
