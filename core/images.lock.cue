@@ -36,7 +36,7 @@ lock: images: {
 	// Regen against main picks up the latest; regen against a tagged
 	// tarball lags by one. In practice, consumers regenerate after
 	// bumping bayt anyway, so the lag closes naturally.
-	bayt:         "bonitao/bayt:0.21.6@sha256:51f4d1ba400c6e1c8d68d42302fd477a577854d307260bcb39552af2dc6076f9"
+	bayt:         "bonitao/bayt:0.22.0@sha256:e3fd50b99cf59c8301256112f0d08072d8499712ab69a4f584da598502b09788"
 	lazybox:      "bonitao/lazybox:0.8.3@sha256:c896a6836673d8fd217f6021a2522351fd82d580ed985159feb2f10373018e73"
 	busybox:      "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
 	docker:       "docker:29.2.0-cli@sha256:ae2609c051339b48c157d97edc4f1171026251607b29a2b0f25f990898586334"
