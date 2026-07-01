@@ -61,6 +61,10 @@ _expandLines: {
 		name:     G.project.name
 		dir:      G.project.dir
 		activate: G.project.activate
+		// Opt-in flag: does this project emit .bayt/depot.{yaml,hcl}?
+		// generate.nu reads it to keep the depot files fresh on a normal
+		// regen (no --depot flag needed).
+		depot: G.project.depot
 		// Targets the project actually emits — null entries (a project
 		// opting out of an inherited target via `"<target>": null`) are
 		// filtered here so downstream consumers only see live targets.

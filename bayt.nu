@@ -5,9 +5,10 @@ use core/generate.nu
 # --runtime <path>: workspace-rooted path to bayt's source tree.
 # Generated compose embeds a relative path to bayt-runtime instead of
 # the default `${BAYT_RUNTIME:-docker-image://…}`.
-# --depot: also emit .bayt/depot.yaml per project (a flat, git-context-bakeable
-# definition for the depot build phase). Opt-in: adds a docker-CLI dependency to
-# generation, so only depot consumers pay it.
+# Projects opt into .bayt/{depot.yaml,depot.hcl} emission via `#project.depot:
+# true` in bayt.cue — a normal `generate` keeps them fresh (docker required only
+# for those projects). --depot forces emission for EVERY generated project,
+# regardless of opt-in (mostly for one-off inspection).
 def "main generate" [--recursive (-r), --runtime: string = "", --depot] {
 	if $recursive { generate --recursive --runtime $runtime --depot=$depot } else { generate --runtime $runtime --depot=$depot }
 }

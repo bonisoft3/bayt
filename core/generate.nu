@@ -254,9 +254,11 @@ def write-bundle [bundle: record, base: string, --depot] {
 }
 ')
 
-	# --- depot.yaml (opt-in): a flat, git-context-bakeable definition for the
-	# depot build phase. Emitted after the compose files it flattens.
-	if $depot {
+	# --- depot.{yaml,hcl}: emitted when the project opts in via
+	# `#project.depot: true` (so its canonical regen keeps them fresh), or for
+	# every project when the --depot flag forces it. Emitted after the compose
+	# files they flatten.
+	if $depot or ($bundle.manifest.projectManifest.depot? | default false) {
 		emit-depot-yaml $base $ws
 	}
 
