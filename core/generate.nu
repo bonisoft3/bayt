@@ -263,16 +263,21 @@ def write-bundle [bundle: record, base: string, --depot] {
 	print $"bayt: wrote files for project ($bundle.manifest.projectManifest.name)"
 }
 
-# emit-depot-yaml writes <proj>/.bayt/depot.yaml — the project's integration
-# graph flattened into one git-context-bakeable file for `depot bake`:
-#   depot bake <git-ref> -f <proj>/.bayt/depot.yaml --set "*.cache-from=..." ... <targets>
-# `docker compose config --no-interpolate` resolves the federation (includes →
-# inline, cross-project services pulled in) while keeping late-bound ${VARS}
-# (CACHE_SCOPE, BAYT_IMAGE_TAG, BAYT_COMPOSE_OUTPUT) literal for the build phase
-# to set at bake time. compose absolutizes contexts, so rewrite the workspace
-# root to repo-root-relative — depot resolves contexts against the git root.
-# `--no-interpolate` requires docker compose; the docker-CLI dep is why this is
-# behind --depot.
+# emit-depot-yaml writes two git-context-bakeable files for the depot build phase:
+#   <proj>/.bayt/depot.yaml — the integration graph flattened by
+#     `docker compose config --no-interpolate` (federation resolved, cross-project
+#     services inlined) with late-bound ${VARS} (CACHE_SCOPE, BAYT_IMAGE_TAG,
+#     BAYT_COMPOSE_OUTPUT) left literal for the bake caller to set. compose
+#     absolutizes contexts and uses `service:` refs, so rewrite contexts to
+#     repo-root-relative and `service:X` → `target:X` (depot bake stats a
+#     `service:X` context as a path).
+#   <proj>/.bayt/depot.hcl — the `integrate` closure as a bake `group`, so the
+#     build phase bakes it by name with no runtime `buildx --print` scrape and no
+#     local file read. That's what lets the build job go checkout-free:
+#       depot bake <git-ref> -f <proj>/.bayt/depot.yaml -f <proj>/.bayt/depot.hcl \
+#         --set "*.args.BUILDKIT_SYNTAX=…" depot-build
+# `--no-interpolate` + `buildx bake --print` require docker; the docker-CLI dep is
+# why this is behind --depot.
 def emit-depot-yaml [proj_dir: string, ws: string] {
 	let dir = if $proj_dir == "." or $proj_dir == "" { $ws } else { $"($ws)/($proj_dir)" }
 	let r = (do { cd $dir; ^docker compose config --no-interpolate } | complete)
@@ -281,18 +286,24 @@ def emit-depot-yaml [proj_dir: string, ws: string] {
 		print -e ($r.stderr | lines | last 3 | str join "\n")
 		return
 	}
-	# Three rewrites on the flattened compose:
-	#   * `<ws>/<sub>` → `<sub>`; bare `<ws>` (workspaceroot context) → `.`
-	#     (compose absolutizes contexts; bake resolves them cwd-relative).
-	#   * `service:X` → `target:X` in additional_contexts: `depot bake -f`
-	#     doesn't do compose's service→target resolution (it stats `service:X`
-	#     as a path), so pre-resolve it. Every `service:` here is a value
-	#     (`X: service:Y`), never a key, so the blanket swap is safe.
 	let flat = ($r.stdout
 		| str replace --all $"($ws)/" ""
 		| str replace --all $ws "."
 		| str replace --all "service:" "target:")
 	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header $flat)
+
+	# depot.hcl — the `integrate` closure as a bake group. buildx --print expands
+	# it (depot's --print doesn't); scrape the target keys at generation time so
+	# the build phase needs neither a runtime scrape nor a checkout. Skipped for
+	# projects with no `integrate` target.
+	let p = (do { cd $dir; ^docker buildx bake -f .bayt/depot.yaml --print integrate } | complete)
+	if $p.exit_code == 0 {
+		let names = ($p.stdout | from json | get --optional target | default {} | columns)
+		if ($names | is-not-empty) {
+			let group = ("group \"depot-build\" {\n  targets = [" + ($names | each {|n| $'"($n)"'} | str join ", ") + "]\n}\n")
+			atomic-write $"($dir)/.bayt/depot.hcl" (_slash-header $group)
+		}
+	}
 }
 
 # pass1 extracts the project.targets map from a bayt.cue.
