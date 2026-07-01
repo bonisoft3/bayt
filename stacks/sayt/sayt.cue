@@ -251,16 +251,17 @@ ci: inject & {
 		// the field leaking into bayt.*.json. Generation-time → distinct phases
 		// emit distinct RUN bodies → distinct RUN-layer cache keys (see
 		// depot/DESIGN-phases.md):
-		//   _build && _run  → bake-load + up         (dev/local, default)
-		//   _build && !_run → bake + push (registry) (build phase)
-		//   !_build && _run → up only, pulls         (run phase)
+		//   _build && _run  → bake-load + up   (dev/local, default)
+		//   !_build && _run → up only, pulls   (run phase)
+		// The build-only phase (push a closure, no up) is no longer a dindbox
+		// do-script — it's a host `depot bake` via sayt/depot phase: build.
 		_build: *true | bool
 		_run:   *true | bool
-		// _do_both / _do_build bake inline: select `depot bake` when $DEPOT_TOKEN
-		// is set else `docker buildx bake`, and pipe `buildx bake --print` JSON
-		// into it (depot bake needs compose's service:X rewritten to target:X,
-		// which --print does). No --allow: BUILDX_BAKE_ENTITLEMENTS_FS=0
-		// (inject.cue) covers fs-read. _do_run has no bake.
+		// _do_both bakes inline: select `depot bake` when $DEPOT_TOKEN is set else
+		// `docker buildx bake`, and pipe `buildx bake --print` JSON into it (depot
+		// bake needs compose's service:X rewritten to target:X, which --print
+		// does). No --allow: BUILDX_BAKE_ENTITLEMENTS_FS=0 (inject.cue) covers
+		// fs-read. _do_run has no bake.
 		let _do_both = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  # depot frontend-pin workaround (full rationale in stacks/sayt/sayt.cue)
@@ -270,53 +271,37 @@ ci: inject & {
 			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} integrate
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""#
-		let _do_build = #"""
-			if [ -n "$BUILDKIT_SYNTAX" ]; then
-			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
-			fi
-			export BAYT_COMPOSE_OUTPUT=registry
-			# Push the runtime closure the run phase pulls. bake --print resolves
-			# integrate's build graph; depends_on is auto-mirrored into
-			# additional_contexts (under images.pull), so the compose-runtime stack —
-			# including a testcontainers stack wired via additional_contexts but not
-			# depends_on — is in the closure, and nothing outside integrate's graph is.
-			# Baking the whole closure positionally makes each target's own output
-			# apply: compose-runtime push (type=registry), build-only stay cacheonly.
-			# Closure = the print JSON's `.target` keys (4-space-indented), scraped
-			# with sed/grep so the dindbox needs no JSON tool.
-			targets="$(docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | sed -n '/^  "target": {/,/^  }/p' | grep -E '^    "' | sed -E 's/^    "([^"]+)".*/\1/' | tr '\n' ' ')"
-			# Empty would let bake fall back to the default group and push everything.
-			[ -n "$targets" ] || { echo "ci-build: empty target closure for integrate" >&2; exit 1; }
-			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print $targets | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $targets
-			"""#
 		let _do_run = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
 			BAYT_PULL_POLICY=missing exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""#
+		// The old `_build && !_run` build phase (a dindbox `depot bake` do-script)
+		// is gone — the build phase is now a host `depot bake` of the committed
+		// depot.hcl group (sayt/depot phase: build), so no RUN is emitted for it.
+		// Trailing "" is the catch-all for any non-`_run` combination.
 		let _do = [
 			if _build && _run {_do_both},
-			if _build && !_run {_do_build},
 			if !_build && _run {_do_run},
-			if !_build && !_run {""},
+			"",
 		][0]
 		do: *_do | string
 	}
 	dockerfile: from: ref: *":dindbox" | string
 }
 
-// ciBuild / ciRun — the two phases of a build/run split, for projects whose
-// run pulls a composed-up stack (depot/DESIGN-phases.md). Declared here, in the
-// same file as ci's hidden `_build`/`_run`, so the override actually unifies
-// (hidden fields are package-scoped — `sayt.ci & {_run: false}` in a consumer's
-// file would mint a new field, not override this one). A consumer adds its deps:
-// `"ci-build": sayt.ciBuild & {deps: [...]}`.
-//   ciBuild → bake + push the compose-runtime closure, no compose-up.
-//   ciRun   → compose-up (pulls via pull_policy=missing), no bake.
-ciBuild: ci & {cmd: "builtin": _run:   false}
-ciRun:   ci & {cmd: "builtin": _build: false}
+// ciRun — the run phase of a build/run split: compose-up the stack the build
+// phase pushed (pull_policy=missing), no bake. Declared here, in the same file
+// as ci's hidden `_build`/`_run`, so the override actually unifies (hidden
+// fields are package-scoped — `sayt.ci & {_build: false}` in a consumer's file
+// would mint a new field, not override this one). A consumer adds its deps:
+// `"ci-run": sayt.ciRun & {deps: [...]}`.
+//
+// The build phase has no target here anymore — it's a host `depot bake` of the
+// committed depot.hcl group (sayt/depot phase: build), driven from CI, not a
+// dindbox target. So `ciBuild` is gone.
+ciRun: ci & {cmd: "builtin": _build: false}
 
 // dindbox — thin FROM-base for sayt.ci. Pure preset wrap of
 // bayt.dindbox; nulls the cmd so no RUN line emits.
