@@ -1023,7 +1023,7 @@ noop: #cmd & {
 	bake?: #bake
 
 	// Emit `.bayt/{depot.yaml,depot.hcl}` — the flattened, git-context-
-	// bakeable definition + closure group for a host `depot bake` build
+	// bakeable definition + runtime-closure group for a host `depot bake` build
 	// phase. `bayt generate` emits them whenever this is set (so a project's
 	// canonical regen keeps them fresh); the docker CLI is required only for
 	// projects that opt in. Default off: non-depot projects take no docker

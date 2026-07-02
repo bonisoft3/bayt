@@ -222,14 +222,14 @@ lint: {
 // flags.
 //
 // Two-step shape:
-//   1. `bake … integrate` walks integrate's additional_contexts
-//      closure (depends_on entries are auto-mirrored into it by
-//      gen_compose.cue). Each target's per-service `x-bake.output`
-//      decides loading: compose-runnable targets (those with
-//      `compose: {}` set) emit `output: ["type=docker"]` and land in
-//      the dindbox daemon; build-only stages (no compose runtime)
-//      stay cacheonly under the docker-container driver default.
-//      Explicit bake (not `compose up --build`) keeps
+//   1. `bake … depot-build` (the committed .bayt/depot.hcl group:
+//      integrate + transitive depends_on) builds the stack. bake
+//      builds `target:`-context deps implicitly but drops their
+//      outputs, so every image step 2 runs must be a named target for
+//      its `x-bake.output` (type=docker) to land in the dindbox
+//      daemon; build-only stages stay cacheonly. Without depot.hcl,
+//      only `integrate` is named and compose builds the deps at up
+//      time. Explicit bake (not `compose up --build`) keeps
 //      `x-bake.cache-from` registry refs honored — COMPOSE_BAKE=true
 //      strips them.
 //   2. `compose up integrate` (no --build) runs the loaded integrate
@@ -253,22 +253,26 @@ ci: inject & {
 		// depot/DESIGN-phases.md):
 		//   _build && _run  → bake-load + up   (dev/local, default)
 		//   !_build && _run → up only, pulls   (run phase)
-		// The build-only phase (push a closure, no up) is no longer a dindbox
-		// do-script — it's a host `depot bake` via sayt/depot phase: build.
+		// The build-only phase (push a closure, no up) is a host `depot bake`
+		// via sayt/depot phase: build — never a dindbox do-script.
 		_build: *true | bool
 		_run:   *true | bool
-		// _do_both bakes inline: select `depot bake` when $DEPOT_TOKEN is set else
-		// `docker buildx bake`, and pipe `buildx bake --print` JSON into it (depot
-		// bake needs compose's service:X rewritten to target:X, which --print
-		// does). No --allow: BUILDX_BAKE_ENTITLEMENTS_FS=0 (inject.cue) covers
-		// fs-read. _do_run has no bake.
+		// _do_both bakes inline: `depot bake` when $DEPOT_TOKEN is set, else
+		// `docker buildx bake`, fed the `buildx bake --print integrate` JSON
+		// (depot bake needs compose's service:X rewritten to target:X, which
+		// --print does). The printed file defines the full build closure, a
+		// superset of depot.hcl's group (gen_compose mirrors depends_on into
+		// additional_contexts), so $tgt always resolves. No --allow:
+		// BUILDX_BAKE_ENTITLEMENTS_FS=0 (inject.cue) covers fs-read. _do_run
+		// has no bake.
 		let _do_both = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  # depot frontend-pin workaround (full rationale in stacks/sayt/sayt.cue)
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
 			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} integrate
+			[ -f .bayt/depot.hcl ] && tgt="-f .bayt/depot.hcl depot-build" || tgt="integrate"
+			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $tgt
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""#
 		let _do_run = #"""
@@ -277,10 +281,7 @@ ci: inject & {
 			fi
 			BAYT_PULL_POLICY=missing exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""#
-		// The old `_build && !_run` build phase (a dindbox `depot bake` do-script)
-		// is gone — the build phase is now a host `depot bake` of the committed
-		// depot.hcl group (sayt/depot phase: build), so no RUN is emitted for it.
-		// Trailing "" is the catch-all for any non-`_run` combination.
+		// Trailing "" is the catch-all: non-`_run` combinations emit no RUN.
 		let _do = [
 			if _build && _run {_do_both},
 			if !_build && _run {_do_run},

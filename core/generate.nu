@@ -273,13 +273,16 @@ def write-bundle [bundle: record, base: string, --depot] {
 #     absolutizes contexts and uses `service:` refs, so rewrite contexts to
 #     repo-root-relative and `service:X` → `target:X` (depot bake stats a
 #     `service:X` context as a path).
-#   <proj>/.bayt/depot.hcl — the `integrate` closure as a bake `group`, so the
-#     build phase bakes it by name with no runtime `buildx --print` scrape and no
-#     local file read. That's what lets the build job go checkout-free:
+#   <proj>/.bayt/depot.hcl — the runtime closure (`integrate` + transitive
+#     depends_on) as a bake `group`, so the build phase bakes it by name with no
+#     local file read. bake builds `target:`-context deps implicitly but drops
+#     their outputs, so every image the run phase pulls must be named in the
+#     group; build-only intermediates stay implicit (built, cache-only). That's
+#     what lets the build job go checkout-free:
 #       depot bake <git-ref> -f <proj>/.bayt/depot.yaml -f <proj>/.bayt/depot.hcl \
 #         --set "*.args.BUILDKIT_SYNTAX=…" depot-build
-# `--no-interpolate` + `buildx bake --print` require docker; the docker-CLI dep is
-# why this is behind --depot.
+# `--no-interpolate` requires docker; the docker-CLI dep is why this is behind
+# --depot.
 def emit-depot-yaml [proj_dir: string, ws: string] {
 	let dir = if $proj_dir == "." or $proj_dir == "" { $ws } else { $"($ws)/($proj_dir)" }
 	let r = (do { cd $dir; ^docker compose config --no-interpolate } | complete)
@@ -294,17 +297,27 @@ def emit-depot-yaml [proj_dir: string, ws: string] {
 		| str replace --all "service:" "target:")
 	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header $flat)
 
-	# depot.hcl — the `integrate` closure as a bake group. buildx --print expands
-	# it (depot's --print doesn't); scrape the target keys at generation time so
-	# the build phase needs neither a runtime scrape nor a checkout. Skipped for
-	# projects with no `integrate` target.
-	let p = (do { cd $dir; ^docker buildx bake -f .bayt/depot.yaml --print integrate } | complete)
-	if $p.exit_code == 0 {
-		let names = ($p.stdout | from json | get --optional target | default {} | columns)
-		if ($names | is-not-empty) {
-			let group = ("group \"depot-build\" {\n  targets = [" + ($names | each {|n| $'"($n)"'} | str join ", ") + "]\n}\n")
-			atomic-write $"($dir)/.bayt/depot.hcl" (_slash-header $group)
+	# depot.hcl — the runtime-closure group (rationale in the header above).
+	# Skipped for projects with no `integrate` service.
+	let services = ($flat | from yaml | get --optional services | default {})
+	if "integrate" in ($services | columns) {
+		mut seen = ["integrate"]
+		mut queue = ["integrate"]
+		while ($queue | is-not-empty) {
+			let deps = ($services | get --optional ($queue | first) | default {} | get --optional depends_on | default {} | columns)
+			$queue = ($queue | skip 1)
+			for d in $deps {
+				if $d not-in $seen {
+					$seen = ($seen | append $d)
+					$queue = ($queue | append $d)
+				}
+			}
 		}
+		# A dep without a build section is pull-only — not a bake target, so
+		# naming it in the group would fail resolution.
+		let names = ($seen | where {|n| "build" in ($services | get $n | columns) } | sort)
+		let group = ("group \"depot-build\" {\n  targets = [" + ($names | each {|n| $'"($n)"'} | str join ", ") + "]\n}\n")
+		atomic-write $"($dir)/.bayt/depot.hcl" (_slash-header $group)
 	}
 }
 
