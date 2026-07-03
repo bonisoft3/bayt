@@ -26,9 +26,9 @@
 #   Pass 2: echo '{"depManifestsIn":{...}}' | cue export - ./bayt.cue -e _render --out json
 #           Full render with resolved dep manifests injected via stdin.
 #
-# In --recursive mode the script walks up to find the workspace root
-# (cue.mod/ marker), performs BFS over the dep graph leaf-first, then
-# runs the target project last.
+# --recursive and --all walk up to the workspace root (cue.mod/ marker),
+# topo-order the dep graph, and regenerate leaf-first — parallel within
+# dependency levels (see run-schedule).
 #
 # Files emitted, relative to the project's dir. All bayt-generated
 # files live under `.bayt/` with the `<tool>.<target>.<ext>` convention.
@@ -57,12 +57,19 @@
 
 use ../runtime/tools.nu [run-cue, run-nu]
 
+# BAYT_TIMING=1 prints generate phase timings to stderr (same convention
+# as the dind/compose BAYT_TIMING lines).
+def print-timing [label: string, start: datetime] {
+	if ($env.BAYT_TIMING? | default "") != "" {
+		print -e $"BAYT_TIMING generate ($label): ((date now) - $start)"
+	}
+}
+
 # scan-projects runs ONE parallel `cue export` per bayt.cue and returns
-# [{path, name, dir_rel, targets}] — the single CUE read that feeds the
-# project index (name → dir), the topo schedule (targets → dep refs),
-# AND regen's pass 1 (targets). Folding the three reads into one scan is
-# what keeps generate fast: per-invocation cue/mise overhead dominates
-# generation time, so every extra per-project invocation costs ~0.5s.
+# [{path, name, dir_rel, targets}] — the single CUE read behind the
+# project index (name → dir), the topo schedule, and regen's pass 1.
+# Per-invocation cue/mise overhead (~0.5s) dominates generation, so an
+# extra per-project invocation anywhere costs seconds overall.
 def scan-projects [workspace_root: string] {
 	# Enumerate bayt.cue files via `git ls-files`. Drop bayt's own
 	# package + stacks files: they share the bayt.cue name but
@@ -444,12 +451,11 @@ def find-workspace-root [] {
 # dirs in leaf-first (topological) order via post-order DFS, plus each
 # dir's direct cross-project dep dirs (`edges: [{dir, deps}]` — a table,
 # not a record, because dirs like "." are not safe record keys).
-# Post-order guarantees every dependency of a node appears before it in
-# `order`; `edges` lets run-schedule derive parallel levels. Bazel-style
-# refs ("project:target") resolve via project_index.
-# workspace_root — absolute workspace root path
-# roots — workspace-root-relative dirs of the starting projects ("." for root)
-# index — project_name → workspace-root-relative-dir map
+# Post-order puts every dep before its consumers in `order`;
+# run-schedule derives its parallel levels from `edges`.
+# roots — workspace-root-relative starting dirs ("." for root)
+# scan  — scan-projects rows (targets feed the dep walk)
+# index — project_name → dir map (resolves "project:target" refs)
 def topo-schedule [roots: list<string>, scan: table, index: record] {
 	mut visiting: list<string> = []  # nodes on current DFS stack (cycle detection)
 	mut done: list<string> = []      # post-order output (leaf-first)
@@ -492,10 +498,9 @@ def topo-schedule [roots: list<string>, scan: table, index: record] {
 		# Push exit marker so we add this node to done after all deps.
 		$stack = ($stack | append {dir: $current, phase: "exit"})
 
-		let row = ($scan | where dir_rel == $current | get --optional 0)
-		if $row == null {
-			continue
-		}
+		# `first` errors on a dir absent from the scan — impossible via
+		# index/dep resolution (both scan-derived); fail loud, not late.
+		let row = ($scan | where dir_rel == $current | first)
 		# Cross-project deps and cross-project `from` refs share one
 		# vocabulary ("<project>:<target>") and one resolution path
 		# (project_index → dir), so the cycle detector covers both.
@@ -513,17 +518,14 @@ def topo-schedule [roots: list<string>, scan: table, index: record] {
 	{order: $done, edges: $edges}
 }
 
-# regen-project runs both CUE passes for one project's bayt.cue and
-# writes the resulting bundle. Used by both single-project and recursive
-# modes.
+# regen-project renders one project (pass 2, plus pass 1 when no
+# pre-parsed targets came from the scan) and writes the bundle.
 #
 # Auto-loads `<proj>:<target>:srcs` synthetic manifests for every
 # two-segment cross-project dep so transitive `:srcs` walking lands the
 # upstream source closures without consumers enumerating them. Missing
 # `:srcs` manifests (upstream target had no srcs) silently skip.
 def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_root: string, targets?: any, --depot] {
-	# targets comes pre-parsed from scan-projects when available; pass 1
-	# is the fallback for callers without a scan row.
 	let targets = if $targets == null { pass1 $bayt_cue } else { $targets }
 	let cdeps = (cross-dep-strings $targets)
 	let auto_srcs = (srcs-variants $cdeps)
@@ -534,33 +536,28 @@ def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_r
 }
 
 # run-schedule regenerates every project in a topo-schedule, parallel
-# within dependency levels. Each regen writes only its own project dir,
-# but a consumer READS its deps' .bayt manifests — and write-bundle
-# rm -rfs the dep's .bayt transiently — so only projects with no dep
-# path between them may run concurrently: level = longest dep chain to
-# a leaf, par-each inside a level, barrier between levels.
+# WITHIN dependency levels (level = longest dep chain to a leaf, barrier
+# between levels). Writes are per-project-dir and disjoint, but a
+# consumer reads its deps' .bayt manifests — which write-bundle rm -rfs
+# transiently — so only projects with no dep path between them may run
+# concurrently.
 def run-schedule [schedule: record, scan: table, index: record, workspace_root: string, --depot] {
 	# [{dir, lvl}] — a table, not a record ("." is not a safe record key).
-	mut lvl_by_dir: list = []
+	mut lvl_by_dir = []
 	for d in $schedule.order {
-		let ds = ($schedule.edges | where dir == $d | get --optional 0 | default {deps: []} | get deps)
-		let lvl = if ($ds | is-empty) {
-			0
-		} else {
-			let seen = $lvl_by_dir  # closures can't capture mut vars
-			(($ds | each { |x| $seen | where dir == $x | get --optional 0.lvl | default 0 }) | math max) + 1
-		}
+		let deps = ($schedule.edges | where dir == $d | first | get deps)
+		let seen = $lvl_by_dir # closures can't capture mut vars
+		let lvl = ($deps | each { |x| ($seen | where dir == $x | first | get lvl) + 1 } | append 0 | math max)
 		$lvl_by_dir = ($lvl_by_dir | append {dir: $d, lvl: $lvl})
 	}
-	let max_lvl = ($lvl_by_dir | get lvl | math max)
-	for l in 0..$max_lvl {
+	for l in 0..($lvl_by_dir | get lvl | math max) {
 		let batch = ($lvl_by_dir | where lvl == $l | get dir)
 		let t = (date now)
 		$batch | par-each { |dir_rel|
-			let row = ($scan | where dir_rel == $dir_rel | get 0)
+			let row = ($scan | where dir_rel == $dir_rel | first)
 			regen-project $row.path $dir_rel $index $workspace_root $row.targets --depot=$depot
 		} | ignore
-		if ($env.BAYT_TIMING? | default "") != "" { print -e $"BAYT_TIMING generate level ($l) [($batch | str join ' ')]: ((date now) - $t)" }
+		print-timing $"level ($l) [($batch | str join ' ')]" $t
 	}
 }
 
@@ -578,20 +575,15 @@ def _main [--recursive (-r), --all, --depot] {
 	}
 
 	let workspace_root = (find-workspace-root)
-	# One-shot parallel scan of every bayt.cue: name → dir (the index
-	# cross-project refs resolve through) plus each project's targets
-	# (feeds the topo schedule and regen's pass 1).
 	let t0 = (date now)
 	let scan = (scan-projects $workspace_root)
 	let index = ($scan | reduce -f {} { |row, acc| $acc | insert $row.name $row.dir_rel })
-	if ($env.BAYT_TIMING? | default "") != "" { print -e $"BAYT_TIMING generate scan: ((date now) - $t0)" }
+	print-timing scan $t0
 
 	if $all {
-		# Every project in the workspace, deps before consumers — one
-		# process, one index, one topo pass. Works from any cwd inside
-		# the workspace; the multi-root DFS dedupes shared closures.
+		# Every project in the workspace; works from any cwd inside it.
 		cd $workspace_root
-		let schedule = (topo-schedule ($index | values | uniq) $scan $index)
+		let schedule = (topo-schedule ($scan | get dir_rel | uniq) $scan $index)
 		run-schedule $schedule $scan $index $workspace_root --depot=$depot
 	} else if $recursive {
 		let project_abs = (pwd)
@@ -612,6 +604,8 @@ def _main [--recursive (-r), --all, --depot] {
 		let project_rel = if ($project_rel | str trim) == "" { "." } else { $project_rel }
 		let bayt_cue = if $project_rel == "." { $"($workspace_root)/bayt.cue" } else { $"($workspace_root)/($project_rel)/bayt.cue" }
 		cd $workspace_root
+		# The row can be missing here (e.g. a gitignored dir escapes the
+		# scan's `git ls-files`); regen-project's pass 1 covers it.
 		let row = ($scan | where dir_rel == $project_rel | get --optional 0)
 		let tgts = if $row == null { null } else { $row.targets }
 		regen-project $bayt_cue $project_rel $index $workspace_root $tgts --depot=$depot
