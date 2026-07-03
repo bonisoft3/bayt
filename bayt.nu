@@ -9,8 +9,8 @@ use core/generate.nu
 # true` in bayt.cue — a normal `generate` keeps them fresh (docker required only
 # for those projects). --depot forces emission for EVERY generated project,
 # regardless of opt-in (mostly for one-off inspection).
-def "main generate" [--recursive (-r), --runtime: string = "", --depot] {
-	if $recursive { generate --recursive --runtime $runtime --depot=$depot } else { generate --runtime $runtime --depot=$depot }
+def "main generate" [--recursive (-r), --all, --runtime: string = "", --depot] {
+	generate --recursive=$recursive --all=$all --runtime $runtime --depot=$depot
 }
 
 # Signature mirrors runtime/cache.nu's `main run` because nu spread args

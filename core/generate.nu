@@ -8,6 +8,7 @@
 #
 #   bayt generate              # single project
 #   bayt generate --recursive  # project + all cross-project deps
+#   bayt generate --all        # every project in the workspace, topo order
 #
 # Or, referenced from sayt's auto-generation rulemap:
 #
@@ -449,14 +450,15 @@ def find-workspace-root [] {
 # workspace_root  — absolute workspace root path
 # root_rel — workspace-root-relative dir of the starting project ("." for root)
 # index    — project_name → workspace-root-relative-dir map
-def topo-schedule [workspace_root: string, root_rel: string, index: record] {
+def topo-schedule [workspace_root: string, roots: list<string>, index: record] {
 	mut visiting: list<string> = []  # nodes on current DFS stack (cycle detection)
 	mut done: list<string> = []      # post-order output (leaf-first)
 
 	# dfs-visit is implemented via explicit stack to avoid Nushell recursion limits.
 	# Each entry on the stack is either {dir: string, phase: "enter"} or
-	# {dir: string, phase: "exit"}.
-	mut stack = [{dir: $root_rel, phase: "enter"}]
+	# {dir: string, phase: "exit"}. Multiple roots share one `done` list,
+	# so a project reached from several roots is scheduled exactly once.
+	mut stack = ($roots | reverse | each { |r| {dir: $r, phase: "enter"} })
 
 	while ($stack | length) > 0 {
 		let top = ($stack | last)
@@ -535,13 +537,13 @@ def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_r
 # Entry point.
 const cache_nu = (path self | path dirname | path dirname | path join "runtime" "cache.nu")
 
-export def main [--recursive (-r), --runtime: string = "", --depot] {
+export def main [--recursive (-r), --all, --runtime: string = "", --depot] {
 	let effective = if ($runtime | is-empty) { ($env.BAYT_RUNTIME_DIR? | default "") } else { $runtime }
-	with-env { BAYT_RUNTIME_DIR: $effective } { _main --recursive=$recursive --depot=$depot }
+	with-env { BAYT_RUNTIME_DIR: $effective } { _main --recursive=$recursive --all=$all --depot=$depot }
 }
 
-def _main [--recursive (-r), --depot] {
-	if not ("bayt.cue" | path exists) {
+def _main [--recursive (-r), --all, --depot] {
+	if not $all and not ("bayt.cue" | path exists) {
 		return
 	}
 
@@ -550,7 +552,21 @@ def _main [--recursive (-r), --depot] {
 	# Cross-project refs ("<project>:<target>") resolve through this.
 	let index = (build-project-index $workspace_root)
 
-	if $recursive {
+	if $all {
+		# Every project in the workspace, deps before consumers — one
+		# process, one index, one topo pass. Works from any cwd inside
+		# the workspace; the multi-root DFS dedupes shared closures.
+		cd $workspace_root
+		let schedule = (topo-schedule $workspace_root ($index | values | uniq) $index)
+		for dir_rel in $schedule {
+			let bayt_cue = if $dir_rel == "." {
+				$"($workspace_root)/bayt.cue"
+			} else {
+				$"($workspace_root)/($dir_rel)/bayt.cue"
+			}
+			regen-project $bayt_cue $dir_rel $index $workspace_root --depot=$depot
+		}
+	} else if $recursive {
 		let project_abs = (pwd)
 		let project_rel = ($project_abs | path relative-to $workspace_root)
 		let project_rel = if ($project_rel | str trim) == "" { "." } else { $project_rel }
@@ -558,7 +574,7 @@ def _main [--recursive (-r), --depot] {
 		# Work from workspace root so write-bundle's relative paths are correct.
 		cd $workspace_root
 
-		let schedule = (topo-schedule $workspace_root $project_rel $index)
+		let schedule = (topo-schedule $workspace_root [$project_rel] $index)
 		for dir_rel in $schedule {
 			let bayt_cue = if $dir_rel == "." {
 				$"($workspace_root)/bayt.cue"
