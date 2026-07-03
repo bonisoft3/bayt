@@ -118,6 +118,50 @@ import (
 		])
 	}
 
+	// Helper: how the dep edge (consumer t, dep entry d) renders. Used by
+	// both _depCopies (Dockerfile path) and _depEntries (compose
+	// additional_contexts path) — the two MUST stay gated consistently:
+	// a context entry whose service is never emitted dangles (compose/
+	// bake error), and a COPY without its context can't resolve --from.
+	//
+	//   outsShaped — plain target refs where either endpoint is
+	//     runtime-class carry the dep's declared interface (the `:outs`
+	//     synth shape), not its workdir. Synth views are already shaped;
+	//     the bayt synth is scaffolding, not a workdir bulk-copy.
+	//   copy — emit a Dockerfile COPY. Synth refs and outs-shaped edges
+	//     require non-empty outs.globs (nothing flows otherwise, and
+	//     _srcsEmit/_outsEmit never emit the synth service).
+	//   ctx — emit an additional_contexts entry. Same as copy, except a
+	//     runtime-class dep keeps its ordering edge with no COPY:
+	//     consumers dep a launch/release so the bake graph produces the
+	//     image before a run phase pulls it.
+	//   ctxSvc — the service the context entry points at: the `_outs`
+	//     synth when the edge copies outs-shaped, the dep itself
+	//     otherwise.
+	_depEdge: E={
+		t: _
+		d: _
+		let _isSynth = strings.HasSuffix(E.d.name, "_srcs") || strings.HasSuffix(E.d.name, "_outs")
+		let _tClass = [if E.t.class != _|_ {E.t.class}, "build"][0]
+		let _dClass = [if E.d.class != _|_ {E.d.class}, "build"][0]
+		let _hasOuts = len(E.d.outs.globs) > 0
+		outsShaped: bool
+		outsShaped: E.d.name != "bayt" && !_isSynth && (_tClass == "runtime" || _dClass == "runtime")
+		copy: bool
+		copy: [
+			if E.d.name == "bayt" {true},
+			if _isSynth || outsShaped {_hasOuts},
+			true,
+		][0]
+		ctx: bool
+		ctx: copy || (outsShaped && _dClass == "runtime")
+		ctxSvc: string
+		ctxSvc: [
+			if outsShaped && _hasOuts {"\(E.d.project)-\(E.d.name)_outs"},
+			"\(E.d.project)-\(E.d.name)",
+		][0]
+	}
+
 	// Helper: dep keys ("<project>-<name>") that the FROM-chained
 	// upstream of a target already provides. Empty when the target's
 	// `from` is null (scratch) or resolves to an image (no ref). Both
@@ -411,7 +455,7 @@ import (
 		let _depCopyLine = {
 			d: _
 			out: string
-			// Three ref shapes, three COPY shapes:
+			// Ref shape → COPY shape dispatch:
 			//
 			//   `:bayt` (project-level synth) — BULK COPY /monorepo /monorepo
 			//     from the bayt scratch synth. The synth's filesystem holds
@@ -423,6 +467,10 @@ import (
 			//     workdir (/monorepo/<dep.dir>). Mental model: "give me what
 			//     this build produced." Cross-project consumers needing
 			//     narrow filtering opt into `:foo:outs` or `:foo:srcs`.
+			//     EXCEPT on runtime-class edges (G._depEdge.outsShaped):
+			//     there the ref renders in the `:foo:outs` shape — only the
+			//     dep's declared interface flows into (or out of) a
+			//     launch/release image, never a workdir tree.
 			//
 			//   `:foo:srcs` / `:foo:outs` (synth) — per-glob filter using
 			//     the synth's outs.globs/exclude. The synth itself is a
@@ -437,6 +485,9 @@ import (
 				if d.name == "bayt" {
 					"COPY --from=\(d.project)-\(d.name) --link /monorepo /monorepo"
 				},
+				if (G._depEdge & {"t": t, "d": d}).outsShaped {
+					"COPY --from=\(d.project)-\(d.name)_outs\(_excludeJ) --parents \(_globPaths) /"
+				},
 				if !_isSynth && d.name != "bayt" {
 					"COPY --from=\(d.project)-\(d.name) --link \(_bulkDest) \(_bulkDest)"
 				},
@@ -446,13 +497,8 @@ import (
 		let _emitForDep = {
 			d: _
 			out: bool
-			// Synth refs (_srcs / _outs) require non-empty outs.globs (else
-			// there's nothing to filter and the COPY would emit garbage).
-			// Plain target refs and the bayt synth bulk-copy a fixed scope
-			// (workdir or /monorepo) and emit regardless of outs.globs.
-			let _isSynth = strings.HasSuffix(d.name, "_srcs") || strings.HasSuffix(d.name, "_outs")
 			out: !list.Contains(_inheritedDepKeys, "\(d.project)-\(d.name)") &&
-				(d.name == "bayt" || !_isSynth || len(d.outs.globs) > 0)
+				(G._depEdge & {"t": t, "d": d}).copy
 		}
 		_depCopies: [
 			if t.dockerfile.from != null
@@ -895,14 +941,16 @@ import (
 		out: strings.Join(_lines, "\n") + "\n"
 	}
 
-	// Render T_outs body: FROM scratch + COPY --from=T <outs.globs> /.
+	// Render T_outs body: busybox `_outs_ctxs` stage COPYing --from=T
+	// <outs.globs>, clamped, then flattened into FROM scratch.
 	// Leaf only — no transitive walk. T's outs are pulled from T's
 	// actual build stage (via additional_contexts wired in the compose
 	// service definition below).
 	_renderSyntheticOuts: R={
-		t:        _
-		_workdir: (_syntheticWorkdir & {dir: R.t.dir}).out
-		_stage:   "\(R.t.name)_outs"
+		t:          _
+		_workdir:   (_syntheticWorkdir & {dir: R.t.dir}).out
+		_stage:     "\(R.t.name)_outs"
+		_ctxsStage: "\(R.t.name)_outs_ctxs"
 		_excludeFlags: [for e in R.t.outs.exclude {"--exclude=\(e)"}]
 		_excludeJoin: [if len(_excludeFlags) > 0 {" \(strings.Join(_excludeFlags, " "))"}, ""][0]
 		_dirPath:  [if R.t.dir != "" {"\(R.t.dir)/"}, ""][0]
@@ -912,10 +960,19 @@ import (
 				"COPY --from=\(R.t.project)-\(R.t.name)\(_excludeJoin) --parents \(_outsPaths) /"
 			},
 		]
+		// Same `_ctxs`→flatten dance as _renderSyntheticSrcs (see there):
+		// `--parents` synthesises parent dirs stamped at build time and the
+		// copied outs carry build-time mtimes, so an unclamped `_outs` digest
+		// floats per build even when the producing stage is fully cache-hit,
+		// re-keying every consumer downstream of its COPY.
 		_lines: [
-			"FROM scratch AS \(_stage)",
+			"FROM \(lock.images.busybox) AS \(_ctxsStage)",
 			"WORKDIR \(_workdir)",
 			for l in _copy {l},
+			"ARG SOURCE_DATE_EPOCH",
+			"RUN touch -hd @${SOURCE_DATE_EPOCH:-0} /tmp/ref && find /monorepo -newer /tmp/ref -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && rm /tmp/ref",
+			"FROM scratch AS \(_stage)",
+			"COPY --from=\(_ctxsStage) /monorepo /monorepo",
 		]
 		out: string
 		out: strings.Join(_lines, "\n") + "\n"
@@ -1039,8 +1096,10 @@ import (
 				let _inheritedKeys = (G._inheritedDepKeys & {"t": t}).out
 				let _depEntries = [
 					for d in (G._targetDeps & {"t": t}).out
-					if !list.Contains(_inheritedKeys, "\(d.project)-\(d.name)") {
-						"\(d.project)-\(d.name)"
+					let _edge = (G._depEdge & {"t": t, "d": d})
+					if !list.Contains(_inheritedKeys, "\(d.project)-\(d.name)")
+					if _edge.ctx {
+						_edge.ctxSvc
 					},
 				]
 				// from-ref: present a single additional_contexts entry so
@@ -1370,7 +1429,10 @@ import (
 					(_parent): "service:\(_parent)"
 				}
 			}
-			build: (_xbakeCache & {svc: _svc}).out
+			// max: the `_outs_ctxs` clamp stage is not a modelled target; under
+			// mode=min its result is dropped from the cache export and every
+			// warm build re-runs the clamp.
+			build: (_xbakeCache & {svc: _svc, mode: "max"}).out
 			image: "bayt-\(_svc):latest"
 		}
 	}

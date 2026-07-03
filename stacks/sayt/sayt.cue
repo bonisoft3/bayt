@@ -109,6 +109,7 @@ test: {
 // supports it (compose develop.watch).
 launch: {
 	deps: *[":build"] | [...string]
+	class: "runtime"
 	compose: {}
 	dockerfile: {}
 	// bayt-dev profile auto-fires on `skaffold dev`. Projects opt
@@ -168,6 +169,7 @@ integrate: {
 // pattern.
 release: {
 	deps: *[":build"] | [...string]
+	class: "runtime"
 	dockerfile: {}
 	// Each profile is `*(struct) | null` so projects can opt out via
 	// `skaffold: profiles: "<name>": null`. Without the disjunction
@@ -264,7 +266,12 @@ ci: inject & {
 		// superset of depot.hcl's group (gen_compose mirrors depends_on into
 		// additional_contexts), so $tgt always resolves. No --allow:
 		// BUILDX_BAKE_ENTITLEMENTS_FS=0 (inject.cue) covers fs-read. _do_run
-		// has no bake.
+		// has no bake — and MUST pass --no-build: compose force-builds
+		// `service:` additional_contexts refs (the _srcs/_outs synthetics)
+		// even under pull_policy=missing and with the image pullable, so
+		// without it the run phase rebuilds the federated closure in the
+		// dindbox. --no-build prunes those build-only edges; runtime deps
+		// still pull via depends_on + pull_policy=missing.
 		let _do_both = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  # depot frontend-pin workaround (full rationale in stacks/sayt/sayt.cue)
@@ -279,7 +286,7 @@ ci: inject & {
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
-			BAYT_PULL_POLICY=missing exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
+			BAYT_PULL_POLICY=missing exec docker compose up integrate --no-build --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""#
 		// Trailing "" is the catch-all: non-`_run` combinations emit no RUN.
 		let _do = [

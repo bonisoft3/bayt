@@ -898,6 +898,22 @@ noop: #cmd & {
 	// visibility only governs cross-project access.
 	visibility: *"internal" | "public"
 
+	// class — how this target's dep edges render in Dockerfiles.
+	//   "build" (default) — cmds run against dep content: a plain dep
+	//     ref bulk-COPYs the dep's workdir tree into the stage.
+	//   "runtime" (launch/release) — the target ships an image, not a
+	//     build tree. Dep edges carry interfaces, not workdirs:
+	//     - deps INTO a runtime target render in the `:outs` shape
+	//       (only the dep's declared interface flows, at its canonical
+	//       /monorepo path); empty-outs deps contribute nothing.
+	//     - deps ONTO a runtime target bulk-copy nothing; consumers
+	//       keep the additional_contexts edge for image-production
+	//       ordering (outs-shaped COPY only if the runtime target
+	//       declares outs, which is rare — its output is its image).
+	//     Content needed at pinned non-/monorepo destinations stays on
+	//     the explicit `dockerfile.copy` escape hatch.
+	class: *"build" | "runtime"
+
 	// Toolchain activator. Default comes from the enclosing #project.activate;
 	// per-target override rare. Emitters read project.activate directly.
 	activate?: string

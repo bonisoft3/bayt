@@ -190,8 +190,8 @@ _d8_dc: compose: files: launch: services: "d8-launch": healthcheck: {
 	retries:  3
 }
 
-// --- D9: synthetic-stage emission. `<n>_srcs` (FROM scratch + COPY srcs)
-// and `<n>_outs` (FROM scratch + COPY --from=<n> outs) are stages in
+// --- D9: synthetic-stage emission. `<n>_srcs` and `<n>_outs` (each a
+// clamped busybox `_ctxs` stage flattened into FROM scratch) are stages in
 // Dockerfile.<n>; the per-project `bayt` synthetic is Dockerfile.bayt
 // (emitted when ≥1 dockerfile target exists). Containment-checked — exact
 // equality is brittle across glob orderings.
@@ -201,6 +201,9 @@ _d9_bayt_body:   _d1_dc.dockerfiles.bayt
 _d9_srcs_stage:  strings.Contains(_d9_srcs_body, "FROM scratch AS build_srcs") & true
 _d9_outs_stage:  strings.Contains(_d9_outs_body, "FROM scratch AS build_outs") & true
 _d9_outs_from:   strings.Contains(_d9_outs_body, "COPY --from=d1-build") & true
+// The clamp stage guards `_outs` digest stability: without it, build-time
+// mtimes on the copied outs float the digest per build.
+_d9_outs_clamp:  strings.Contains(_d9_outs_body, "AS build_outs_ctxs") & true
 _d9_bayt_stage:  strings.Contains(_d9_bayt_body, "FROM scratch AS bayt") & true
 _d9_bayt_scope:  strings.Contains(_d9_bayt_body, "COPY --parents .bayt/**") & true
 // Synthetic services live in the parent fragment; the bayt service in the
@@ -280,14 +283,112 @@ _d11_bayt_from: [
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-bayt",
 ]
 
-// cache-to mode: max for synthetics that flatten an unmodelled `_ctxs`
-// intermediate (_srcs, _bayt), min for the single-stage _outs.
+// cache-to mode: max for every synthetic — each flattens an unmodelled
+// `_ctxs` intermediate (_srcs, _outs, _bayt) whose result mode=min drops.
 _d11_srcs_to: _d11_dc.compose.files.build_srcs.services."d11-build_srcs".build."x-bake"."cache-to"
 _d11_srcs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_srcs,mode=max,image-manifest=true,oci-mediatypes=true"]
 _d11_outs_to: _d11_dc.compose.files.build_outs.services."d11-build_outs".build."x-bake"."cache-to"
-_d11_outs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs,mode=min,image-manifest=true,oci-mediatypes=true"]
+_d11_outs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs,mode=max,image-manifest=true,oci-mediatypes=true"]
 _d11_bayt_to: _d11_dc.compose.files."_bayt".services."d11-bayt".build."x-bake"."cache-to"
 _d11_bayt_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-bayt,mode=max,image-manifest=true,oci-mediatypes=true"]
+
+// --- D12: a `:x:outs` dep on a target with empty outs.globs is inert
+// everywhere. _outsEmit never emits the `<x>_outs` service, so the
+// consumer must suppress BOTH the dep COPY and the `service:<x>_outs`
+// additional_contexts entry — an ungated context entry would dangle
+// (compose/bake error: no such service). Guards _depEdge gating
+// _depCopies and _depEntries consistently.
+_d12: #project & {
+	name: "d12"
+	dir:  "d12"
+	targets: {
+		"producer": {
+			srcs: globs: ["src/**"]
+			cmd: "builtin": do: "make"
+			dockerfile: busybox
+		}
+		"consumer": {
+			deps: [":producer:outs"]
+			srcs: globs: ["**"]
+			cmd:  "builtin": do: "make"
+			dockerfile: busybox
+		}
+	}
+}
+_d12_dc: (#dockerComposeGen & {project: _d12, depManifests: {}})
+// No producer_outs compose file (empty outs.globs → _outsEmit skips it).
+_d12_dc: compose: files: {["producer_outs"]: _|_}
+// Consumer Dockerfile carries no dep COPY for the inert ref.
+_d12_no_copy: strings.Contains(_d12_dc.dockerfiles.consumer, "d12-producer_outs") & false
+// Consumer service carries no dangling additional_contexts entry.
+_d12_dc: compose: files: consumer: services: "d12-consumer": build: {["additional_contexts"]: {["d12-producer_outs"]: _|_}}
+
+// --- D13: runtime-class consumer. Plain dep edges INTO a runtime
+// target carry the dep's declared interface (the `:outs` shape from
+// the dep's `_outs` synth), never its workdir tree; empty-outs deps
+// contribute nothing — no COPY and no additional_contexts entry.
+_d13: #project & {
+	name: "d13"
+	dir:  "d13"
+	targets: {
+		"build": {
+			srcs: globs: ["src/**"]
+			outs: globs: ["dist/app"]
+			cmd: "builtin": do: "make"
+			dockerfile: busybox
+		}
+		"setup": {
+			cmd: "builtin": do: "true"
+			dockerfile: nubox
+		}
+		"launch": {
+			class: "runtime"
+			deps: [":build", ":setup"]
+			cmd: "builtin": do: "./dist/app"
+			dockerfile: busybox
+			compose: {}
+		}
+	}
+}
+_d13_dc: (#dockerComposeGen & {project: _d13, depManifests: {}})
+_d13_body: _d13_dc.dockerfiles.launch
+// build's interface flows outs-shaped from the clamped _outs synth…
+_d13_outs_copy: strings.Contains(_d13_body, "COPY --from=d13-build_outs --parents /monorepo/d13/dist/app /") & true
+// …never as a bulk workdir COPY of the build stage.
+_d13_no_bulk: strings.Contains(_d13_body, "COPY --from=d13-build --link") & false
+// The empty-outs setup dep contributes nothing at all.
+_d13_no_setup: strings.Contains(_d13_body, "d13-setup") & false
+// Context points at the _outs synth; neither the bulk service nor the
+// empty-outs dep appears.
+_d13_dc: compose: files: launch: services: "d13-launch": build: additional_contexts: "d13-build_outs": "service:d13-build_outs"
+_d13_dc: compose: files: launch: services: "d13-launch": build: {["additional_contexts"]: {["d13-build"]: _|_, ["d13-setup"]: _|_}}
+
+// --- D14: runtime-class dep. A build-class consumer depping a no-outs
+// launch bulk-copies nothing (a launch's output is its image, not
+// files) but keeps the additional_contexts edge so the bake graph
+// produces the image before a run phase pulls it.
+_d14: #project & {
+	name: "d14"
+	dir:  "d14"
+	targets: {
+		"launch": {
+			class: "runtime"
+			cmd: "builtin": do: "serve"
+			dockerfile: nubox
+			compose: {}
+		}
+		"integrate": {
+			deps: [":launch"]
+			srcs: globs: ["tests/**"]
+			cmd: "builtin": do: "run-tests"
+			dockerfile: busybox
+		}
+	}
+}
+_d14_dc: (#dockerComposeGen & {project: _d14, depManifests: {}})
+_d14_body: _d14_dc.dockerfiles.integrate
+_d14_no_copy: strings.Contains(_d14_body, "COPY --from=d14-launch") & false
+_d14_dc: compose: files: integrate: services: "d14-integrate": build: additional_contexts: "d14-launch": "service:d14-launch"
 
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
@@ -303,6 +404,7 @@ Tests: docker_compose: {
 	d9_srcs_stage:  _d9_srcs_stage
 	d9_outs_stage:  _d9_outs_stage
 	d9_outs_from:   _d9_outs_from
+	d9_outs_clamp:  _d9_outs_clamp
 	d9_bayt_stage:  _d9_bayt_stage
 	d9_bayt_scope:  _d9_bayt_scope
 	d10:            _d10_dc
@@ -314,4 +416,12 @@ Tests: docker_compose: {
 	d11_srcs_to:       _d11_srcs_to
 	d11_outs_to:       _d11_outs_to
 	d11_bayt_to:       _d11_bayt_to
+	d12:               _d12_dc
+	d12_no_copy:       _d12_no_copy
+	d13:               _d13_dc
+	d13_outs_copy:     _d13_outs_copy
+	d13_no_bulk:       _d13_no_bulk
+	d13_no_setup:      _d13_no_setup
+	d14:               _d14_dc
+	d14_no_copy:       _d14_no_copy
 }
