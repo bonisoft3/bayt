@@ -118,26 +118,20 @@ import (
 		])
 	}
 
-	// Helper: how the dep edge (consumer t, dep entry d) renders. Used by
-	// both _depCopies (Dockerfile path) and _depEntries (compose
-	// additional_contexts path) — the two MUST stay gated consistently:
-	// a context entry whose service is never emitted dangles (compose/
-	// bake error), and a COPY without its context can't resolve --from.
+	// Helper: how the dep edge (consumer t, dep entry d) renders. Both
+	// _depCopies (Dockerfile path) and _depEntries (additional_contexts
+	// path) MUST dispatch through here — divergent gating dangles a
+	// context or strands a COPY without its --from. Semantics live on
+	// #target.class; guarded by D12–D14.
 	//
-	//   outsShaped — plain target refs where either endpoint is
-	//     runtime-class carry the dep's declared interface (the `:outs`
-	//     synth shape), not its workdir. Synth views are already shaped;
-	//     the bayt synth is scaffolding, not a workdir bulk-copy.
-	//   copy — emit a Dockerfile COPY. Synth refs and outs-shaped edges
-	//     require non-empty outs.globs (nothing flows otherwise, and
-	//     _srcsEmit/_outsEmit never emit the synth service).
-	//   ctx — emit an additional_contexts entry. Same as copy, except a
-	//     runtime-class dep keeps its ordering edge with no COPY:
-	//     consumers dep a launch/release so the bake graph produces the
-	//     image before a run phase pulls it.
-	//   ctxSvc — the service the context entry points at: the `_outs`
-	//     synth when the edge copies outs-shaped, the dep itself
-	//     otherwise.
+	//   outsShaped — plain ref on a runtime-class edge: the `:outs` shape.
+	//   copy       — emit a COPY. Synth refs and outs-shaped edges need
+	//                non-empty outs.globs (the synth service isn't
+	//                emitted otherwise).
+	//   ctx        — emit a context entry. copy, plus the no-COPY
+	//                image-production ordering edge onto a runtime dep.
+	//   ctxSvc     — context target: the `_outs` synth when the edge
+	//                copies outs-shaped, the dep itself otherwise.
 	_depEdge: E={
 		t: _
 		d: _
@@ -467,10 +461,9 @@ import (
 			//     workdir (/monorepo/<dep.dir>). Mental model: "give me what
 			//     this build produced." Cross-project consumers needing
 			//     narrow filtering opt into `:foo:outs` or `:foo:srcs`.
-			//     EXCEPT on runtime-class edges (G._depEdge.outsShaped):
-			//     there the ref renders in the `:foo:outs` shape — only the
-			//     dep's declared interface flows into (or out of) a
-			//     launch/release image, never a workdir tree.
+			//     On runtime-class edges (G._depEdge.outsShaped) the ref
+			//     renders in the `:foo:outs` shape instead — a launch/
+			//     release image exchanges interfaces, never workdir trees.
 			//
 			//   `:foo:srcs` / `:foo:outs` (synth) — per-glob filter using
 			//     the synth's outs.globs/exclude. The synth itself is a
@@ -960,11 +953,9 @@ import (
 				"COPY --from=\(R.t.project)-\(R.t.name)\(_excludeJoin) --parents \(_outsPaths) /"
 			},
 		]
-		// Same `_ctxs`→flatten dance as _renderSyntheticSrcs (see there):
-		// `--parents` synthesises parent dirs stamped at build time and the
-		// copied outs carry build-time mtimes, so an unclamped `_outs` digest
-		// floats per build even when the producing stage is fully cache-hit,
-		// re-keying every consumer downstream of its COPY.
+		// Same `_ctxs`→flatten dance as _renderSyntheticSrcs (see there);
+		// unclamped, the digest floats per build even with the producing
+		// stage cache-hit (guarded by d9_outs_clamp).
 		_lines: [
 			"FROM \(lock.images.busybox) AS \(_ctxsStage)",
 			"WORKDIR \(_workdir)",
@@ -1429,9 +1420,8 @@ import (
 					(_parent): "service:\(_parent)"
 				}
 			}
-			// max: the `_outs_ctxs` clamp stage is not a modelled target; under
-			// mode=min its result is dropped from the cache export and every
-			// warm build re-runs the clamp.
+			// max: the `_outs_ctxs` stage is an unmodelled intermediate
+			// (see #bakeCacheRefs.mode; guarded by _d11_outs_to).
 			build: (_xbakeCache & {svc: _svc, mode: "max"}).out
 			image: "bayt-\(_svc):latest"
 		}

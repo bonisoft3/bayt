@@ -266,12 +266,8 @@ ci: inject & {
 		// superset of depot.hcl's group (gen_compose mirrors depends_on into
 		// additional_contexts), so $tgt always resolves. No --allow:
 		// BUILDX_BAKE_ENTITLEMENTS_FS=0 (inject.cue) covers fs-read. _do_run
-		// has no bake — and MUST pass --no-build: compose force-builds
-		// `service:` additional_contexts refs (the _srcs/_outs synthetics)
-		// even under pull_policy=missing and with the image pullable, so
-		// without it the run phase rebuilds the federated closure in the
-		// dindbox. --no-build prunes those build-only edges; runtime deps
-		// still pull via depends_on + pull_policy=missing.
+		// has no bake and is pull-only; its --no-build is load-bearing
+		// (guarded by sayt_ci_check.cue with the full rationale).
 		let _do_both = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  # depot frontend-pin workaround (full rationale in stacks/sayt/sayt.cue)

@@ -293,11 +293,11 @@ _d11_bayt_to: _d11_dc.compose.files."_bayt".services."d11-bayt".build."x-bake"."
 _d11_bayt_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-bayt,mode=max,image-manifest=true,oci-mediatypes=true"]
 
 // --- D12: a `:x:outs` dep on a target with empty outs.globs is inert
-// everywhere. _outsEmit never emits the `<x>_outs` service, so the
-// consumer must suppress BOTH the dep COPY and the `service:<x>_outs`
-// additional_contexts entry — an ungated context entry would dangle
-// (compose/bake error: no such service). Guards _depEdge gating
-// _depCopies and _depEntries consistently.
+// everywhere: _outsEmit never emits the `<x>_outs` service, so an
+// ungated COPY or `service:<x>_outs` context would dangle (compose/bake
+// error). Same-project refs are also pre-filtered by _allEmit in
+// _targetDeps; for cross-project entries (transitiveCrossDeps, not
+// pre-filtered) the _depEdge gate is the only guard.
 _d12: #project & {
 	name: "d12"
 	dir:  "d12"

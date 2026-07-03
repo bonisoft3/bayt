@@ -870,9 +870,11 @@ noop: #cmd & {
 	// The manifest emits the merged list (defaultGlobs values + globs)
 	// as `srcs.globs`; downstream emitters see only the resolved form.
 	//
-	// outs — files this target exposes to consumers. Same shape as srcs.
-	// For cross-project consumers via `deps:`, only outs are COPYed (the
-	// declared interface). For same-project chain via `dockerfile.from`,
+	// outs — files this target exposes to consumers: the declared
+	// interface. Same shape as srcs. Consumers COPY only outs on `:outs`
+	// view refs and on runtime-class edges (see `class` below); plain
+	// build-class dep refs bulk-COPY the whole workdir regardless. For
+	// same-project chain via `dockerfile.from`,
 	// the entire stage filesystem flows in (outs irrelevant). For
 	// out-of-tree side effects (toolchain installs at /root/.local/...),
 	// use `dockerfile.from` to inherit the producer stage.
@@ -901,17 +903,12 @@ noop: #cmd & {
 	// class — how this target's dep edges render in Dockerfiles.
 	//   "build" (default) — cmds run against dep content: a plain dep
 	//     ref bulk-COPYs the dep's workdir tree into the stage.
-	//   "runtime" (launch/release) — the target ships an image, not a
-	//     build tree. Dep edges carry interfaces, not workdirs:
-	//     - deps INTO a runtime target render in the `:outs` shape
-	//       (only the dep's declared interface flows, at its canonical
-	//       /monorepo path); empty-outs deps contribute nothing.
-	//     - deps ONTO a runtime target bulk-copy nothing; consumers
-	//       keep the additional_contexts edge for image-production
-	//       ordering (outs-shaped COPY only if the runtime target
-	//       declares outs, which is rare — its output is its image).
-	//     Content needed at pinned non-/monorepo destinations stays on
-	//     the explicit `dockerfile.copy` escape hatch.
+	//   "runtime" (launch/release) — the target ships an image; dep
+	//     edges carry interfaces, not workdirs. Deps INTO it render in
+	//     the `:outs` shape (empty-outs deps contribute nothing); deps
+	//     ONTO it bulk-copy nothing but keep the additional_contexts
+	//     edge for image-production ordering. Content at pinned
+	//     non-/monorepo destinations stays on `dockerfile.copy`.
 	class: *"build" | "runtime"
 
 	// Toolchain activator. Default comes from the enclosing #project.activate;
