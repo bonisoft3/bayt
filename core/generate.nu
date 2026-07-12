@@ -196,6 +196,14 @@ def write-bundle [bundle: record, base: string, --depot] {
 	# --- Taskfile (the project-root Taskfile.yml is user-authored)
 	atomic-write $"($prefix).bayt/Taskfile.yml" (_hash-header ($bundle.taskfile.root | to yaml))
 	atomic-write $"($prefix).bayt/Taskfile.bayt.yml" (_hash-header (_inject-taskfile-runtime ($bundle.taskfile.bayt_root | to yaml) $base))
+	# Migration guard: a pre-0.28 generated project root includes the
+	# aggregate at .bayt/Taskfile.yml — now the launch shim — silently
+	# chaining host addresses to bayt:bayt:<n>. Warn loudly; the root is
+	# user-authored, so bayt never rewrites it.
+	let user_root = $"($prefix)Taskfile.yml"
+	if ($user_root | path exists) and (open --raw $user_root | str contains "./.bayt/Taskfile.yml") {
+		print -e $"bayt: ($user_root) includes ./.bayt/Taskfile.yml \(the launch shim, not the task aggregate) — point its bayt: include at ./.bayt/Taskfile.bayt.yml"
+	}
 	for entry in ($bundle.taskfile.files | transpose name data) {
 		atomic-write $"($prefix).bayt/Taskfile.($entry.name).yaml" (_hash-header (_inject-taskfile-runtime ($entry.data | to yaml) $base))
 	}
