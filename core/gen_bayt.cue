@@ -81,6 +81,13 @@ _expandLines: {
 			for d in _transitiveCrossDeps[n] {d.dir}
 		]}).out
 
+		// Gradle-stack targets pass `--init-script .bayt/init.gradle.kts`
+		// (stacks/gradle _initFlag). Emitters gate the file and its COPY
+		// on this, so non-gradle projects carry no gradle residue.
+		gradleInit: len([
+			for n, t in G.project.targets if t != null
+			for c in t.cmds if strings.Contains(c.do, "init.gradle.kts") {1},
+		]) > 0
 	}
 
 	// Builds a structured entry `{name, project, dir, outs}` for a

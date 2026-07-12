@@ -253,12 +253,12 @@ def write-bundle [bundle: record, base: string, --depot] {
 		atomic-write $"($prefix).bayt/bake.($entry.name).hcl" (_hash-header $entry.body)
 	}
 
-	# --- gradle init script
+	# --- gradle init script (gradle-stack projects only)
 	# Points gradle's local build cache at $BAYT_CACHE_DIR/gradle so
 	# cache.nu's mount and gradle's cache share the same on-disk
-	# store. Emitted for every project — non-gradle projects' copy
-	# never gets sourced. Requires `org.gradle.caching=true` in the
-	# project's gradle.properties for gradle to consult the cache.
+	# store. Requires `org.gradle.caching=true` in the project's
+	# gradle.properties for gradle to consult the cache.
+	if ($bundle.manifest.projectManifest.gradleInit? | default false) {
 	atomic-write $"($prefix).bayt/init.gradle.kts" (_slash-header 'settingsEvaluated {
     // Resolution mirrors cache.nu local-root:
     //   1. $BAYT_CACHE_DIR (explicit override)
@@ -277,6 +277,7 @@ def write-bundle [bundle: record, base: string, --depot] {
     }
 }
 ')
+	}
 
 	# --- depot.{yaml,hcl}: emitted when the project opts in via
 	# `#project.depot: true` (so its canonical regen keeps them fresh), or for

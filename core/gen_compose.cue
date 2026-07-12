@@ -556,9 +556,8 @@ import (
 		// together by a single generate-bayt.nu pass, so per-file
 		// granularity provides no realistic cache benefit (and the
 		// immediately-following RUN layer invalidates on any FS change
-		// either way). init.gradle.kts is emitted for every project —
-		// non-gradle stages just carry a harmless ~10-line file they
-		// never reference.
+		// either way). init.gradle.kts exists only for gradle-stack
+		// projects (projectManifest.gradleInit).
 		//
 		// Per-target Taskfile.<n>.yaml is conditional: gen_taskfile only
 		// emits it when t.taskfile != _|_ (e.g. sayt.launch defines no
@@ -569,7 +568,7 @@ import (
 			".bayt/Taskfile.bayt.yml",
 			if t.taskfile != _|_ {".bayt/Taskfile.\(t.name).yaml"},
 			".bayt/bayt.\(t.name).json",
-			".bayt/init.gradle.kts",
+			if G._m.projectManifest.gradleInit {".bayt/init.gradle.kts"},
 		]
 		_selfTaskfileCopies: [
 			"COPY \(strings.Join(_selfTaskfileSources, " ")) ./.bayt/",
