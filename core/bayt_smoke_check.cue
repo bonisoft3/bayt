@@ -40,7 +40,7 @@ _smoke: #project & {
 }
 
 // Resolved-value assertions — narrow because most output shapes
-// (compose service names, taskfile root.includes, bake HCL, etc.)
+// (compose service names, taskfile bayt_root.includes, bake HCL, etc.)
 // changed in the producer-controlled-exposure overhaul. Re-add specific
 // assertions per emitter as they stabilize.
 _smoke: targets: build: cmds: [

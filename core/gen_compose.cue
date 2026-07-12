@@ -411,7 +411,7 @@ import (
 		// chaining through same-project setup → workspace-root setup
 		// brings the wsroot taskfile + manifest into this stage too
 		// (needed for in-container task resolution of
-		// `:workspaceroot:setup:setup`).
+		// `bayt:workspaceroot:bayt:setup`).
 		//
 		// FROM-chain dedup: when this target chains its FROM off another
 		// bayt target (`dockerfile.from.ref`), the upstream's filesystem

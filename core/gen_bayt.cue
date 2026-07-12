@@ -74,7 +74,7 @@ _expandLines: {
 		// transitively. Single source of truth for "which other projects
 		// does this project depend on (directly or through a chain of
 		// same-project deps)" — derived, not hand-listed. Used by the
-		// emitters (compose, taskfile root, skaffold root) to wire
+		// emitters (compose, taskfile bayt namespace) to wire
 		// cross-project includes / requires automatically.
 		crossProjectDirs: (_uniqStrings & {in: [
 			for n, t in G.project.targets if t != null

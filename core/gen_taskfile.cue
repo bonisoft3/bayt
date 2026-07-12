@@ -316,75 +316,31 @@ import (
 		}
 	}
 
-	// Two emitted Taskfiles, layered for stability + ergonomics:
-	//
-	//   - `<project.dir>/Taskfile.yml`  (the host-facing root) carries
-	//     ONE structural include — `bayt: ./.bayt/Taskfile.yml` — plus
-	//     any cross-project sibling project roots (`workspaceroot:`,
-	//     etc.) needed so absolute refs `:<proj>:bayt:<target>` resolve.
-	//     This file's content only changes when the cross-project dep
-	//     set changes (rare); a normal source edit doesn't touch it,
-	//     keeping the Docker layer that COPYs it durable across edits.
-	//
-	//   - `<project.dir>/.bayt/Taskfile.yml`  (the bayt namespace)
-	//     carries one include per emitted target. Its content changes
-	//     only when the target set changes (essentially never), so the
-	//     Docker layer that COPYs it is even more durable. No cross-
-	//     project includes here — those live in the root so absolute
-	//     refs land at a single, well-known root scope (the same one
-	//     whether `task` is launched on the host from project root or
-	//     from the in-container Dockerfile RUN).
-	//
-	// All includes carry `optional: true` so a Docker stage that COPYs
-	// only the per-target Taskfile fragment for its own target (per-
-	// target cache isolation) doesn't crash on missing siblings.
-	//
-	// `dir:` on each include matters: go-task interprets an included
-	// file's `sources:` / `generates:` relative to the include's dir,
-	// not the included file's. Anchoring at the project root keeps
-	// globs (`.output/**/*`) resolving correctly.
-
-	// root — at <project.dir>/Taskfile.yml. Single bayt include + any
-	// cross-project sibling roots. Sibling-project includes target the
-	// other project's project-root Taskfile.yml (NOT its .bayt/Taskfile.yml)
-	// so the address chain `:<proj>:bayt:<target>` traverses through the
-	// other project's own bayt include, mirroring the local structure.
-	root: {
-		version: "3"
-		let _relRootFromProjectDir = strings.Repeat("../", G._m._depth)
-		let _baytInclude = {
-			bayt: {
-				taskfile: "./.bayt/Taskfile.yml"
-				dir:      "./"
-				optional: true
-			}
-		}
-		let _crossIncludes = {
-			for dep in G._m.projectManifest.crossProjectDirs {
-				let _depName = [if dep == "" {"workspaceroot"}, strings.Replace(dep, "/", "_", -1)][0]
-				let _depPath = [if dep != "" {"\(dep)/"}, ""][0]
-				(_depName): {
-					taskfile: "\(_relRootFromProjectDir)\(_depPath)Taskfile.yml"
-					dir:      "\(_relRootFromProjectDir)\(_depPath)"
-					optional: true
-				}
-			}
-		}
-		includes: _baytInclude & _crossIncludes
-	}
-
-	// bayt_root — at <project.dir>/.bayt/Taskfile.yml. One include per
-	// emitted target, pointing at the per-target file. Target includes
-	// live here (not at root) so editing one target's Taskfile
-	// fragment doesn't churn the project-root Taskfile.yml that's
-	// COPY'd into every docker stage.
+	// bayt_root — <project.dir>/.bayt/Taskfile.yml, the `bayt` namespace.
+	// The user-authored project-root Taskfile.yml includes this file.
+	// One include per emitted target plus one per cross-project dep;
+	// dep includes target the dep's project-root Taskfile.yml so
+	// `bayt:<proj>:bayt:<target>` traverses the dep's own root.
+	// `dir:` anchors at the owning project's root —
+	// go-task resolves an included file's sources/generates globs
+	// against the include's dir, not the included file's location.
 	bayt_root: {
 		version: "3"
+		let _relRootFromBayt = "../" + strings.Repeat("../", G._m._depth)
 		let _localIncludes = {
 			for n, _ in _emit {
 				(n): {
 					taskfile: "./Taskfile.\(n).yaml"
 					dir:      "../"
+					optional: true
+				}
+			}
+			for dep in G._m.projectManifest.crossProjectDirs {
+				let _depName = [if dep == "" {"workspaceroot"}, strings.Replace(dep, "/", "_", -1)][0]
+				let _depPath = [if dep != "" {"\(dep)/"}, ""][0]
+				(_depName): {
+					taskfile: "\(_relRootFromBayt)\(_depPath)Taskfile.yml"
+					dir:      "\(_relRootFromBayt)\(_depPath)"
 					optional: true
 				}
 			}

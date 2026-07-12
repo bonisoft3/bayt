@@ -1,14 +1,17 @@
 // taskfile_check.cue — exercises #taskfileGen on top of the manifest.
-// Two emitted Taskfiles per project: the project-root Taskfile.yml
-// (`root`) carries one structural include into .bayt/ plus cross-project
-// sibling roots; the .bayt/Taskfile.yml (`bayt_root`) lists per-target
-// file includes. Each per-target file holds a `default:` task (single-
-// cmd targets) or a wrapper + N internal cmd-tasks (multi-cmd).
+// One emitted Taskfile per project: .bayt/Taskfile.yml (`bayt_root`)
+// lists per-target file includes plus cross-project dep includes. The
+// project-root Taskfile.yml is user-authored (never emitted) and hooks
+// in via a single `bayt:` include. Each per-target file holds a
+// `default:` task (single-cmd targets) or a wrapper + N internal
+// cmd-tasks (multi-cmd).
 package bayt
 
-// --- T1: smallest project. Root has the bayt include; bayt_root lists
-// per-target files; each file's `default:` task wraps the cmd in the
-// defer-EXIT_CODE pattern that writes the stamp only on success.
+// --- T1: smallest project. bayt_root lists per-target files; each
+// file's `default:` task wraps the cmd in the defer-EXIT_CODE pattern
+// that writes the stamp only on success. `optional: true` on every
+// include is load-bearing: Docker stages COPY only their own target's
+// fragment and must not crash on missing siblings or dep projects.
 _t1: #project & {
 	name: "t1"
 	dir:  "t1"
@@ -24,12 +27,6 @@ _t1: #project & {
 	}
 }
 _t1_tf: (#taskfileGen & {project: _t1, depManifests: {}})
-_t1_tf: root: version: "3"
-_t1_tf: root: includes: bayt: {
-	taskfile: "./.bayt/Taskfile.yml"
-	dir:      "./"
-	optional: true
-}
 _t1_tf: bayt_root: version: "3"
 _t1_tf: bayt_root: includes: setup: {
 	taskfile: "./Taskfile.setup.yaml"

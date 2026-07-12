@@ -30,18 +30,18 @@
 # topo-order the dep graph, and regenerate leaf-first — parallel within
 # dependency levels (see run-schedule).
 #
-# Files emitted, relative to the project's dir. All bayt-generated
+# Files emitted, relative to the project's dir. ALL bayt-generated
 # files live under `.bayt/` with the `<tool>.<target>.<ext>` convention.
-# Tool roots that the user authors (Taskfile.yml, compose.yaml,
-# skaffold.yaml) get a single root file alongside.
+# Tool roots (Taskfile.yml, compose.yaml, skaffold.yaml) are
+# user-authored composition points — bayt never writes them; each
+# hand-written root includes the .bayt/ fragments it wants.
 #
 #   .bayt/bayt.<n>.json                 per-target canonical manifest
-#   Taskfile.yml                        root (version + includes)
+#   .bayt/Taskfile.yml                  bayt namespace (target + dep includes)
 #   .bayt/Taskfile.<n>.yaml             per-target go-task include
 #   .bayt/Dockerfile.<n>                per-target Dockerfile
-#   compose.yaml                        root (include: [...])
+#   .bayt/compose.yaml                  compose aggregate include
 #   .bayt/compose.<n>.yaml              per-target compose include
-#   skaffold.yaml                       root (requires: [...])
 #   .bayt/skaffold.<n>.yaml             per-target skaffold include
 #   .bayt/bake.<n>.hcl                  per-target bake HCL
 #   .bayt/vscode.<n>.json               per-target vscode task entries
@@ -192,8 +192,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 		atomic-write $"($prefix).bayt/bayt.($entry.name).json" (_json-header $data | to json --indent 2)
 	}
 
-	# --- Taskfile
-	atomic-write $"($prefix)Taskfile.yml" (_hash-header (_inject-taskfile-runtime ($bundle.taskfile.root | to yaml) $base))
+	# --- Taskfile (the project-root Taskfile.yml is user-authored)
 	atomic-write $"($prefix).bayt/Taskfile.yml" (_hash-header (_inject-taskfile-runtime ($bundle.taskfile.bayt_root | to yaml) $base))
 	for entry in ($bundle.taskfile.files | transpose name data) {
 		atomic-write $"($prefix).bayt/Taskfile.($entry.name).yaml" (_hash-header (_inject-taskfile-runtime ($entry.data | to yaml) $base))
