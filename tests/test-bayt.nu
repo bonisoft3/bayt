@@ -38,6 +38,20 @@ def eval-fail [label: string, files: list<string>]: nothing -> int {
 	}
 }
 
+# Missing required fields are INCOMPLETE (not a conflict), which plain
+# `cue eval` tolerates — `cue export` rejects them, and export is what
+# `bayt generate` pass-2 actually runs.
+def export-fail [label: string, files: list<string>]: nothing -> int {
+	let r = (do { ^cue export ...$files } | complete)
+	if $r.exit_code != 0 {
+		print $"  PASS  ($label) exit=($r.exit_code) as expected"
+		0
+	} else {
+		print $"  FAIL  ($label) expected non-zero exit, got 0"
+		1
+	}
+}
+
 def main [] {
 	# Run from the plugin root: plugins/bayt/. Core files live under
 	# ./core/; stacks + tests are relative packages.
@@ -79,6 +93,7 @@ def main [] {
 	# pnpm, mise) hold pure toolchain concepts.
 	let sayt = ["./stacks/sayt/"]
 	let neg  = ["./tests/_negative/"]
+	let neg_add = ["./tests/_negative_add/"]
 
 	mut failed = 0
 	print "positive suites"
@@ -86,6 +101,7 @@ def main [] {
 	$failed = $failed + (eval-pass "stacks/sayt" $sayt)
 	print "negative suites"
 	$failed = $failed + (eval-fail "A→B→A cycle must fail" $neg)
+	$failed = $failed + (export-fail "remote add without checksum must fail" $neg_add)
 
 	if $failed > 0 {
 		print $"($failed) failure\(s\)"

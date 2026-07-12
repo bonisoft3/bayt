@@ -390,6 +390,31 @@ _d14_body: _d14_dc.dockerfiles.integrate
 _d14_no_copy: strings.Contains(_d14_body, "COPY --from=d14-launch") & false
 _d14_dc: compose: files: integrate: services: "d14-integrate": build: additional_contexts: "d14-launch": "service:d14-launch"
 
+// --- D15: dockerfile.add — pinned ADD stanzas. Remote emits
+// `ADD --checksum=…` (with `--unpack` only when set); local emits a
+// plain ADD. Lines land after the preamble.
+_d15: #project & {
+	name: "d15"
+	dir:  "d15"
+	targets: {
+		"release": {
+			cmd: "builtin": do: "true"
+			dockerfile: busybox & {
+				add: [
+					{url: "https://example.com/model.gguf", sha256: "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d", dest: "/app/models/model.gguf"},
+					{url: "https://example.com/data.tar.gz", sha256: "95e3a3a2adeacd1b8dd704743c71eec8343dde472d3efe71101a62570c47cbbd", dest: "/data/", unpack: true},
+					{src: "vendor/tools.tar.gz", dest: "/opt/tools/"},
+				]
+			}
+		}
+	}
+}
+_d15_dc: (#dockerComposeGen & {project: _d15, depManifests: {}})
+_d15_body: _d15_dc.dockerfiles.release
+_d15_remote: strings.Contains(_d15_body, "ADD --checksum=sha256:2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d https://example.com/model.gguf /app/models/model.gguf") & true
+_d15_unpack: strings.Contains(_d15_body, "ADD --checksum=sha256:95e3a3a2adeacd1b8dd704743c71eec8343dde472d3efe71101a62570c47cbbd --unpack=true https://example.com/data.tar.gz /data/") & true
+_d15_local:  strings.Contains(_d15_body, "ADD vendor/tools.tar.gz /opt/tools/") & true
+
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
 	d1: _d1_dc
@@ -424,4 +449,8 @@ Tests: docker_compose: {
 	d13_no_setup:      _d13_no_setup
 	d14:               _d14_dc
 	d14_no_copy:       _d14_no_copy
+	d15:               _d15_dc
+	d15_remote:        _d15_remote
+	d15_unpack:        _d15_unpack
+	d15_local:         _d15_local
 }

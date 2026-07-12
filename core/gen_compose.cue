@@ -540,6 +540,19 @@ import (
 			for k, v in t.env {"ENV \(k)=\(v)"},
 		]
 
+		// dockerfile.add — pinned ADD stanzas (see #dockerfile.#add).
+		// `--unpack` emitted only when set, so unset keeps ADD's default
+		// (local tar extracts, remote never).
+		_addLines: [
+			for a in t.dockerfile.add {
+				let _unpack = [if a.unpack != _|_ {" --unpack=\(a.unpack)"}, ""][0]
+				[
+					if a.url != _|_ {"ADD --checksum=sha256:\(a.sha256)\(_unpack) \(a.url) \(a.dest)"},
+					if a.src != _|_ {"ADD\(_unpack) \(a.src) \(a.dest)"},
+				][0]
+			},
+		]
+
 		// Always-on per-target taskfile+manifest publish: every emitted
 		// Dockerfile stage carries its own .bayt/Taskfile.<n>.yaml +
 		// .bayt/bayt.<n>.json + the .bayt/Taskfile{,.bayt}.yml roots.
@@ -801,6 +814,7 @@ import (
 			"WORKDIR \(_workdir)",
 			for p in _copyLines {p},
 			for p in t.dockerfile.preamble {p},
+			for l in _addLines {l},
 			for l in _depCopies {l},
 			for l in _srcCopies {l},
 			for l in _preRun {l},

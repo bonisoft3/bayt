@@ -246,6 +246,29 @@ noop: #cmd & {
 	//         parallelism.
 	//     Trade-off: each (project, target) keeps its own cache slot.
 	//   - Secret/ssh mounts accept `id` (the secret/ssh-key name).
+	// #add — one `add` entry.
+	//   local:  {src, dest}         — build-context path; tar archives
+	//                                 auto-extract (unpack: false keeps
+	//                                 the archive). List the src in
+	//                                 target srcs too: the fingerprint
+	//                                 hashes worktree files via srcs.
+	//   remote: {url, sha256, dest} — BuildKit downloads, verifies, and
+	//                                 layer-caches by the digest; no
+	//                                 curl/CA tooling in the stage.
+	//                                 Extracts only with unpack: true.
+	// Closed disjunction: mixing forms or omitting the remote checksum
+	// fails unification.
+	#add: close({
+		src:     string
+		dest:    string
+		unpack?: bool
+	}) | close({
+		url:     string & =~"^https://"
+		sha256:  string & =~"^[0-9a-f]{64}$"
+		dest:    string
+		unpack?: bool
+	})
+
 	#mount: {
 		type:   "cache"
 		target: string
@@ -369,6 +392,12 @@ noop: #cmd & {
 	// `defaultPreamble values + preamble`.
 	preamble:        [...string]
 	defaultPreamble: *null | #MapAsList
+
+	// Pinned ADD stanzas, emitted after the preamble (stable blobs
+	// layer before source COPYs). Two forms — see #add. The remote form
+	// requires the checksum; an unpinned ADD has no place in the DSL
+	// (raw preamble remains the escape hatch).
+	add: [...#add]
 
 	// Build-time mounts (BuildKit `--mount=type=cache,...`) and
 	// secrets (BuildKit `--mount=type=secret,...`). Attached to RUN
