@@ -177,6 +177,15 @@ def write-bundle [bundle: record, base: string, --depot] {
 	let ws = (pwd | str trim)
 	let prefix = if $base == "." or $base == "" { "" } else { $"($base)/" }
 
+	# Vendored-package handshake: consumers import the bayt CUE package
+	# from their own repo (cue.mod), so a stale vendor evaluates old
+	# templates under a new CLI and actively re-emits old shapes. The
+	# launch-shim include is the marker; refuse to write stale output.
+	let shim = ($bundle.taskfile | get -o root | get -o includes | get -o bayt | get -o taskfile | default "")
+	if $shim != "./Taskfile.bayt.yml" {
+		error make {msg: $"bayt: the imported bayt CUE package predates this CLI \(launch shim include resolves to '($shim)'\) — refresh the vendored plugins/bayt tree to match the installed bayt version"}
+	}
+
 	let bayt_dir = $"($prefix).bayt"
 	if ($bayt_dir | path exists) {
 		rm -rf $bayt_dir
