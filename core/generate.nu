@@ -37,7 +37,8 @@
 # hand-written root includes the .bayt/ fragments it wants.
 #
 #   .bayt/bayt.<n>.json                 per-target canonical manifest
-#   .bayt/Taskfile.yml                  bayt namespace (target + dep includes)
+#   .bayt/Taskfile.yml                  launch root for bayt-initiated `task -t`
+#   .bayt/Taskfile.bayt.yml             bayt namespace (target + dep includes)
 #   .bayt/Taskfile.<n>.yaml             per-target go-task include
 #   .bayt/Dockerfile.<n>                per-target Dockerfile
 #   .bayt/compose.yaml                  compose aggregate include
@@ -193,7 +194,8 @@ def write-bundle [bundle: record, base: string, --depot] {
 	}
 
 	# --- Taskfile (the project-root Taskfile.yml is user-authored)
-	atomic-write $"($prefix).bayt/Taskfile.yml" (_hash-header (_inject-taskfile-runtime ($bundle.taskfile.bayt_root | to yaml) $base))
+	atomic-write $"($prefix).bayt/Taskfile.yml" (_hash-header ($bundle.taskfile.root | to yaml))
+	atomic-write $"($prefix).bayt/Taskfile.bayt.yml" (_hash-header (_inject-taskfile-runtime ($bundle.taskfile.bayt_root | to yaml) $base))
 	for entry in ($bundle.taskfile.files | transpose name data) {
 		atomic-write $"($prefix).bayt/Taskfile.($entry.name).yaml" (_hash-header (_inject-taskfile-runtime ($entry.data | to yaml) $base))
 	}

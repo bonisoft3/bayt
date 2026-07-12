@@ -542,26 +542,23 @@ import (
 
 		// Always-on per-target taskfile+manifest publish: every emitted
 		// Dockerfile stage carries its own .bayt/Taskfile.<n>.yaml +
-		// .bayt/bayt.<n>.json + the root .bayt/Taskfile.yml index +
-		// the project-root Taskfile.yml. Cheap (tiny files, --link),
-		// and it's the only way a cross-project incremental consumer
-		// can resolve `:<dep-project>:bayt:<n>` when its task chain
-		// runs inside the container — the consumer's
-		// `COPY --from=<dep>-<n> --link /monorepo/<dep.dir>/. ...`
-		// in _depCopies above brings the dep stage's full workdir in,
-		// including these files at their canonical paths.
+		// .bayt/bayt.<n>.json + the .bayt/Taskfile{,.bayt}.yml roots.
+		// Cheap (tiny files, --link), and cross-project incremental
+		// consumers need the dep's taskfiles + manifest in-container —
+		// the consumer's `COPY --from=<dep>-<n> --link
+		// /monorepo/<dep.dir>/. ...` in _depCopies above brings the dep
+		// stage's full workdir in, including these files at their
+		// canonical paths.
 		//
-		// Project-root Taskfile.yml is the launch point (`task bayt:<n>`
-		// is invoked from WORKDIR with no `-t` flag), so we COPY it
-		// here. It only carries one structural include (`bayt:`) plus
-		// any cross-project siblings, so it's near-stable and rarely
-		// busts cache. The .bayt/* sources land in one COPY: they're
-		// emitted together by a single generate-bayt.nu pass, so
-		// per-file granularity provides no realistic cache benefit
-		// (and the immediately-following RUN layer invalidates on any
-		// FS change either way). init.gradle.kts is emitted for every
-		// project — non-gradle stages just carry a harmless ~10-line
-		// file they never reference.
+		// .bayt/Taskfile.yml is the in-container launch point (the
+		// user-authored project-root Taskfile.yml is never COPY'd).
+		// The .bayt/* sources land in one COPY: they're emitted
+		// together by a single generate-bayt.nu pass, so per-file
+		// granularity provides no realistic cache benefit (and the
+		// immediately-following RUN layer invalidates on any FS change
+		// either way). init.gradle.kts is emitted for every project —
+		// non-gradle stages just carry a harmless ~10-line file they
+		// never reference.
 		//
 		// Per-target Taskfile.<n>.yaml is conditional: gen_taskfile only
 		// emits it when t.taskfile != _|_ (e.g. sayt.launch defines no
@@ -569,12 +566,12 @@ import (
 		// build at the COPY layer.
 		_selfTaskfileSources: [
 			".bayt/Taskfile.yml",
+			".bayt/Taskfile.bayt.yml",
 			if t.taskfile != _|_ {".bayt/Taskfile.\(t.name).yaml"},
 			".bayt/bayt.\(t.name).json",
 			".bayt/init.gradle.kts",
 		]
 		_selfTaskfileCopies: [
-			"COPY Taskfile.yml ./Taskfile.yml",
 			"COPY \(strings.Join(_selfTaskfileSources, " ")) ./.bayt/",
 		]
 
@@ -623,13 +620,11 @@ import (
 			if t.dockerfile.incremental {
 				let _allMounts = list.Concat([[_baytCacheMountStr], _targetMountStrs, _cmdMountStrs])
 				let _mountStr = [if len(_allMounts) > 0 {strings.Join(_allMounts, " ") + " "}, ""][0]
-				// `task bayt:<n>` (no `-t`) — the WORKDIR's Taskfile.yml
-				// is the launch root, with `bayt:` resolving the per-
-				// target chain through `.bayt/Taskfile.yml`. Single
-				// namespace path, same address users invoke on the host.
-				// Exec form: `task` is a single program with two args,
-				// no shell needed.
-				["RUN \(_mountStr)[\"task\", \"bayt:\(t.name)\"]"]
+				// Launch root is the generated .bayt/Taskfile.yml —
+				// same `bayt:<n>` address users invoke on the host, no
+				// dependency on the user-authored project-root shim.
+				// Exec form: `task` is a single program, no shell needed.
+				["RUN \(_mountStr)[\"task\", \"-t\", \".bayt/Taskfile.yml\", \"bayt:\(t.name)\"]"]
 			},
 			if !t.dockerfile.incremental {[]},
 			if !t.dockerfile.incremental {
@@ -729,7 +724,7 @@ import (
 		]
 
 		// Layer ordering: for incremental targets the RUN is
-		// `task -t .bayt/Taskfile.yml <n>:<n>`, which needs .bayt/
+		// `task -t .bayt/Taskfile.yml bayt:<n>`, which needs .bayt/
 		// state + bayt-runtime present BEFORE the RUN to resolve
 		// the task graph — so _selfTaskfileCopies + _incrementalCopies
 		// go before _runs. For non-incremental targets the RUN only

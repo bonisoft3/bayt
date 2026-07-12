@@ -45,16 +45,15 @@ import "strings"
 	}
 
 	// The vscode command for a target:
-	//   - `task bayt:<n>`  if the target emits a Taskfile (workflow-like)
-	//   - direct cmd       otherwise (rare)
-	// `bayt:<n>` resolves through the project-root Taskfile.yml's
-	// single `bayt:` include into .bayt/Taskfile.yml's per-target
-	// include, then to the per-target file's `default:` task. One
-	// namespace, no double-target addresses.
+	//   - `task -t .bayt/Taskfile.yml bayt:<n>`  if the target
+	//     emits a Taskfile (workflow-like)
+	//   - direct cmd  otherwise (rare)
+	// Launching via the generated root shim keeps bayt-initiated calls
+	// independent of the user-authored project-root Taskfile.yml.
 	_command: {
 		t: _
 		out: string
-		out: [if t.taskfile != _|_ {"task bayt:\(t.name)"}, (_directCmd & {"t": t}).out][0]
+		out: [if t.taskfile != _|_ {"task -t .bayt/Taskfile.yml bayt:\(t.name)"}, (_directCmd & {"t": t}).out][0]
 	}
 
 	// Windows override pulled from cmd.builtin.vscode.windows, if set.

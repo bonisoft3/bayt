@@ -88,7 +88,7 @@ _v1_vs: files: build: version: "2.0.0"
 _v1_vs: files: build: tasks: [{
 	label:   "build"
 	type:    "shell"
-	command: "task bayt:build"
+	command: "task -t .bayt/Taskfile.yml bayt:build"
 	options: cwd: "${workspaceFolder}/guis/v1"
 	group: {kind: "build", isDefault: true}
 }]

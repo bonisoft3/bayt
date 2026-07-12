@@ -316,8 +316,9 @@ import (
 		}
 	}
 
-	// bayt_root — <project.dir>/.bayt/Taskfile.yml, the `bayt` namespace.
-	// The user-authored project-root Taskfile.yml includes this file.
+	// bayt_root — <project.dir>/.bayt/Taskfile.bayt.yml, the `bayt`
+	// namespace (naming mirrors compose.bayt.yaml). The user-authored
+	// project-root Taskfile.yml includes this file.
 	// One include per emitted target plus one per cross-project dep;
 	// dep includes target the dep's project-root Taskfile.yml so
 	// `bayt:<proj>:bayt:<target>` traverses the dep's own root.
@@ -347,6 +348,20 @@ import (
 		}
 		if len(_localIncludes) > 0 {
 			includes: _localIncludes
+		}
+	}
+
+	// root — <project.dir>/.bayt/Taskfile.yml. Launch root for
+	// bayt-initiated invocations (`task -t .bayt/Taskfile.yml bayt:<n>`,
+	// naming mirrors compose.yaml): same shape and addresses as the
+	// user-authored root shim, so fragments' `::bayt:<dep>` refs
+	// resolve under either, without depending on the user-authored file.
+	root: {
+		version: "3"
+		includes: bayt: {
+			taskfile: "./Taskfile.bayt.yml"
+			dir:      "../"
+			optional: true
 		}
 	}
 }

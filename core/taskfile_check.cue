@@ -1,10 +1,11 @@
 // taskfile_check.cue — exercises #taskfileGen on top of the manifest.
-// One emitted Taskfile per project: .bayt/Taskfile.yml (`bayt_root`)
-// lists per-target file includes plus cross-project dep includes. The
-// project-root Taskfile.yml is user-authored (never emitted) and hooks
-// in via a single `bayt:` include. Each per-target file holds a
-// `default:` task (single-cmd targets) or a wrapper + N internal
-// cmd-tasks (multi-cmd).
+// Two emitted Taskfiles per project: .bayt/Taskfile.bayt.yml
+// (`bayt_root`) lists per-target file includes plus cross-project dep
+// includes; .bayt/Taskfile.yml (`root`) is the launch shim for
+// bayt-initiated `task -t` calls. The project-root Taskfile.yml is
+// user-authored (never emitted) and hooks in via a single `bayt:`
+// include. Each per-target file holds a `default:` task (single-cmd
+// targets) or a wrapper + N internal cmd-tasks (multi-cmd).
 package bayt
 
 // --- T1: smallest project. bayt_root lists per-target files; each
@@ -27,6 +28,12 @@ _t1: #project & {
 	}
 }
 _t1_tf: (#taskfileGen & {project: _t1, depManifests: {}})
+_t1_tf: root: version: "3"
+_t1_tf: root: includes: bayt: {
+	taskfile: "./Taskfile.bayt.yml"
+	dir:      "../"
+	optional: true
+}
 _t1_tf: bayt_root: version: "3"
 _t1_tf: bayt_root: includes: setup: {
 	taskfile: "./Taskfile.setup.yaml"
