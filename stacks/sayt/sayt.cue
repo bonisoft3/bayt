@@ -110,7 +110,7 @@ test: {
 launch: {
 	deps: *[":build"] | [...string]
 	class: "runtime"
-	compose: {}
+	compose: up: true
 	dockerfile: {}
 	// bayt-dev profile auto-fires on `skaffold dev`. Projects opt
 	// into cluster-side dev by including .bayt/skaffold.launch.yaml
@@ -147,7 +147,7 @@ launch: {
 integrate: {
 	deps: *[":build"] | [...string]
 	taskfile: {}
-	compose: {}
+	compose: up: true
 }
 
 // release — shippable image. Bake produces the registry-bound image;
@@ -262,13 +262,15 @@ ci: inject & {
 		// _do_both bakes inline: `depot bake` when $DEPOT_TOKEN is set, else
 		// `docker buildx bake`, fed the `buildx bake --print integrate` JSON
 		// (depot bake needs compose's service:X rewritten to target:X, which
-		// --print does). `--profile "*"` on the flatten opts the root's
-		// profile-gated short-name aliases in — `integrate` is one of them,
-		// and it drops out of the flat view otherwise. The `compose up
-		// integrate` lines need no flag: naming a service auto-activates
-		// its profiles. The printed file defines the full build closure, a
-		// superset of depot.hcl's group (gen_compose mirrors depends_on into
-		// additional_contexts), so $tgt always resolves. No --allow:
+		// --print does). The compose entry point is the integrate closure
+		// file, NOT the user root: the closure is the exact fragment set the
+		// layer carries (federation and hand roots need not exist in-layer),
+		// and its inline `bayt` alias (reserved; see gen_compose's
+		// closure emitter) is ungated at scale 1 — no --profile flag,
+		// no zero-replica silent no-op. The printed file
+		// defines the full build closure, a superset of depot.hcl's group
+		// (gen_compose mirrors depends_on into additional_contexts), so
+		// $tgt always resolves. No --allow:
 		// BUILDX_BAKE_ENTITLEMENTS_FS=0 (inject.cue) covers fs-read. _do_run
 		// has no bake and is pull-only; its --no-build is load-bearing
 		// (guarded by sayt_ci_check.cue with the full rationale).
@@ -278,15 +280,15 @@ ci: inject & {
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
 			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
-			[ -f .bayt/depot.hcl ] && tgt="-f .bayt/depot.hcl depot-build" || tgt="integrate"
-			docker compose --profile "*" config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $tgt
-			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
+			[ -f .bayt/depot.hcl ] && tgt="-f .bayt/depot.hcl depot-build" || tgt="bayt"
+			docker compose -f .bayt/compose.integrate.closure.yaml config | docker buildx bake --allow=fs.read=/monorepo -f - --print bayt | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $tgt
+			exec docker compose -f .bayt/compose.integrate.closure.yaml up bayt --abort-on-container-failure --exit-code-from bayt --remove-orphans
 			"""#
 		let _do_run = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
-			BAYT_PULL_POLICY=missing exec docker compose up integrate --no-build --abort-on-container-failure --exit-code-from integrate --remove-orphans
+			BAYT_PULL_POLICY=missing exec docker compose -f .bayt/compose.integrate.closure.yaml up bayt --no-build --abort-on-container-failure --exit-code-from bayt --remove-orphans
 			"""#
 		// Trailing "" is the catch-all: non-`_run` combinations emit no RUN.
 		let _do = [

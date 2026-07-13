@@ -96,7 +96,7 @@ _e4: #project & {
 _e4_m: (#manifestGen & {project: _e4, depManifests: {}})
 _e4_m: files: bare: srcs: globs: ["x"]
 _e4_m: files: bare: project: "e4"
-_e4_m: files: bare: {[!~"^(name|project|dir|activate|srcs|outs|env|visibility|class|emitsSrcs|synthetics|deps|transitiveDeps|transitiveCrossDeps|chainedDeps|cmds|cache)$"]: _|_}
+_e4_m: files: bare: {[!~"^(name|project|dir|activate|srcs|outs|env|visibility|class|up|emitsSrcs|synthetics|deps|transitiveDeps|transitiveCrossDeps|chainedDeps|cmds|cache|upClosure)$"]: _|_}
 
 // --- E5: project-level activate propagates into every target's manifest.
 _e5: #project & {

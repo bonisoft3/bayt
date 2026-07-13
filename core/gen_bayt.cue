@@ -158,15 +158,19 @@ _expandLines: {
 		}
 	}
 
-	// Resolve a same-project ref `:X[:view]` (or `:bayt`) to the
-	// synthetic-aware compose service name. Keyed by ref string,
-	// computed once across every same-project ref used in any target's
-	// deps or dockerfile.from.ref.
+	// Resolve a same-project ref `:X[:view]` to the synthetic-aware
+	// compose service name. Keyed by ref string, computed once across
+	// every same-project ref used in any target's deps or
+	// dockerfile.from.ref.
 	//
 	//   `:foo`       → "foo"
 	//   `:foo:srcs`  → "foo_srcs"     (synthetic name)
 	//   `:foo:outs`  → "foo_outs"     (synthetic name)
-	//   `:bayt`      → "bayt"         (project synthetic)
+	//   `:foo:bayt`  → "foo_bayt"     (synthetic name)
+	//
+	// A bare `:bayt` resolves to "bayt", which nothing emits — the
+	// outs lookup fails loudly at generate time; scaffolding deps are
+	// per-target (`:foo:bayt`).
 	_sameProjectRefs: [
 		for n, t in G.project.targets if t != null
 		for d in t.deps if strings.HasPrefix(d, ":") {d},
@@ -189,9 +193,44 @@ _expandLines: {
 				if _target == "bayt" {"bayt"},
 				if _target != "bayt" && _view == "srcs" {"\(_target)_srcs"},
 				if _target != "bayt" && _view == "outs" {"\(_target)_outs"},
+				if _target != "bayt" && _view == "bayt" {"\(_target)_bayt"},
 				_target,
 			][0]
 		}
+	}
+
+	// Per-target scaffolding fileset — what the `<n>_bayt` synthetic
+	// carries (the canonical list; emitters and stubs point here).
+	// Dockerfile.<n> is load-bearing: the in-layer bake builds from it.
+	// The go-task roots ride along because every include in them is
+	// `optional: true` and their content is membership-stable — so
+	// everything here changes only with n's own definition, never a
+	// sibling's (the cache-honesty contract, measured in PR #1470).
+	//
+	// Up targets in overlay projects widen to ALL local .bayt tool
+	// files plus the overlay files themselves: their closure file is
+	// the union of local targets' closures (see gen_compose), so the
+	// layer must carry every local fragment the union references —
+	// including runtime-stack targets (launch, release-*) outside the
+	// up target's build-dep chain. Local-coarse is the overlay trade;
+	// the cross-project scoping (the real cache win) is untouched.
+	// Cross fragments still arrive via the `_bayt` dep chain.
+	_baytScaffold: B={
+		n: _
+		t: _
+		// Disjunction-default, not `&&` (CUE doesn't short-circuit).
+		let _isUp = [if B.t.compose != _|_ {B.t.compose.up}, false][0]
+		let _overlay = len(G.project.compose.includes) > 0
+		out: list.Concat([
+			[".bayt/compose.\(B.n).yaml", ".bayt/Dockerfile.\(B.n)", ".bayt/bayt.\(B.n).json", ".bayt/Taskfile.yml", ".bayt/Taskfile.bayt.yml"],
+			[if B.t.taskfile != _|_ {[".bayt/Taskfile.\(B.n).yaml"]}, []][0],
+			[if _isUp {[".bayt/compose.\(B.n).closure.yaml"]}, []][0],
+			[if _isUp && _overlay {list.Concat([
+				[".bayt/compose.*.yaml", ".bayt/Dockerfile.*", ".bayt/bayt.*.json", ".bayt/Taskfile.*.yaml"],
+				G.project.compose.includes,
+			])}, []][0],
+			[if projectManifest.gradleInit {[".bayt/init.gradle.kts"]}, []][0],
+		])
 	}
 
 	// Outs lookup by resolved same-project name. Callers resolve a ref
@@ -199,7 +238,7 @@ _expandLines: {
 	//   `<n>`        → target's outs
 	//   `<n>_srcs`   → target's expanded srcs (the synthetic's outs)
 	//   `<n>_outs`   → target's outs (the synthetic's outs)
-	//   `bayt`       → project scaffolding fileset
+	//   `<n>_bayt`   → target's scaffolding fileset
 	_sameProjectOutsByName: {
 		for n, t in G.project.targets if t != null {
 			(n): t.outs
@@ -209,23 +248,23 @@ _expandLines: {
 					exclude: list.Concat([(_expandGlobs & {in: t.srcs.defaultExclude}).out, t.srcs.exclude])
 				}
 				"\(n)_outs": t.outs
+				"\(n)_bayt": {globs: (_baytScaffold & {"n": n, "t": t}).out, exclude: []}
 			}
 		}
-		bayt: {globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}
 	}
 
-	// Class lookup by resolved same-project name. Synthetic views and
-	// the bayt scaffolding are packaging stages, never runtime-class —
-	// class dispatch only applies to plain target refs.
+	// Class lookup by resolved same-project name. Synthetic views are
+	// packaging stages, never runtime-class — class dispatch only
+	// applies to plain target refs.
 	_sameProjectClassByName: {
 		for n, t in G.project.targets if t != null {
 			(n): t.class
 			if t.dockerfile != _|_ {
 				"\(n)_srcs": "build"
 				"\(n)_outs": "build"
+				"\(n)_bayt": "build"
 			}
 		}
-		bayt: "build"
 	}
 
 	// Same-project chainedDeps entry from a resolved name. Mirrors
@@ -364,6 +403,66 @@ _expandLines: {
 		}
 	}
 
+	// Repo-root-relative compose-fragment path for a dep at (dir, name).
+	// Synthetic names map to their parent fragment — the `_srcs`/`_outs`
+	// services live there (gen_compose emits no per-synthetic files).
+	_fragPath: F={
+		dir:  _
+		name: _
+		let _parent = [
+			if strings.HasSuffix(F.name, "_srcs") {strings.TrimSuffix(F.name, "_srcs")},
+			if strings.HasSuffix(F.name, "_outs") {strings.TrimSuffix(F.name, "_outs")},
+			if strings.HasSuffix(F.name, "_bayt") {strings.TrimSuffix(F.name, "_bayt")},
+			F.name,
+		][0]
+		let _dp = [if F.dir != "" {"\(F.dir)/"}, ""][0]
+		out: "\(_dp).bayt/compose.\(_parent).yaml"
+	}
+
+	// upClosure — repo-root-relative fragment paths covering the
+	// target's full compose graph: own fragment + same-project direct
+	// deps' closures (recursive over this map) + cross direct deps'
+	// closures from their manifests (already closed by generation
+	// order — the staged induction transitiveCrossDeps rides). Entry
+	// closure files include this list FLAT; the recursion must stay
+	// here at generate time (see gen_compose bayt_root on ApplyInclude
+	// cost). Synthetic dep names map to their parent's fragment.
+	_upClosure: {
+		for n, t in G.project.targets if t != null {
+			let _own = [if t.dockerfile != _|_ {(_fragPath & {dir: G.project.dir, name: n}).out}]
+			// Recurse via the parent target: synthetic dep names have no
+			// map entry, and their graph is a subset of the parent's.
+			let _sameProj = list.FlattenN([
+				for dn in _sameProjectDepNames[n]
+				let _p = [
+					if strings.HasSuffix(dn, "_srcs") {strings.TrimSuffix(dn, "_srcs")},
+					if strings.HasSuffix(dn, "_outs") {strings.TrimSuffix(dn, "_outs")},
+					if strings.HasSuffix(dn, "_bayt") {strings.TrimSuffix(dn, "_bayt")},
+					dn,
+				][0]
+				if _upClosure[_p] != _|_ {_upClosure[_p]},
+			], 1)
+			let _cross = list.FlattenN([
+				for d in _targetCrossDeps[n]
+				if d.name != "bayt"
+				let _ref = (_manifestRef & {"d": d}).out {
+					[
+						// Nested guards, not `&&` (CUE doesn't short-circuit).
+						if G.depManifests[_ref] != _|_ {[
+							if G.depManifests[_ref].upClosure != _|_ {G.depManifests[_ref].upClosure},
+							// Dep manifest predates the field (stale regen):
+							// its own fragment still anchors the include; a
+							// full `generate --all` backfills the rest.
+							[(_fragPath & {dir: d.dir, name: d.name}).out],
+						][0]},
+						[(_fragPath & {dir: d.dir, name: d.name}).out],
+					][0]
+				},
+			], 1)
+			(n): (_uniqStrings & {in: list.Concat([_own, _sameProj, _cross])}).out
+		}
+	}
+
 	// Per-target manifests. Skip null entries (a project opting out
 	// of an inherited target) so we don't emit ghost manifest files.
 	files: {
@@ -419,6 +518,11 @@ _expandLines: {
 				// COPY --from chains so incremental task resolution finds
 				// all dep projects' taskfiles + manifests inside the stage.
 				transitiveCrossDeps: _transitiveCrossDeps[n]
+
+				// Up flag + flat fragment closure — gen_compose emits
+				// compose.<n>.closure.yaml for up targets from these.
+				up:             [if t.compose != _|_ {t.compose.up}, false][0]
+				upClosure: _upClosure[n]
 
 				// Merkle-chain metadata. One entry per dep in original order:
 				// same-project deps (`:X`) use the current project's
@@ -609,6 +713,10 @@ _expandLines: {
 					chainedDeps: []
 					cmds:        []
 					cache: {full: false, similar: false}
+					// A synthetic's compose graph is a subset of its
+					// parent's — cross consumers pulling this stub's
+					// closure get the parent fragment set.
+					upClosure: _upClosure[n]
 				}
 			}
 			if len(t.outs.globs) > 0 {
@@ -628,35 +736,32 @@ _expandLines: {
 					chainedDeps:         []
 					cmds:                []
 					cache: {full: false, similar: false}
+					upClosure: _upClosure[n]
 				}
 			}
-		}
-
-		// Project-bayt synthetic: one per project, gated on at least one
-		// dockerfile-emitting target (matches gen_compose's `_bayt` gate).
-		// Always public.
-		let _anyDockerfile = len([for n, t in G.project.targets if t != null if t.dockerfile != _|_ {n}]) > 0
-		if _anyDockerfile {
-			"bayt": {
-				name:    "bayt"
+			// Scaffolding view — `:foo:bayt`. The `<n>_bayt` stage is
+			// self-contained (it chains its deps' `_bayt` synths
+			// internally), so consumers need only the direct COPY and
+			// the stub carries no dep lists.
+			(n): synthetics: bayt: {
+				name:    "\(n)_bayt"
 				project: G.project.name
 				dir:     G.project.dir
 				activate: ""
-				// Scaffolding scope mirrors gen_compose._renderSyntheticBayt:
-				// .bayt/** (bayt-emitted) + Taskfile.yml + compose.yaml
-				// (project-root scaffolding).
-				srcs: {globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}
-				outs: {globs: [".bayt/**", "Taskfile.yml", "compose.yaml"], exclude: []}
+				srcs: {globs: [], exclude: []}
+				outs: {globs: (_baytScaffold & {"n": n, "t": t}).out, exclude: []}
 				env: {}
 				class: "build"
-				visibility:          "public"
+				visibility:          t.visibility
 				deps:                []
 				transitiveDeps:      []
 				transitiveCrossDeps: []
 				chainedDeps:         []
 				cmds:                []
 				cache: {full: false, similar: false}
+				upClosure: _upClosure[n]
 			}
 		}
+
 	}
 }

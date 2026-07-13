@@ -99,6 +99,24 @@ Every `#target` is described by a small, fixed set of fields. Declare them once,
 | `cache.full`     | When true, on EXACT cache hit restore outs and skip cmd entirely. Default false (restore + run cmd, letting its own incremental engine no-op on warm outputs). Use `bayt.cache.full` capability to set. | — |
 | `cache.similar`  | When true, on EXACT-match miss look for the closest cached entry (weighted intersection over inputs + user/branch/day) and restore as warm starting state. Default false. Use `bayt.cache.similar` capability to set. | — |
 
+### Which block? The concern split
+
+Output blocks partition by an invariant, not by tool syntax:
+
+| Block | Owns | Litmus test |
+|---|---|---|
+| `dockerfile` | Facts about the artifact: filesystem, entrypoint, baked `ENV` defaults, `expose`, the healthcheck *probe* | Changing it requires rebuilding the image |
+| `bake` | How the artifact is produced and shipped: platforms, cache refs, registry identity, build args | Changing it never changes what runs — only build cost/location |
+| `compose` | The target's role in one running stack: published ports, `depends_on`, network aliases, volumes, watch, `scale`/`up`, peer-URL environment | Meaningless without neighbors or a host |
+| `skaffold` | The same role, for a cluster | — |
+
+Fields that straddle the split get a target-level declaration that fans out,
+so the author never picks the block: `bayt.healthcheck.*` templates take one
+`healthcheck: {url: …}` and emit the probe into the Dockerfile (plain
+`docker run` gets it) and the policy into compose (which carries
+`start_interval`, a compose-only extension); target `env:` bakes `ENV`
+defaults while `compose.environment` wires stack config over them.
+
 `srcs` and `outs` are structured `{globs, exclude}`. The shorthand for the common case (no exclude) is one line:
 
 ```cue
@@ -125,7 +143,7 @@ What flows from a producer to its consumers is declared by the producer, never b
 - **`outs.globs/exclude`** — the producer's public interface. Cross-project consumers (`deps: ["foo:build"]`) get exactly these files via per-glob `COPY --from=<producer>` in the consumer's Dockerfile. If the producer wants `.task/stamps/<target>.hash` to flow (so the consumer's task chain short-circuits the cross-project dep), they include it in outs. If not, they exclude it. No framework `--exclude=.task` magic.
 - **`visibility`** — `"internal"` (default) means same-project consumers only. `"public"` means cross-project consumers can `deps:` or `from:` reference this target. Generation fails at CUE-evaluation time if a cross-project dep targets an internal target.
 
-### Synthetic views: `:srcs`, `:outs`, `:bayt`
+### Synthetic views: `:srcs`, `:outs`, `:foo:bayt`
 
 Every target with a Dockerfile auto-emits three sibling synthetics consumers can address with the `:view` suffix:
 
@@ -133,7 +151,7 @@ Every target with a Dockerfile auto-emits three sibling synthetics consumers can
 |---|---|
 | `:foo:srcs` | scratch image holding the target's `srcs.globs` — the input source closure |
 | `:foo:outs` | scratch image holding the target's `outs.globs` — the artifact view |
-| `:bayt` | per-project scratch image holding `.bayt/**`, `Taskfile.yml`, `compose.yaml` — the scaffolding fileset |
+| `:foo:bayt` | scratch image holding the target's scaffolding fileset (fragment, Dockerfile, taskfile, manifest, the go-task roots, up closure) plus its deps' chained scaffolding — nothing from sibling targets, so a sibling's definition churn never invalidates a consumer layer |
 
 `:srcs` is the typical source-closure dep for dindbox-cascade flows — the outer `ci` stage stays COPY-only while the inner bake reconstructs the chain. Transitive walking is implicit: a dep `:integrate:srcs` rolls in the upstream `:build:srcs` and each project's `:setup:srcs` (toolchain config files like `.mise.toml`, `mise.lock`, wrapper.properties), so consumers don't enumerate each upstream. The synthetic's manifest exposes the same-project chain as cross-project entries on its `transitiveCrossDeps`, letting internal upstreams ride along the public dep's surface.
 
@@ -166,7 +184,7 @@ A *stack* captures what a language toolchain needs. Bayt ships four:
 - **`stacks/gradle`** — kotlin/java/gradle concept fragments: `assemble`, `test`, `integrationTest`, `jibBuildTar`, `check`, `run`. Default srcs scoped to `src/main/` for `assemble` (so test edits don't invalidate build); `bayt.cache.full` on `assemble` and `integrationTest` (gradle's daemon cold-start is too costly to pay on every cache hit). Emits `.bayt/init.gradle.kts` per project pointing gradle's local build cache at `$BAYT_CACHE_DIR/gradle` — gradle's per-task cache and bayt's per-target cache share the same on-disk store and complement each other (per-task hits when only some inputs changed, per-target full skips when nothing changed).
 - **`stacks/pnpm`** — pnpm/node/vite/vitest concept fragments: `install`, `build`, `test`, `dev`, `testInt`, `testE2E`, `lint`. Test srcs split between `srcsTest` (`*.test.ts(x)`) and `srcsIntegrate` (`*.spec.ts(x)`) matching the repo's vitest convention. pnpm store cache mount.
 - **`stacks/mise`** — toolchain installer. `install` (provisions the project's `.mise.toml`), `exec` (sets `activate: "mise x --"` so cmds resolve through mise's shim layer), `doctor`. Used as a building block by other stacks.
-- **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace` are the standard mappings projects compose against. `sayt.inject` adds the dind plumbing for ci-cascade flows; `sayt.ci` is a one-line recipe combining inject + the standard `compose up integrate --build` RUN body + FROM `:dindbox`; `sayt.dindbox` is the matching dindbox-target preset.
+- **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace` are the standard mappings projects compose against. `sayt.inject` adds the dind plumbing for ci-cascade flows; `sayt.ci` is a one-line recipe combining inject + the standard bake-and-up-the-integrate-closure RUN body + FROM `:dindbox`; `sayt.dindbox` is the matching dindbox-target preset.
 
 Using the umbrella collapses a typical service to a handful of lines:
 
@@ -319,6 +337,7 @@ their per-target sibling.
 | `.bayt/Dockerfile.<n>`      | per-target Dockerfile body                                       |
 | `compose.yaml`              | root compose (include of bayt-generated services)                |
 | `.bayt/compose.<n>.yaml`    | per-target compose service                                       |
+| `.bayt/compose.<n>.closure.yaml` | up targets only (`compose.up: true` — launch/integrate): flat include of the target's fragment closure + the reserved `bayt` alias, loadable with no user root or federation (`docker compose -f … up bayt`) |
 | `skaffold.yaml`             | root skaffold (`requires:` of bayt-generated configs)            |
 | `.bayt/skaffold.<n>.yaml`   | per-target skaffold config                                       |
 | `.bayt/bake.<n>.hcl`        | per-target bake HCL                                              |
@@ -342,6 +361,23 @@ pass `--profile "*"` to keep the alias target names in the flat file, and a
 manual `docker compose down` needs the same flag to reap containers started
 through an alias (`sayt integrate` already tears its stacks down by project
 label, which is profile-blind).
+
+Up targets (`compose: up: true` — the sayt stack sets it on launch and
+integrate) additionally get `.bayt/compose.<n>.closure.yaml`: a FLAT
+include of exactly the fragments the target's graph reaches, computed
+inductively at generate time (the manifest's `upClosure` field), so
+loading it is linear — compose's ApplyInclude re-parses per include path
+and must never recurse. The file defines one service, the reserved
+`bayt` alias (extends the qualified entry service, `scale: 1`), so
+`docker compose -f .bayt/compose.integrate.closure.yaml up bayt`
+works identically in every project — that's what the generated ci RUN
+bodies use inside the dindbox, where the user root and federation files
+may not exist. Services defined outside the bayt graph ride in via
+`#project.compose.includes` (a bare-services file, no includes, declared
+in the referencing target's srcs so it reaches the layer and the
+fingerprint); overlay projects widen the closure to the union of local
+targets' closures, since bayt can't resolve hand-alias names (`caddy` →
+release-proxy) to targets. Overlays must not define `bayt`.
 
 ## Design principles
 

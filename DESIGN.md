@@ -418,7 +418,7 @@ Deps use the same string-ref vocabulary across same- and cross-project:
 
 Leading `:` = same-project. Bare `<project>:<target>` = cross-project. Three-segment refs (`<project>:<target>:<view>`) address synthetic views (next section). The emitted manifest carries `chainedDeps: [{name, project, dir, outs}]` resolved at CUE-emit time; nushell's `dep-to-dir` handles the runtime path math. Cross-project resolution happens via two CUE passes: pass 1 extracts the refs, nushell loads each referenced project's manifest, pass 2 federates the loaded manifests as `depManifestsIn`. No CUE imports between projects — keeps the dependency graph copybara-safe.
 
-### Synthetic views: `:srcs`, `:outs`, `:bayt`
+### Synthetic views: `:srcs`, `:outs`, `:foo:bayt`
 
 Every target with a dockerfile auto-emits three sibling synthetics that consumers can address with the `:view` suffix:
 
@@ -426,7 +426,7 @@ Every target with a dockerfile auto-emits three sibling synthetics that consumer
 |---|---|---|
 | `:foo:srcs` | A scratch image holding the target's `srcs.globs` (the input source closure). | Source-closure deps for dindbox cascades — the outer ci stage stays COPY-only while the inner bake reconstructs the dep's build chain. |
 | `:foo:outs` | A scratch image holding the target's `outs.globs` (the output artifact view). | Cross-project consumers that need only artifacts, not sources. |
-| `:bayt` | A project-level scratch image holding `.bayt/**`, `Taskfile.yml`, `compose.yaml` — the scaffolding fileset. | Containerized task-runner invocation (`task bayt:<n>` inside a RUN). |
+| `:foo:bayt` | A scratch image holding the target's scaffolding fileset (fragment, Dockerfile, taskfile, manifest, go-task roots, up closure) plus its deps' chained scaffolding. | Containerized task-runner and compose invocation inside dindbox layers, scoped to the up target's closure. |
 
 The generator emits each as its own compose service + Dockerfile fragment. From the consumer side they're addressed identically to regular targets — bayt's machinery picks the right COPY shape.
 

@@ -523,6 +523,8 @@ noop: #cmd & {
 	#watch: {
 		action: "sync" | "sync+restart" | "rebuild"
 		path:   string
+		// Required even on rebuild entries, where compose ignores it —
+		// authors supply the in-image destination as documentation.
 		target: string
 		// Optional — compose rejects `ignore: []` on rebuild entries.
 		// Either pass a non-empty list or omit.
@@ -530,6 +532,14 @@ noop: #cmd & {
 	}
 
 	service?: string
+
+	// up — this target is a load entry point: something `docker compose
+	// up`s it by name, standalone or inside a layer. Emits
+	// compose.<n>.closure.yaml (see gen_compose). The sayt stack sets
+	// it on launch and integrate; leave it off for services only
+	// reached through depends_on — each closure file must earn a
+	// consumer. Control flag, not compose-spec passthrough.
+	up: *false | bool
 
 	build?: {
 		target?:             string
@@ -579,6 +589,11 @@ noop: #cmd & {
 	devices?:      [...string]
 	cap_add?:      [...string]
 	healthcheck?: {...}
+	// User scale wins over the bare-up runtime gate (gen_compose's
+	// _service). scale: 0 turns a runtime-class service into a
+	// template: image + config in the model, no container — an
+	// overlay or alias instantiates it via extends + scale: 1.
+	scale?: int
 	develop?: {
 		watch: [...#watch]
 	}
@@ -1071,6 +1086,16 @@ noop: #cmd & {
 	// projects that opt in. Default off: non-depot projects take no docker
 	// dependency at generation time.
 	depot: *false | bool
+
+	// compose.includes — project-root-relative compose files (any name;
+	// user-authored) appended to every up closure: the escape hatch
+	// for services defined OUTSIDE the bayt graph that fragments
+	// reference. Included files hold bare service definitions (no
+	// includes of their own — the closure loads where federation files
+	// may be absent; and never `bayt`, the closure's reserved
+	// alias) and must ride into layers via the referencing target's
+	// srcs, which also fingerprints them.
+	compose: includes: [...string] | *[]
 
 	// Targets. Map key becomes target.name; project name + dir are
 	// propagated so cross-project dep refs can build relative paths.

@@ -25,9 +25,8 @@ _d1: #project & {
 }
 _d1_dc: (#dockerComposeGen & {project: _d1, depManifests: {}})
 // The federation root (compose.bayt.yaml) is a flat list of every local
-// parent fragment plus cross-project federation roots (none here). The bayt
-// service is inline in bayt_root.services; closures are sibling files, not
-// unioned here.
+// parent fragment plus cross-project federation roots (none here);
+// closures are sibling files, not unioned here.
 _d1_dc: compose: bayt_root: include: [
 	{path: "./compose.build.yaml", required: false},
 ]
@@ -58,10 +57,9 @@ _d2: #project & {
 }
 _d2_dc: (#dockerComposeGen & {project: _d2, depManifests: {}})
 _d2_dc: compose: files: build: services: "d2-build": build: additional_contexts: "d2-setup": "service:d2-setup"
-// Per-target files are fragments — services only, no include. Standalone
-// loads go through the federation root (flat, complete); no per-target
-// closure files exist (recursive closures re-parse per include path —
-// compose-go's ApplyInclude has no dedup — and blow up with graph depth).
+// Per-target files are fragments — services only, no include. Only
+// up targets get closure files (D18); other loads go through
+// the federation root.
 _d2_dc: compose: files: build: {[!="services"]: _|_}
 _d2_dc: compose: files: setup: {[!="services"]: _|_}
 _d2_dc: compose: files: {["build.closure"]: _|_}
@@ -192,40 +190,51 @@ _d8_dc: compose: files: launch: services: "d8-launch": healthcheck: {
 	retries:  3
 }
 
-// --- D9: synthetic-stage emission. `<n>_srcs` and `<n>_outs` (each a
-// clamped busybox `_ctxs` stage flattened into FROM scratch) are stages in
-// Dockerfile.<n>; the per-project `bayt` synthetic is Dockerfile.bayt
-// (emitted when ≥1 dockerfile target exists). Containment-checked — exact
+// --- D9: synthetic-stage emission. `<n>_srcs`, `<n>_outs`, and
+// `<n>_bayt` (each a clamped busybox `_ctxs` stage flattened into FROM
+// scratch) are stages in Dockerfile.<n>. Containment-checked — exact
 // equality is brittle across glob orderings.
 _d9_srcs_body:   _d1_dc.dockerfiles.build
 _d9_outs_body:   _d1_dc.dockerfiles.build
-_d9_bayt_body:   _d1_dc.dockerfiles.bayt
+_d9_bayt_body:   _d1_dc.dockerfiles.build
 _d9_srcs_stage:  strings.Contains(_d9_srcs_body, "FROM scratch AS build_srcs") & true
 _d9_outs_stage:  strings.Contains(_d9_outs_body, "FROM scratch AS build_outs") & true
 _d9_outs_from:   strings.Contains(_d9_outs_body, "COPY --from=d1-build") & true
 // The clamp stage guards `_outs` digest stability: without it, build-time
 // mtimes on the copied outs float the digest per build.
 _d9_outs_clamp:  strings.Contains(_d9_outs_body, "AS build_outs_ctxs") & true
-_d9_bayt_stage:  strings.Contains(_d9_bayt_body, "FROM scratch AS bayt") & true
-_d9_bayt_scope:  strings.Contains(_d9_bayt_body, "COPY --parents .bayt/**") & true
-// Synthetic services live in the parent fragment; the bayt service in the
-// federation root.
+_d9_bayt_stage:  strings.Contains(_d9_bayt_body, "FROM scratch AS build_bayt") & true
+// Scaffolding scope is the target's OWN files + the membership-stable
+// roots — never a sibling target's taskfile/manifest (cache honesty).
+_d9_bayt_scope:  strings.Contains(_d9_bayt_body, "COPY --parents .bayt/compose.build.yaml .bayt/Dockerfile.build .bayt/bayt.build.json .bayt/Taskfile.yml .bayt/Taskfile.bayt.yml ./") & true
+// Synthetic services all live in the parent fragment.
 _d9_srcs_svc: _d1_dc.compose.files.build.services."d1-build_srcs".build.target & "build_srcs"
 _d9_outs_svc: _d1_dc.compose.files.build.services."d1-build_outs".build.target & "build_outs"
-_d9_bayt_svc: _d1_dc.compose.bayt_root.services."d1-bayt".build.target & "bayt"
+_d9_bayt_svc: _d1_dc.compose.files.build.services."d1-build_bayt".build.target & "build_bayt"
 
-// --- D10: `:bayt` ref consumer. A target depending on `:bayt` (the
-// project-level synthetic) gets a bulk-COPY `--from=<proj>-bayt
-// --link /monorepo /monorepo` in its Dockerfile — distinct from the
-// per-glob workdir COPY emitted for plain `:foo` refs. The compose
-// service for the consumer wires `<proj>-bayt` in
-// additional_contexts so the FROM ref resolves.
+// --- D10: `:x:bayt` ref consumer. A target depending on a
+// scaffolding synth gets a bulk-COPY `--from=<proj>-<x>_bayt --link
+// /monorepo /monorepo` in its Dockerfile — distinct from the per-glob
+// workdir COPY emitted for plain `:foo` refs. The consumer's service
+// wires the synth in additional_contexts, and the synth's own stage
+// chains its deps' `_bayt` synths (self-contained transitive
+// scaffolding).
 _d10: #project & {
 	name: "d10"
 	dir:  "d10"
 	targets: {
+		"setup": {
+			cmd: "builtin": do: "true"
+			dockerfile: nubox
+		}
+		"integrate": {
+			deps: [":setup"]
+			srcs: globs: ["tests/**"]
+			cmd: "builtin": do: "true"
+			dockerfile: busybox
+		}
 		"ci": {
-			deps: [":bayt"]
+			deps: [":integrate:bayt"]
 			cmd: "builtin": do: "true"
 			dockerfile: busybox
 		}
@@ -234,9 +243,14 @@ _d10: #project & {
 _d10_dc: (#dockerComposeGen & {project: _d10, depManifests: {}})
 // Bulk-copy pattern: /monorepo /monorepo, no --parents, no glob filter.
 _d10_ci_body: _d10_dc.dockerfiles.ci
-_d10_ci_has_bulk_copy: strings.Contains(_d10_ci_body, "COPY --from=d10-bayt --link /monorepo /monorepo") & true
-// Additional context wires the bayt synthetic.
-_d10_dc: compose: files: ci: services: "d10-ci": build: additional_contexts: "d10-bayt": "service:d10-bayt"
+_d10_ci_has_bulk_copy: strings.Contains(_d10_ci_body, "COPY --from=d10-integrate_bayt --link /monorepo /monorepo") & true
+// Additional context wires the scaffolding synth on the consumer…
+_d10_dc: compose: files: ci: services: "d10-ci": build: additional_contexts: "d10-integrate_bayt": "service:d10-integrate_bayt"
+// …and the synth itself chains its dep's `_bayt` (setup) — stage COPY
+// plus the matching context on the synth service.
+_d10_int_body: _d10_dc.dockerfiles.integrate
+_d10_chain_copy: strings.Contains(_d10_int_body, "COPY --from=d10-setup_bayt /monorepo /monorepo") & true
+_d10_dc: compose: files: integrate: services: "d10-integrate_bayt": build: additional_contexts: "d10-setup_bayt": "service:d10-setup_bayt"
 
 // --- D11: synthetic _srcs / _outs inherit the parent target's
 // cache-from / cache-to from #project.bake.cache (registry sugar),
@@ -282,11 +296,13 @@ _d11_outs_from: [
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs",
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-build_outs",
 ]
-_d11_bayt_from: _d11_dc.compose.bayt_root.services."d11-bayt".build."x-bake"."cache-from"
+_d11_bayt_from: _d11_dc.compose.files.build.services."d11-build_bayt".build."x-bake"."cache-from"
 _d11_bayt_from: [
-	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-bayt",
-	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-bayt",
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_bayt",
+	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-build_bayt",
 ]
+_d11_bayt_to: _d11_dc.compose.files.build.services."d11-build_bayt".build."x-bake"."cache-to"
+_d11_bayt_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_bayt,mode=max,image-manifest=true,oci-mediatypes=true"]
 
 // cache-to mode: max for every synthetic — each flattens an unmodelled
 // `_ctxs` intermediate (_srcs, _outs, _bayt) whose result mode=min drops.
@@ -294,8 +310,7 @@ _d11_srcs_to: _d11_dc.compose.files.build.services."d11-build_srcs".build."x-bak
 _d11_srcs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_srcs,mode=max,image-manifest=true,oci-mediatypes=true"]
 _d11_outs_to: _d11_dc.compose.files.build.services."d11-build_outs".build."x-bake"."cache-to"
 _d11_outs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs,mode=max,image-manifest=true,oci-mediatypes=true"]
-_d11_bayt_to: _d11_dc.compose.bayt_root.services."d11-bayt".build."x-bake"."cache-to"
-_d11_bayt_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-bayt,mode=max,image-manifest=true,oci-mediatypes=true"]
+
 
 // --- D12: a `:x:outs` dep on a target with empty outs.globs is inert
 // everywhere: _outsEmit never emits the `<x>_outs` service, so an
@@ -351,7 +366,7 @@ _d13: #project & {
 			deps: [":build", ":setup"]
 			cmd: "builtin": do: "./dist/app"
 			dockerfile: busybox
-			compose: {}
+			compose: up: true
 		}
 	}
 }
@@ -361,8 +376,11 @@ _d13_body: _d13_dc.dockerfiles.launch
 _d13_outs_copy: strings.Contains(_d13_body, "COPY --from=d13-build_outs --parents /monorepo/d13/dist/app /") & true
 // …never as a bulk workdir COPY of the build stage.
 _d13_no_bulk: strings.Contains(_d13_body, "COPY --from=d13-build --link") & false
-// The empty-outs setup dep contributes nothing at all.
-_d13_no_setup: strings.Contains(_d13_body, "d13-setup") & false
+// The empty-outs setup dep contributes nothing to the launch STAGE
+// (the appended launch_bayt synthetic legitimately chains
+// d13-setup_bayt — the trailing space keeps this assertion scoped
+// to the plain-dep form).
+_d13_no_setup: strings.Contains(_d13_body, "COPY --from=d13-setup ") & false
 // Context points at the _outs synth; neither the bulk service nor the
 // empty-outs dep appears.
 _d13_dc: compose: files: launch: services: "d13-launch": build: additional_contexts: "d13-build_outs": "service:d13-build_outs"
@@ -392,7 +410,7 @@ _d14: #project & {
 }
 _d14_dc: (#dockerComposeGen & {project: _d14, depManifests: {}})
 _d14_body: _d14_dc.dockerfiles.integrate
-_d14_no_copy: strings.Contains(_d14_body, "COPY --from=d14-launch") & false
+_d14_no_copy: strings.Contains(_d14_body, "COPY --from=d14-launch ") & false
 _d14_dc: compose: files: integrate: services: "d14-integrate": build: additional_contexts: "d14-launch": "service:d14-launch"
 
 // --- D15: dockerfile.add — pinned ADD stanzas. Remote emits
@@ -430,7 +448,7 @@ _d16_build_scale: _d13_dc.compose.files.build.services."d13-build".scale & 0
 _d16_setup_scale: _d13_dc.compose.files.setup.services."d13-setup".scale & 0
 _d16_srcs_scale:  _d13_dc.compose.files.build.services."d13-build_srcs".scale & 0
 _d16_outs_scale:  _d13_dc.compose.files.build.services."d13-build_outs".scale & 0
-_d16_bayt_scale:  _d13_dc.compose.bayt_root.services."d13-bayt".scale & 0
+_d16_bayt_scale:  _d13_dc.compose.files.build.services."d13-build_bayt".scale & 0
 // The runtime stack stays at compose's default replica count so a
 // bare `up` starts it.
 _d13_dc: compose: files: launch: services: "d13-launch": {["scale"]: _|_}
@@ -443,9 +461,9 @@ _d16_harness_scale: _d17_dc.compose.files.harness.services."d17-harness".scale &
 _d16_harness_alias: _d17_dc.compose.root.services.harness.scale & 1
 _d16_harness_prof:  _d17_dc.compose.root.services.harness.profiles & ["harness"]
 
-// --- D17: no closure files for any target shape — user targets,
-// synthetics, or the harness (D16 uses it for scale gating). The
-// fragment set plus the federation root is the whole compose surface.
+// --- D17: closure files exist ONLY for `compose.up` targets —
+// others and synthetics get none (the harness is up: its closure is
+// asserted in D18; D16 uses it for scale gating).
 _d17: #project & {
 	name: "d17"
 	dir:  "d17"
@@ -462,21 +480,56 @@ _d17: #project & {
 			cmd:  "builtin": do: "make"
 			dockerfile: busybox
 		}
-		// By-name harness: compose block, default (build) class — D16
-		// asserts its scale gating and alias re-arm.
+		// By-name harness: compose block, default (build) class, entry —
+		// D16 asserts its scale gating and alias re-arm; D18 its closure.
 		"harness": {
+			deps: [":producer"]
 			srcs: globs: ["tests/**"]
 			cmd: "builtin": do: "run-tests"
 			dockerfile: busybox
-			compose: {}
+			compose: up: true
 		}
 	}
+	compose: includes: ["compose.overlay.yaml"]
 }
 _d17_dc: (#dockerComposeGen & {project: _d17, depManifests: {}})
 _d17_dc: compose: files: {["consumer.closure"]: _|_}
 _d17_dc: compose: files: {["producer_srcs.closure"]: _|_}
 _d17_dc: compose: files: {["producer_outs.closure"]: _|_}
 _d17_dc: compose: files: {["_bayt.closure"]: _|_}
+
+// --- D18: up closures. `compose.up: true` targets get
+// compose.<n>.closure.yaml — a FLAT include of the manifest's
+// upClosure (own + transitive fragments; the recursion happened
+// at generate time in gen_bayt) plus #project.compose.includes, with an
+// inline ungated short-name alias at scale 1 so `docker compose -f
+// <closure> up <n>` works with no user root, federation root, or
+// --profile flag. Non-up targets get none (D2/D17 assert absence).
+_d18_launch_inc: _d13_dc.compose.files."launch.closure".include
+_d18_launch_inc: [
+	{path: "../../d13/.bayt/compose.launch.yaml", required: false},
+	{path: "../../d13/.bayt/compose.build.yaml", required: false},
+	{path: "../../d13/.bayt/compose.setup.yaml", required: false},
+]
+// The inline alias is the RESERVED `bayt` name (static across
+// projects; never collides with overlay-defined short aliases).
+_d18_launch_alias: _d13_dc.compose.files."launch.closure".services."bayt"
+_d18_launch_alias: {
+	extends: {file: "./compose.launch.yaml", service: "d13-launch"}
+	scale: 1
+}
+_d13_dc: compose: files: "launch.closure": services: {["launch"]: _|_}
+// Overlay project: the fragment set widens to the union of every
+// local target's closure (overlay services reference fragments by
+// hand-alias names bayt can't resolve, so exact reachability is
+// opaque); the overlay itself appends last, relative to .bayt/.
+_d18_harness_inc: _d17_dc.compose.files."harness.closure".include
+_d18_harness_inc: [
+	{path: "../../d17/.bayt/compose.producer.yaml", required: false},
+	{path: "../../d17/.bayt/compose.consumer.yaml", required: false},
+	{path: "../../d17/.bayt/compose.harness.yaml", required: false},
+	{path: "../compose.overlay.yaml", required: false},
+]
 
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
@@ -497,13 +550,14 @@ Tests: docker_compose: {
 	d9_bayt_scope:  _d9_bayt_scope
 	d10:            _d10_dc
 	d10_has_bulk_copy: _d10_ci_has_bulk_copy
+	d10_chain_copy:    _d10_chain_copy
 	d11_parent_from:   _d11_parent_from
 	d11_srcs_from:     _d11_srcs_from
 	d11_outs_from:     _d11_outs_from
 	d11_bayt_from:     _d11_bayt_from
+	d11_bayt_to:       _d11_bayt_to
 	d11_srcs_to:       _d11_srcs_to
 	d11_outs_to:       _d11_outs_to
-	d11_bayt_to:       _d11_bayt_to
 	d12:               _d12_dc
 	d12_no_copy:       _d12_no_copy
 	d13:               _d13_dc
@@ -525,4 +579,7 @@ Tests: docker_compose: {
 	d16_harness_alias: _d16_harness_alias
 	d16_harness_prof:  _d16_harness_prof
 	d17:               _d17_dc
+	d18_launch_inc:    _d18_launch_inc
+	d18_launch_alias:  _d18_launch_alias
+	d18_harness_inc:   _d18_harness_inc
 }
