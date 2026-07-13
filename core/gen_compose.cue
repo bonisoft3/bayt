@@ -1265,6 +1265,21 @@ import (
 				secrets: [for k, _ in t.dockerfile.secrets {k}]
 			}
 
+			// Bare `docker compose up` starts exactly the runtime stack:
+			// class-runtime targets with a compose block (launch, the
+			// release-* service siblings). Everything else — build-graph
+			// stages, and by-name harnesses like integrate (compose block,
+			// build class) — carries scale: 0 so no container is created,
+			// while staying in the model so `service:` additional_contexts
+			// resolve (profiles here would drop the service and dangle
+			// every ref; they gate only the root's alias services, which
+			// nothing references). By-name `up integrate` flows through
+			// the root alias, which re-arms scale — see compose.root.
+			let _tClass = [if t.class != _|_ {t.class}, "build"][0]
+			if t.compose == _|_ || _tClass != "runtime" {
+				scale: 0
+			}
+
 			// Deterministic image ref. Bake reads `image:` to tag the
 			// loaded image (or push it, under output=type=registry);
 			// compose's `up`/`run` (without `--build`) looks up images
@@ -1408,6 +1423,8 @@ import (
 			}
 			build: (_xbakeCache & {svc: _svc, mode: "max"}).out
 			image: "bayt-\(_svc):latest"
+			// Packaging stage, never a container — see _service's scale rule.
+			scale: 0
 		}
 	}
 
@@ -1432,6 +1449,8 @@ import (
 			// (see #bakeCacheRefs.mode; guarded by _d11_outs_to).
 			build: (_xbakeCache & {svc: _svc, mode: "max"}).out
 			image: "bayt-\(_svc):latest"
+			// Packaging stage, never a container — see _service's scale rule.
+			scale: 0
 		}
 	}
 
@@ -1456,6 +1475,8 @@ import (
 			}
 			build: (_xbakeCache & {svc: _svc, mode: "max"}).out
 			image: "bayt-\(_svc):latest"
+			// Packaging stage, never a container — see _service's scale rule.
+			scale: 0
 		}
 	}
 
@@ -1510,87 +1531,19 @@ import (
 
 			// (Synthetic services live in their parent fragment; the bayt
 			// service in bayt_root. No per-synthetic fragments.)
-
-			// Per-target closure: the standalone build graph for one target, e.g.
-			// `docker compose -f .bayt/compose.<T>.closure.yaml bake <svc>`.
-			// closure(T) = T's fragment + each dep's closure, recursive over the
-			// dep DAG; compose merges the duplicates diamonds produce.
 			//
-			// compose 2.x hard-errors on a missing include ("required: false" is
-			// not honored), so the loops below list a path only for emitted targets.
-
-			// Has this dep a closure file? Same-project: must be emitted (_allEmit).
-			// Cross plain: always. Cross synthetic: only when it carries content
-			// (outs.globs non-empty, matching the producer's _srcs/_outsEmit gate).
-			let _depEmitted = {
-				d: _
-				out: bool
-				let _isSynth  = strings.HasSuffix(d.name, "_srcs") || strings.HasSuffix(d.name, "_outs")
-				let _sameProj = d.dir == G.project.dir
-				out: [
-					if _sameProj {_allEmit[d.name] != _|_},
-					if !_isSynth {true},
-					len(d.outs.globs) > 0,
-				][0]
-			}
-			// One closure-include entry for a dep at (dir, fname). dir/fname are
-			// `_`, not `string`: a string-typed field makes cue evaluate
-			// `dir == ...` against the non-concrete type and reject it.
-			let _closureInc = {
-				dir:   _
-				fname: _
-				// "bayt" -> the "_bayt" file: a bare "bayt" path hits
-				// compose.bayt.yaml (the federation root) and cycles.
-				let _f  = [if fname == "bayt" {"_bayt"}, fname][0]
-				let _dp = [if dir != "" {"\(dir)/"}, ""][0]
-				out: [
-					if dir == G.project.dir {{path: "./compose.\(_f).closure.yaml", required: false}},
-					{path: "\(_rootFromBayt)\(_dp).bayt/compose.\(_f).closure.yaml", required: false},
-				][0]
-			}
-
-			// Iterate _targetDeps (what _service wires into additional_contexts),
-			// not chainedDeps: a cross dep reached via a same-project hop
-			// (setup -> workspaceroot:setup) is only in transitiveCrossDeps.
-			for n, t in _emit {
-				"\(n).closure": include: list.Concat([
-					[{path: "./compose.\(n).yaml", required: false}],
-					[for d in (_targetDeps & {"t": t}).out if (_depEmitted & {"d": d}).out {
-						(_closureInc & {dir: d.dir, fname: d.name}).out
-					}],
-				])
-			}
-			// Mirror _syntheticSrcsService's additional_contexts. First include
-			// is the parent fragment (compose.<t.name>.yaml) — it holds the
-			// `<n>_srcs` service.
-			for n, t in _srcsEmit {
-				"\(n).closure": include: list.Concat([
-					[{path: "./compose.\(t.name).yaml", required: false}],
-					[for d in t.chainedDeps if d.name != "bayt" if (_depHasSrcs & {"d": d}).out {
-						(_closureInc & {dir: d.dir, fname: "\(d.name)_srcs"}).out
-					}],
-				])
-			}
-			// _outs references only its parent (same project); the parent
-			// fragment also holds the `<n>_outs` service.
-			for n, t in _outsEmit {
-				"\(n).closure": include: [
-					{path: "./compose.\(t.name).yaml", required: false},
-					(_closureInc & {dir: t.dir, fname: t.name}).out,
-				]
-			}
-			// The bayt service lives in the federation root (which already
-			// cross-includes every dep's bayt_root) — so its closure is that root.
-			if len(_emit) > 0 {
-				"_bayt.closure": include: [{path: "./compose.bayt.yaml", required: false}]
-			}
+			// No per-target closure files either: standalone loads go
+			// through the federation root, which is flat (one include
+			// level, linear cost) and complete — closures re-parsed each
+			// include path (compose-go's ApplyInclude has no dedup), so
+			// recursive closures over the transitive dep set blew up
+			// combinatorially with graph depth, and they missed services
+			// user roots hand-author next to the bayt tree.
 		}
 
 		// Federation root: every local fragment + each cross project's bayt_root,
-		// one include level only. Qualified `<project>-<target>` service names let
-		// multiple projects' federations coexist in one graph.
-		// Don't union the per-target closures here: compose-go's ApplyInclude has
-		// no dedup, so unioning N recursive closures is ~quadratic (~20x slower).
+		// one include level only — compose-go's ApplyInclude has no dedup, so
+		// nesting would re-parse each subtree per include path; keep it flat.
 		// No `integrate` filter on the cross-include either: integrate is a graph
 		// sink, and sibling integrates share the sayt compose resources and merge.
 		bayt_root: {
@@ -1620,17 +1573,31 @@ import (
 		// Each alias's `extends.file` must point at the target's own fragment
 		// (./compose.<n>.yaml), not compose.bayt.yaml: compose resolves `extends`
 		// against the file's own services map, not its includes.
+		//
+		// Aliases are the by-name interface, so each is profile-gated
+		// under its own name: a bare `docker compose up` skips them (no
+		// duplicate container next to the qualified runtime service),
+		// while naming one (`up integrate`) auto-activates its profile.
+		// Compose-block targets get `scale: 1` to re-arm bases the
+		// runtime gate zeroed (integrate); build-graph targets inherit
+		// scale 0 — they have nothing to run. Bake paths that flatten
+		// the root must pass `--profile "*"` or the aliases (bake's
+		// short target names) drop out of the flat file.
 		root: {
 			include: [{path: "./compose.bayt.yaml", required: false}]
 
 			if len(_emit) > 0 {
 				services: {
-					for n, _ in _emit {
+					for n, t in _emit {
 						let _svc = (_svcName & {pn: G.project.name, tn: n}).out
 						(n): {
 							extends: {
 								file:    "./compose.\(n).yaml"
 								service: _svc
+							}
+							profiles: [n]
+							if t.compose != _|_ {
+								scale: 1
 							}
 						}
 					}

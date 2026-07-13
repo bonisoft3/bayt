@@ -319,7 +319,6 @@ their per-target sibling.
 | `.bayt/Dockerfile.<n>`      | per-target Dockerfile body                                       |
 | `compose.yaml`              | root compose (include of bayt-generated services)                |
 | `.bayt/compose.<n>.yaml`    | per-target compose service                                       |
-| `.bayt/compose.<n>.closure.yaml` | self-contained flat compose closure — any target loadable standalone |
 | `skaffold.yaml`             | root skaffold (`requires:` of bayt-generated configs)            |
 | `.bayt/skaffold.<n>.yaml`   | per-target skaffold config                                       |
 | `.bayt/bake.<n>.hcl`        | per-target bake HCL                                              |
@@ -327,6 +326,22 @@ their per-target sibling.
 | `.bayt/vscode.<n>.json`     | per-target vscode task entries (build/test only). User merges into `.vscode/tasks.json`; `sayt lint` warns on drift. vscode's tasks.json has no native include, so bayt doesn't overwrite it directly. |
 
 The `.bayt/` directory is generated but committed. A single `sayt generate` (or `bayt generate --all`) rebuilds the whole tree atomically.
+
+A bare `docker compose up` starts exactly the runtime stack: class-runtime
+targets with a `compose:` block (launch, release-* service siblings). All
+other services — build-graph stages, the `_srcs`/`_outs`/`bayt` synthetics,
+and by-name harnesses like integrate — are emitted with `scale: 0`: they stay
+in the model so `service:` build contexts resolve, but no container is
+created. The root's short-name aliases are profile-gated under their own
+names, so `docker compose up integrate` still works (naming a service
+auto-activates its profiles) without the alias joining a bare up. Combine
+with `--no-build` (or `BAYT_PULL_POLICY=missing` under `images: pull`) for a
+runtime-only up that never touches the build graph. Anything that flattens
+the root for bake (`docker compose config -o` piped to `buildx bake`) must
+pass `--profile "*"` to keep the alias target names in the flat file, and a
+manual `docker compose down` needs the same flag to reap containers started
+through an alias (`sayt integrate` already tears its stacks down by project
+label, which is profile-blind).
 
 ## Design principles
 
@@ -370,7 +385,7 @@ plugins/bayt/
 │   ├── emitter.cue          (#render — composes the per-format generators)
 │   ├── gen_bayt.cue         (manifest emitter — the canonical .bayt/bayt.<n>.json)
 │   ├── gen_taskfile.cue     (Taskfile + per-target Taskfile.<n>.yaml)
-│   ├── gen_compose.cue      (Dockerfile.<n> + compose.<n>.yaml + closures)
+│   ├── gen_compose.cue      (Dockerfile.<n> + compose.<n>.yaml + roots)
 │   ├── gen_skaffold.cue
 │   ├── gen_vscode.cue
 │   ├── gen_bake.cue

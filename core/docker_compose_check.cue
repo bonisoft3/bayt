@@ -59,17 +59,13 @@ _d2: #project & {
 _d2_dc: (#dockerComposeGen & {project: _d2, depManifests: {}})
 _d2_dc: compose: files: build: services: "d2-build": build: additional_contexts: "d2-setup": "service:d2-setup"
 // Per-target files are fragments — services only, no include. Standalone
-// loadability lives in the sibling per-target closure (compose.<n>.closure.yaml).
+// loads go through the federation root (flat, complete); no per-target
+// closure files exist (recursive closures re-parse per include path —
+// compose-go's ApplyInclude has no dedup — and blow up with graph depth).
 _d2_dc: compose: files: build: {[!="services"]: _|_}
 _d2_dc: compose: files: setup: {[!="services"]: _|_}
-// compose.build.closure.yaml: build's own fragment + the closure of each
-// dep its service references (here just the same-project setup), recursive
-// so setup.closure pulls setup's own deps. Resolves standalone, no
-// federation root.
-_d2_dc: compose: files: "build.closure": include: [
-	{path: "./compose.build.yaml", required: false},
-	{path: "./compose.setup.closure.yaml", required: false},
-]
+_d2_dc: compose: files: {["build.closure"]: _|_}
+_d2_dc: compose: files: {["setup.closure"]: _|_}
 
 // --- D3: targets without a dockerfile block don't appear in the
 // emitter output at all. A pure setup-only project produces an empty
@@ -138,12 +134,18 @@ _d5_dc: compose: files: launch: services: "d5-launch": develop: watch: [
 // --- D6: the user root (compose.yaml) wires short alias services that
 // `extends:` the qualified services in the per-target compose files.
 // Lets users `docker compose up <target>` without typing the qualifier.
+// Each alias is profile-gated under its own name — bare `up` skips it
+// (no duplicate next to the qualified service), naming it auto-activates
+// the profile. A build-graph alias inherits the base's scale 0 (nothing
+// to run); compose-block aliases re-arm with scale 1 (see D16).
 _d6_dc: (#dockerComposeGen & {project: _d1, depManifests: {}})
 _d6_dc: compose: root: include: [{path: "./compose.bayt.yaml", required: false}]
 _d6_dc: compose: root: services: build: extends: {
 	file:    "./compose.build.yaml"
 	service: "d1-build"
 }
+_d6_dc: compose: root: services: build: profiles: ["build"]
+_d6_dc: compose: root: services: build: {["scale"]: _|_}
 
 // --- D7: dockerfile.entrypoint emits an `ENTRYPOINT [...]` line in
 // exec form. Empty list (the default) emits nothing — verified by
@@ -266,18 +268,21 @@ _d11_parent_from: [
 
 // Each synthetic's x-bake cache tag is keyed by its project-qualified service
 // name (`d11-build_srcs`), so synthetics under a cache scope shared across
-// projects each get a distinct tag.
-_d11_srcs_from: _d11_dc.compose.files.build_srcs.services."d11-build_srcs".build."x-bake"."cache-from"
+// projects each get a distinct tag. Synthetic services live in the PARENT
+// fragment (files.build) and the bayt service in bayt_root — a selector on a
+// nonexistent file key (e.g. files.build_srcs) is merely incomplete, which
+// `cue eval` tolerates, so it would assert nothing.
+_d11_srcs_from: _d11_dc.compose.files.build.services."d11-build_srcs".build."x-bake"."cache-from"
 _d11_srcs_from: [
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_srcs",
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-build_srcs",
 ]
-_d11_outs_from: _d11_dc.compose.files.build_outs.services."d11-build_outs".build."x-bake"."cache-from"
+_d11_outs_from: _d11_dc.compose.files.build.services."d11-build_outs".build."x-bake"."cache-from"
 _d11_outs_from: [
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs",
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-build_outs",
 ]
-_d11_bayt_from: _d11_dc.compose.files."_bayt".services."d11-bayt".build."x-bake"."cache-from"
+_d11_bayt_from: _d11_dc.compose.bayt_root.services."d11-bayt".build."x-bake"."cache-from"
 _d11_bayt_from: [
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-bayt",
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-bayt",
@@ -285,11 +290,11 @@ _d11_bayt_from: [
 
 // cache-to mode: max for every synthetic — each flattens an unmodelled
 // `_ctxs` intermediate (_srcs, _outs, _bayt) whose result mode=min drops.
-_d11_srcs_to: _d11_dc.compose.files.build_srcs.services."d11-build_srcs".build."x-bake"."cache-to"
+_d11_srcs_to: _d11_dc.compose.files.build.services."d11-build_srcs".build."x-bake"."cache-to"
 _d11_srcs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_srcs,mode=max,image-manifest=true,oci-mediatypes=true"]
-_d11_outs_to: _d11_dc.compose.files.build_outs.services."d11-build_outs".build."x-bake"."cache-to"
+_d11_outs_to: _d11_dc.compose.files.build.services."d11-build_outs".build."x-bake"."cache-to"
 _d11_outs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs,mode=max,image-manifest=true,oci-mediatypes=true"]
-_d11_bayt_to: _d11_dc.compose.files."_bayt".services."d11-bayt".build."x-bake"."cache-to"
+_d11_bayt_to: _d11_dc.compose.bayt_root.services."d11-bayt".build."x-bake"."cache-to"
 _d11_bayt_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-bayt,mode=max,image-manifest=true,oci-mediatypes=true"]
 
 // --- D12: a `:x:outs` dep on a target with empty outs.globs is inert
@@ -415,6 +420,64 @@ _d15_remote: strings.Contains(_d15_body, "ADD --checksum=sha256:2e8040ceae7815ab
 _d15_unpack: strings.Contains(_d15_body, "ADD --checksum=sha256:95e3a3a2adeacd1b8dd704743c71eec8343dde472d3efe71101a62570c47cbbd --unpack=true https://example.com/data.tar.gz /data/") & true
 _d15_local:  strings.Contains(_d15_body, "ADD vendor/tools.tar.gz /opt/tools/") & true
 
+// --- D16: bare-`up` runtime selection. Only class-runtime targets
+// with a compose block (the app stack: launch, release-* siblings)
+// run bare; build-graph stages and synthetics (_srcs/_outs/bayt)
+// carry `scale: 0` — in the model (so `service:` contexts resolve,
+// which profiles would break) but no container. Reuses _d13: launch
+// is class runtime with `compose: {}`, build/setup are build-class.
+_d16_build_scale: _d13_dc.compose.files.build.services."d13-build".scale & 0
+_d16_setup_scale: _d13_dc.compose.files.setup.services."d13-setup".scale & 0
+_d16_srcs_scale:  _d13_dc.compose.files.build.services."d13-build_srcs".scale & 0
+_d16_outs_scale:  _d13_dc.compose.files.build.services."d13-build_outs".scale & 0
+_d16_bayt_scale:  _d13_dc.compose.bayt_root.services."d13-bayt".scale & 0
+// The runtime stack stays at compose's default replica count so a
+// bare `up` starts it.
+_d13_dc: compose: files: launch: services: "d13-launch": {["scale"]: _|_}
+// A compose-block target that is NOT class runtime (integrate: a
+// by-name harness) is zeroed too — bare `up` must not run tests.
+// Its root alias re-arms it: scale 1 + the auto-activating profile,
+// so `docker compose up harness` works unchanged (the qualified
+// base stays down; only the alias runs).
+_d16_harness_scale: _d17_dc.compose.files.harness.services."d17-harness".scale & 0
+_d16_harness_alias: _d17_dc.compose.root.services.harness.scale & 1
+_d16_harness_prof:  _d17_dc.compose.root.services.harness.profiles & ["harness"]
+
+// --- D17: no closure files for any target shape — user targets,
+// synthetics, or the harness (D16 uses it for scale gating). The
+// fragment set plus the federation root is the whole compose surface.
+_d17: #project & {
+	name: "d17"
+	dir:  "d17"
+	targets: {
+		"producer": {
+			srcs: globs: ["src/**"]
+			outs: globs: ["dist/lib"]
+			cmd: "builtin": do: "make"
+			dockerfile: busybox
+		}
+		"consumer": {
+			deps: [":producer", ":producer:outs"]
+			srcs: globs: ["**"]
+			cmd:  "builtin": do: "make"
+			dockerfile: busybox
+		}
+		// By-name harness: compose block, default (build) class — D16
+		// asserts its scale gating and alias re-arm.
+		"harness": {
+			srcs: globs: ["tests/**"]
+			cmd: "builtin": do: "run-tests"
+			dockerfile: busybox
+			compose: {}
+		}
+	}
+}
+_d17_dc: (#dockerComposeGen & {project: _d17, depManifests: {}})
+_d17_dc: compose: files: {["consumer.closure"]: _|_}
+_d17_dc: compose: files: {["producer_srcs.closure"]: _|_}
+_d17_dc: compose: files: {["producer_outs.closure"]: _|_}
+_d17_dc: compose: files: {["_bayt.closure"]: _|_}
+
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
 	d1: _d1_dc
@@ -453,4 +516,13 @@ Tests: docker_compose: {
 	d15_remote:        _d15_remote
 	d15_unpack:        _d15_unpack
 	d15_local:         _d15_local
+	d16_build_scale:   _d16_build_scale
+	d16_setup_scale:   _d16_setup_scale
+	d16_srcs_scale:    _d16_srcs_scale
+	d16_outs_scale:    _d16_outs_scale
+	d16_bayt_scale:    _d16_bayt_scale
+	d16_harness_scale: _d16_harness_scale
+	d16_harness_alias: _d16_harness_alias
+	d16_harness_prof:  _d16_harness_prof
+	d17:               _d17_dc
 }

@@ -262,7 +262,11 @@ ci: inject & {
 		// _do_both bakes inline: `depot bake` when $DEPOT_TOKEN is set, else
 		// `docker buildx bake`, fed the `buildx bake --print integrate` JSON
 		// (depot bake needs compose's service:X rewritten to target:X, which
-		// --print does). The printed file defines the full build closure, a
+		// --print does). `--profile "*"` on the flatten opts the root's
+		// profile-gated short-name aliases in — `integrate` is one of them,
+		// and it drops out of the flat view otherwise. The `compose up
+		// integrate` lines need no flag: naming a service auto-activates
+		// its profiles. The printed file defines the full build closure, a
 		// superset of depot.hcl's group (gen_compose mirrors depends_on into
 		// additional_contexts), so $tgt always resolves. No --allow:
 		// BUILDX_BAKE_ENTITLEMENTS_FS=0 (inject.cue) covers fs-read. _do_run
@@ -275,7 +279,7 @@ ci: inject & {
 			fi
 			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
 			[ -f .bayt/depot.hcl ] && tgt="-f .bayt/depot.hcl depot-build" || tgt="integrate"
-			docker compose config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $tgt
+			docker compose --profile "*" config | docker buildx bake --allow=fs.read=/monorepo -f - --print integrate | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $tgt
 			exec docker compose up integrate --abort-on-container-failure --exit-code-from integrate --remove-orphans
 			"""#
 		let _do_run = #"""
