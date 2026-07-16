@@ -161,15 +161,10 @@ inject: {
 			{id: "depot_token",          var: contents: "DEPOT_TOKEN"},
 			{id: "depot_project_id",     var: contents: "DEPOT_PROJECT_ID"},
 			{id: "depot_disable_otel",   var: contents: "DEPOT_DISABLE_OTEL"},
-			// $BUILDX_BUILDER is expanded by the heredoc shell at RUN
-			// time — gets the value just exported above via var.contents.
-			// Don't hardcode "sayt-builder": GHA setup-buildx-action
-			// without an explicit `name:` generates a random builder
-			// name (`builder-<uuid>`), which BUILDX_BUILDER then carries.
-			// 0600 matches the canonical ~/.docker/config.json +
-			// ~/.docker/buildx/instances/<name> permissions. var.path
-			// emission uses `cp -p` so the mount mode propagates verbatim.
-			{id: "buildx_instance", var: path:     "/root/.docker/buildx/instances/$BUILDX_BUILDER", mode: "0600"},
+			// Keep the instance as contents and install it in a guarded pre-step.
+			// The static secret list keeps this RUN cache-compatible with every
+			// capability set, while empty builder credentials remain a no-op.
+			{id: "buildx_instance", var: contents: "BUILDX_INSTANCE"},
 			// path writes config.json for this CLI; contents re-exports
 			// DOCKER_AUTH_CONFIG so a nested compose-up re-derives the creds.
 			{id: "docker_config",   var: {contents: "DOCKER_AUTH_CONFIG", path: "/root/.docker/config.json"}, mode: "0600"},
@@ -186,6 +181,16 @@ inject: {
 				  trap 'kill $SOCAT_PID 2>/dev/null || true' EXIT INT TERM
 				  socat -u OPEN:/dev/null UNIX-CONNECT:/var/run/docker.sock,retry=20,interval=0.2 >/dev/null 2>&1 \\
 				    || { echo "dindbox: socat bridge to /var/run/docker.sock not ready" >&2; exit 1; }
+				fi
+				"""
+		}
+		defaultSteps: "buildx-instance": {
+			priority: 11
+			pre: """
+				if [ -n "$BUILDX_BUILDER" ] && [ -n "$BUILDX_INSTANCE" ]; then
+				  install -d -m 0700 /root/.docker/buildx/instances
+				  printf '%s' "$BUILDX_INSTANCE" > "/root/.docker/buildx/instances/$BUILDX_BUILDER"
+				  chmod 0600 "/root/.docker/buildx/instances/$BUILDX_BUILDER"
 				fi
 				"""
 		}

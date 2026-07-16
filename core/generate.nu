@@ -58,8 +58,7 @@
 
 use ../runtime/tools.nu [run-cue, run-nu]
 
-# BAYT_TIMING=1 prints generate phase timings to stderr (same convention
-# as the dind/compose BAYT_TIMING lines).
+# BAYT_TIMING=1 prints generate phase timings to stderr.
 def print-timing [label: string, start: datetime] {
 	if ($env.BAYT_TIMING? | default "") != "" {
 		print -e $"BAYT_TIMING generate ($label): ((date now) - $start)"
