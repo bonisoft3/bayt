@@ -559,22 +559,25 @@ pnpm: bayt.#project & {
 // workspace files (gradle's libs.versions.toml, devserver's
 // dind.sh) that consumers depend on.
 pnpmWorkspace: bayt.#project & {
-	// No activate prefix — workspace-root is a pure files-declarer
-	// project. Its setup target runs `true` (no-op); wrapping that
-	// in `mise x --` would resolve the ambient toolchain and blow up
-	// PATH for no benefit (and on macOS with a large PATH, execvP
-	// fails with "path too long" before it even runs).
+	// No activate prefix — wrapping wsroot's cmds in `mise x --`
+	// would resolve the ambient toolchain and blow up PATH for no
+	// benefit (and on macOS with a large PATH, execvP fails with
+	// "path too long" before it even runs).
 	// Concrete (not `*"" | string`) so the default doesn't compete
 	// with bayt.#project's `*"mise x --" | string` during unification.
 	activate: ""
 	dir:      *"" | string
 
 	targets: {
-		// wsroot is a pure files-declarer; it doesn't run Mise.install
-		// (no toolchain provisioning). Compose sayt.setup for the
-		// taskfile config and stage the files directly.
-		"setup": P=setup & {
-			activate: ""
+		// wsroot's setup provisions the SHARED toolchain layer: its
+		// `mise install` at the workspace root installs the root
+		// .mise.toml tool set into the image layer, and every
+		// consumer's setup FROM-chains this stage — so a consumer's
+		// own hierarchical `mise install` finds the root tools
+		// already installed and downloads only its project delta.
+		// Demoting this back to a files-only no-op makes every
+		// project re-download the full root union in its own stage.
+		"setup": P=setup & Mise.install & {
 			srcs: globs: list.Concat([
 				Mise.installFiles.globs,
 				Pnpm.workspaceFiles.globs,
@@ -618,14 +621,14 @@ pnpmWorkspace: bayt.#project & {
 			outs: globs: list.Concat([P.srcs.globs, [".task/bayt/setup.hash"]])
 			env: SHARP_IGNORE_GLOBAL_LIBVIPS: "1"
 			dockerfile: bayt.nubox
-			// No-op — the consumer's setup stage owns the real
-			// `pnpm install`. This target exists to stage the
+			// The cmd (from Mise.install) is `mise install` only —
+			// the consumer's setup stage owns the real `pnpm install`.
+			// Beyond the toolchain layer, this target stages the
 			// workspace files into /monorepo/ (so the consumer's
 			// pnpm install finds them via its workspace traversal)
-			// and to act as the shared cache key: any change to
+			// and acts as the shared cache key: any change to
 			// pnpm-lock.yaml or pnpm-workspace.yaml invalidates
 			// every consumer.
-			cmd: "builtin": do: *"true" | string
 		}
 	}
 }

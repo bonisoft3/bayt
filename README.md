@@ -21,7 +21,7 @@ Pin the release in your project's `mise.toml`:
 
 ```toml
 [tools]
-"github:bonisoft3/bayt" = "0.27.1"
+"github:bonisoft3/bayt" = "0.30.1"
 ```
 
 `bayt` is then on PATH and the cue/nu tree lives next to it. Run from any directory containing a `bayt.cue`:
@@ -30,7 +30,7 @@ Pin the release in your project's `mise.toml`:
 bayt generate --recursive
 ```
 
-In a workspace with many projects, `bayt generate --all` regenerates every project in dependency order in a single process — much faster than per-project invocations. The CLI also exposes the supporting tools: `bayt fingerprint`, `bayt where <target>`, and `bayt cache gc|status|clear` for the content-addressed cache.
+In a workspace with many projects, `bayt generate --all` regenerates every project in dependency order in a single process — much faster than per-project invocations. The CLI also exposes the supporting tools: `bayt fingerprint`, `bayt cache gc|status|clear` for the content-addressed cache, and `bayt where root|runtime` to print bayt's own install location.
 
 **Sayt pairing (optional).** If the project uses sayt, add bayt to the generate rulemap so `sayt generate` re-emits bayt's outputs alongside the rest of the pipeline:
 
@@ -73,7 +73,7 @@ From the project dir:
 bayt generate
 ```
 
-This emits `Taskfile.yml`, `.bayt/Taskfile.<verb>.yaml`, `.bayt/Dockerfile.<verb>`, `compose.yaml`, `.bayt/compose.<verb>.yaml`, `skaffold.yaml`, `.bayt/skaffold.<verb>.yaml`, `.bayt/bake.<verb>.hcl`, `.vscode/tasks.json`, and the per-target JSON manifests (`.bayt/bayt.<verb>.json`). All are committed — lint enforces "don't hand-edit."
+This emits the per-target files under `.bayt/` — `.bayt/bayt.<verb>.json` (the manifest), `.bayt/Taskfile.<verb>.yaml`, `.bayt/Dockerfile.<verb>`, `.bayt/compose.<verb>.yaml`, `.bayt/skaffold.<verb>.yaml`, `.bayt/bake.<verb>.hcl`, `.bayt/vscode.<verb>.json` — plus the `.bayt/` aggregate roots (`Taskfile.yml` launch shim, `Taskfile.bayt.yml`, `compose.yaml`) that your user-authored `Taskfile.yml`/`compose.yaml`/`skaffold.yaml` include. You hand-author the tool roots once; the `.bayt/` tree is committed and lint enforces "don't hand-edit" there.
 
 Now `task build:build` runs `./gradlew assemble` only when sources changed. `task test:test` runs only when build or test sources changed. Touching any upstream file cascades through the chain automatically. If you run the same target twice with no changes, nothing happens.
 
@@ -185,9 +185,9 @@ A *stack* captures what a language toolchain needs. Bayt ships four toolchain st
 - **`stacks/gradle`** — kotlin/java/gradle concept fragments: `depsResolve` (the dependency closure as a read-only dep-cache layer), `assemble`, `test`, `integrationTest`, `jibBuildTar`, `check`, `run`. Default srcs scoped to `src/main/` for `assemble` (so test edits don't invalidate build); `bayt.cache.full` on `assemble` and `integrationTest` (gradle's daemon cold-start is too costly to pay on every cache hit). Emits `.bayt/init.gradle.kts` per project pointing gradle's local build cache at `$BAYT_CACHE_DIR/gradle` — gradle's per-task cache and bayt's per-target cache share the same on-disk store and complement each other (per-task hits when only some inputs changed, per-target full skips when nothing changed).
 - **`stacks/pnpm`** — pnpm/node/vite/vitest concept fragments: `install` (the dependency closure as a layer), `build`, `test`, `dev`, `testInt`, `testE2E`, `lint`. Test srcs split between `srcsTest` (`*.test.ts(x)`) and `srcsIntegrate` (`*.spec.ts(x)`) matching the repo's vitest convention. pnpm store cache mount.
 - **`stacks/mise`** — toolchain installer. `install` (provisions the project's `.mise.toml`), `exec` (sets `activate: "mise x --"` so cmds resolve through mise's shim layer), `doctor`. Used as a building block by other stacks.
-- **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.go`, `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace` are the standard mappings projects compose against. `sayt.inject` adds the dind plumbing for ci-cascade flows; `sayt.ci` is a one-line recipe combining inject + the standard bake-and-up-the-integrate-closure RUN body + FROM `:dindbox`; `sayt.dindbox` is the matching dindbox-target preset.
+- **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.go`, `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace` are the standard mappings projects compose against. `sayt.pnpmWorkspace`'s setup provisions the shared toolchain layer: it runs the workspace root's `mise install`, so consumer setups FROM-chaining it install only their project's tool delta. `sayt.inject` adds the dind plumbing for ci-cascade flows; `sayt.ci` is a one-line recipe combining inject + the standard bake-and-up-the-integrate-closure RUN body + FROM `:dindbox`; `sayt.dindbox` is the matching dindbox-target preset.
 
-The go/gradle/pnpm stacks ship an opt-in non-verb `deps` target that bakes the dependency closure into an image layer (via the RUN-only `dockerfile.do` form, below) so downstream `build` COPYs it instead of re-fetching.
+The go and gradle stacks ship an opt-in non-verb `deps` target that bakes the dependency closure into an image layer: go downloads via the RUN-only `dockerfile.do` form (below) and downstream `build` COPYs it in via `:deps:outs`; gradle resolves a read-only dep cache that rides into `build` through the FROM chain (`GRADLE_RO_DEP_CACHE`). pnpm folds the same idea into its `setup` verb instead — `install` materializes the closure as a layer directly.
 
 Using the umbrella collapses a typical service to a handful of lines:
 
@@ -332,24 +332,35 @@ Worth noting: the two aren't mutually exclusive. `.bayt/bayt.<verb>.json` is a m
 ## Emitted files
 
 All bayt-generated files use the `<tool>.<verb>.<ext>` convention under
-`.bayt/`. The user-authored tool roots (`Taskfile.yml`, `compose.yaml`,
-`skaffold.yaml`) sit alongside as single root files that include
-their per-target sibling.
+`.bayt/`. The tool roots (`Taskfile.yml`, `compose.yaml`, `skaffold.yaml`)
+are **user-authored**: you write them once and point their includes at the
+`.bayt/` aggregates below.
+
+User-authored roots (you write these; bayt never overwrites them):
+
+| Path                        | Purpose                                                          |
+|-----------------------------|------------------------------------------------------------------|
+| `Taskfile.yml`              | root go-task; its `bayt:` include points at `./.bayt/Taskfile.bayt.yml` |
+| `compose.yaml`              | root compose; includes `./.bayt/compose.yaml`                    |
+| `skaffold.yaml`             | root skaffold (`requires:` of the per-target configs); cross-project graph composition is user-owned |
+| `.vscode/tasks.json`        | user merges the `.bayt/vscode.<n>.json` entries in (no native include mechanism) |
+
+Emitted under `.bayt/`:
 
 | Path                        | Purpose                                                          |
 |-----------------------------|------------------------------------------------------------------|
 | `.bayt/bayt.<n>.json`       | canonical per-target manifest (srcs, outs, deps, cmds, …)        |
-| `Taskfile.yml`              | root go-task (version + includes)                                |
+| `.bayt/Taskfile.yml`        | launch shim — root for bayt-initiated `task -t .bayt/Taskfile.yml bayt:<n>` |
+| `.bayt/Taskfile.bayt.yml`   | bayt namespace aggregate (target + dep includes)                 |
 | `.bayt/Taskfile.<n>.yaml`   | per-target go-task include                                       |
 | `.bayt/Dockerfile.<n>`      | per-target Dockerfile body                                       |
-| `compose.yaml`              | root compose (include of bayt-generated services)                |
+| `.bayt/compose.yaml`, `.bayt/compose.bayt.yaml` | compose aggregate includes for the user root |
 | `.bayt/compose.<n>.yaml`    | per-target compose service                                       |
 | `.bayt/compose.<n>.closure.yaml` | up targets only (`compose.up: true` — launch/integrate): flat include of the target's fragment closure + the reserved `bayt` alias, loadable with no user root or federation (`docker compose -f … up bayt`) |
-| `skaffold.yaml`             | root skaffold (`requires:` of bayt-generated configs)            |
 | `.bayt/skaffold.<n>.yaml`   | per-target skaffold config                                       |
 | `.bayt/bake.<n>.hcl`        | per-target bake HCL                                              |
 | `.bayt/depot.yaml`, `.bayt/depot.hcl` | depot.dev bake files (runtime-closure group) — only with `#project.depot` |
-| `.bayt/vscode.<n>.json`     | per-target vscode task entries (build/test only). User merges into `.vscode/tasks.json`; `sayt lint` warns on drift. vscode's tasks.json has no native include, so bayt doesn't overwrite it directly. |
+| `.bayt/vscode.<n>.json`     | per-target vscode task entries (build/test only). User merges into `.vscode/tasks.json`; `sayt lint` warns on drift. |
 
 The `.bayt/` directory is generated but committed. A single `sayt generate` (or `bayt generate --all`) rebuilds the whole tree atomically.
 
@@ -422,8 +433,8 @@ plugins/bayt/
 │   │                         #skaffold, #bake, #vscode, #taskfile, #mount)
 │   ├── capabilities.cue     (bayt.incremental, bayt.cache, …)
 │   ├── healthcheck.cue      (bayt.healthcheck.* templates)
-│   ├── images.cue           (nubox / busybox / staging / wolfi / dind /
-│   │                         dockerCli presets — set dockerfile.from)
+│   ├── images.cue           (nubox / dindbox / busybox / scratch presets
+│   │                         — set dockerfile.from)
 │   ├── images.lock.cue      (digest pin per image — package.json-style)
 │   ├── emitter.cue          (#render — composes the per-format generators)
 │   ├── gen_bayt.cue         (manifest emitter — the canonical .bayt/bayt.<n>.json)
@@ -453,7 +464,8 @@ plugins/bayt/
 │   ├── cache.nu             (3-backend cache wrap: local-FS / bazel-remote /
 │   │                         ORAS; `cache.nu run` is the per-cmd wrap;
 │   │                         `cache.nu gc` evicts oldest mtimes to budget)
-│   ├── where.nu / tools.nu  (target resolution + tool invocation helpers)
+│   ├── where.nu / tools.nu  (bayt install-path lookup `root|runtime` +
+│   │                         tool invocation helpers)
 │   ├── bayt / bayt.ps1      (slim in-container launchers)
 │   ├── nu.toml / cue.toml / oras.toml  (mise tool stubs pinning the runtime)
 │   └── *_test.nu            (cache + fingerprint nu test suites)
