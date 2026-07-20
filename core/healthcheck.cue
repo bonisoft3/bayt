@@ -44,12 +44,14 @@ healthcheck: {
 		}
 
 		dockerfile: {
-			copy: [{
+			// defaultCopy, not copy, so a consumer's own `copy` coexists —
+			// see #dockerfile.copy.
+			defaultCopy: httpcheck: {
 				from:  {name: lock.images.microcheck}
 				srcs:  ["/bin/httpcheck"]
 				dst:   "/usr/local/bin/httpcheck"
 				chmod: "755"
-			}]
+			}
 			healthcheck: {
 				test:         ["CMD", "httpcheck", T.healthcheck.url]
 				interval:     T.healthcheck.interval
@@ -80,12 +82,12 @@ healthcheck: {
 		}
 
 		dockerfile: {
-			copy: [{
+			defaultCopy: portcheck: {
 				from:  {name: lock.images.microcheck}
 				srcs:  ["/bin/portcheck"]
 				dst:   "/usr/local/bin/portcheck"
 				chmod: "755"
-			}]
+			}
 			healthcheck: {
 				test:         ["CMD", "portcheck", "--port", "\(T.healthcheck.port)"]
 				interval:     T.healthcheck.interval

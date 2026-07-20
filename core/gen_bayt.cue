@@ -30,6 +30,15 @@ _expandLines: {
 	out: [if in == null {[]}, [for v in (#MapToList & {"in": in}).out {v.line}]][0]
 }
 
+// _expandCopy — flatten a defaultCopy #MapAsList into a list of copy
+// entries, dropping the map-key `name` (#MapToList already drops priority)
+// so each element is a plain copy entry ready to concat with `copy`.
+_expandCopy: {
+	in:  null | #MapAsList
+	out: [...]
+	out: [if in == null {[]}, [for v in (#MapToList & {"in": in}).out {{for k, x in v if k != "name" {(k): x}}}]][0]
+}
+
 #manifestGen: G={
 	project: #project
 	// Flat map of cross-project dep string → pre-computed manifest object.
@@ -86,7 +95,7 @@ _expandLines: {
 		// on this, so non-gradle projects carry no gradle residue.
 		gradleInit: len([
 			for n, t in G.project.targets if t != null
-			for c in t.cmds if strings.Contains(c.do, "init.gradle.kts") {1},
+			for c in t.cmds if c.do != _|_ if strings.Contains(c.do, "init.gradle.kts") {1},
 		]) > 0
 	}
 
@@ -113,11 +122,26 @@ _expandLines: {
 		}
 	}
 
+	// _fromRef — a target's `dockerfile.from.ref`, or "" when it has none.
+	// Classify with HasPrefix/Contains, not `== ""`. Input field is `tgt`
+	// not `t` so `& {tgt: t}` at a `for _, t in …` site binds the loop var,
+	// not this struct's own field.
+	_fromRef: {
+		tgt: _
+		// Chained `if` (not `&&`, which CUE doesn't short-circuit — the
+		// later probes would index past an absent dockerfile/from).
+		out: [
+			if tgt.dockerfile != _|_ if tgt.dockerfile.from != null if tgt.dockerfile.from.ref != _|_ {tgt.dockerfile.from.ref},
+			"",
+		][0]
+	}
+
 	// Per-target direct cross-project deps. Collects from t.deps +
 	// t.dockerfile.from.ref (both Bazel-style: ":X" same-project drops;
 	// "P:X" cross-project keeps). Deduped by "<project>-<name>".
 	_targetCrossDeps: {
 		for n, t in G.project.targets if t != null {
+			let _fr = (_fromRef & {tgt: t}).out
 			let _depEntries = [
 				for d in t.deps
 				if !strings.HasPrefix(d, ":") {
@@ -125,12 +149,7 @@ _expandLines: {
 				},
 			]
 			let _fromEntries = [
-				if t.dockerfile != _|_
-					if t.dockerfile.from != null
-					if t.dockerfile.from.ref != _|_
-					if !strings.HasPrefix(t.dockerfile.from.ref, ":") {
-					(_buildCrossEntry & {ref: t.dockerfile.from.ref}).out
-				},
+				if strings.Contains(_fr, ":") if !strings.HasPrefix(_fr, ":") {(_buildCrossEntry & {ref: _fr}).out},
 			]
 			let _all  = list.Concat([_depEntries, _fromEntries])
 			let _keys = [for x in _all {"\(x.project)-\(x.name)"}]
@@ -175,10 +194,8 @@ _expandLines: {
 		for n, t in G.project.targets if t != null
 		for d in t.deps if strings.HasPrefix(d, ":") {d},
 		for n, t in G.project.targets if t != null
-		if t.dockerfile != _|_
-		if t.dockerfile.from != null
-		if t.dockerfile.from.ref != _|_
-		if strings.HasPrefix(t.dockerfile.from.ref, ":") {t.dockerfile.from.ref},
+		let _fr = (_fromRef & {tgt: t}).out
+		if strings.HasPrefix(_fr, ":") {_fr},
 	]
 	_sameProjectRefName: {
 		for d in _sameProjectRefs {
@@ -288,14 +305,10 @@ _expandLines: {
 	// files emission.
 	_sameProjectDepNames: {
 		for n, t in G.project.targets if t != null {
-			let _fromRef = [
-				if t.dockerfile != _|_
-					if t.dockerfile.from != null
-					if t.dockerfile.from.ref != _|_
-					if strings.HasPrefix(t.dockerfile.from.ref, ":") {t.dockerfile.from.ref},
-			]
+			let _fr = (_fromRef & {tgt: t}).out
+			let _fromRefs = [if strings.HasPrefix(_fr, ":") {_fr}]
 			let _depRefs = [for d in t.deps if strings.HasPrefix(d, ":") {d}]
-			let _all = list.Concat([_fromRef, _depRefs])
+			let _all = list.Concat([_fromRefs, _depRefs])
 			(n): [for i, d in _all if !list.Contains(list.Slice(_all, 0, i), d) {_sameProjectRefName[d]}]
 		}
 	}
@@ -508,6 +521,12 @@ _expandLines: {
 				// Deps normalized to name strings (direct only).
 				deps: _depNames
 
+				// Direct same-project dep names — the go-task `::bayt:<dep>`
+				// edges. Only DIRECT: go-task reaches an indirect dep through
+				// the chain, so emitting a transitive edge too (as chainedDeps
+				// would) makes go-task's parallel `deps:` double-start it.
+				sameProjectDeps: _sameProjectDepNames[n]
+
 				// Transitive same-project dep names (direct ∪ indirect).
 				// Emitted so Dockerfile generation can list the exact set
 				// of .bayt/Taskfile.<d>.yaml + .bayt/bayt.<d>.json files
@@ -531,31 +550,25 @@ _expandLines: {
 				// Dockerfile emitter's per-glob COPY emission has the
 				// producer's declared interface available without a
 				// second lookup.
+				let _fr = (_fromRef & {tgt: t}).out
 				let _directNames = list.Concat([
-					[
-						if t.dockerfile != _|_
-						if t.dockerfile.from != null
-						if t.dockerfile.from.ref != _|_
-						if strings.HasPrefix(t.dockerfile.from.ref, ":")
-						if !list.Contains(t.deps, t.dockerfile.from.ref) {_sameProjectRefName[t.dockerfile.from.ref]},
-					],
+					[if strings.HasPrefix(_fr, ":") if !list.Contains(t.deps, _fr) {_sameProjectRefName[_fr]}],
 					[for d in t.deps if strings.HasPrefix(d, ":") {_sameProjectRefName[d]}],
 				])
 				chainedDeps: list.Concat([
-					// FROM-chain ref leads when it's same-project (the
-					// chain head, conceptually). Cross-project FROM refs
-					// flow through _targetCrossDeps, not chainedDeps.
-					// Skipped when the user also lists the same ref in
-					// t.deps — that entry takes over.
-					[
-						if t.dockerfile != _|_
-						if t.dockerfile.from != null
-						if t.dockerfile.from.ref != _|_
-						if strings.HasPrefix(t.dockerfile.from.ref, ":")
-						if !list.Contains(t.deps, t.dockerfile.from.ref) {
-							(_sameProjectEntry & {name: _sameProjectRefName[t.dockerfile.from.ref]}).out
-						},
-					],
+					// FROM-chain ref leads. A `from.ref` is itself a dep, so it
+					// seeds this host fingerprint Merkle chain — a FROM'd
+					// upstream's inputs re-key this target (FROM alone only
+					// covers container builds). Same-project → _sameProjectEntry;
+					// cross-project → _buildCrossEntry (generate.nu federates
+					// from.ref refs, so its manifest is resolved). Skipped when
+					// t.deps already lists the ref.
+					[if strings.HasPrefix(_fr, ":") if !list.Contains(t.deps, _fr) {
+						(_sameProjectEntry & {name: _sameProjectRefName[_fr]}).out
+					}],
+					[if strings.Contains(_fr, ":") if !strings.HasPrefix(_fr, ":") if !list.Contains(t.deps, _fr) {
+						(_buildCrossEntry & {ref: _fr}).out
+					}],
 					[for d in t.deps {
 						[
 							if strings.HasPrefix(d, ":") {
@@ -617,8 +630,16 @@ _expandLines: {
 					// strict — t.dockerfile.preamble (length N) can't
 					// unify with the concat result (length N+M).
 					let _preambleExtras = (_expandLines & {in: t.dockerfile.defaultPreamble}).out
+					let _copyExtras = (_expandCopy & {in: t.dockerfile.defaultCopy}).out
 					dockerfile: {
-						for k, v in t.dockerfile if k != "preamble" && k != "defaultPreamble" {(k): v}
+						// One dynamic field per iteration (splitting into two
+						// guarded branches, or a static `copy:`, reorders the
+						// output) so copy keeps its manifest position; the value
+						// is the merged list at copy, else the field verbatim.
+						// defaultCopy is dropped.
+						for k, v in t.dockerfile if k != "preamble" && k != "defaultPreamble" && k != "defaultCopy" {
+							(k): [if k == "copy" {list.Concat([_copyExtras, v])}, v][0]
+						}
 						preamble: list.Concat([_preambleExtras, t.dockerfile.preamble])
 					}
 				}

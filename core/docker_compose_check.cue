@@ -531,8 +531,30 @@ _d18_harness_inc: [
 	{path: "../compose.overlay.yaml", required: false},
 ]
 
+// --- D19: dockerfile.copy is additive — a defaultCopy entry and a
+// consumer's own copy both render (framework first) instead of conflicting.
+_d19: #project & {
+	name: "d19"
+	dir:  "d19"
+	targets: {
+		"launch": {
+			cmd: "builtin": do: "serve"
+			dockerfile: busybox & {
+				defaultCopy: tool: {from: {name: "toolimg"}, srcs: ["/bin/tool"], dst: "/usr/local/bin/tool", chmod: "755"}
+				copy: [{srcs: ["model.bin"], dst: "/model.bin"}]
+			}
+		}
+	}
+}
+_d19_dc:   (#dockerComposeGen & {project: _d19, depManifests: {}})
+_d19_body: _d19_dc.dockerfiles.launch
+_d19_has_tool:  strings.Contains(_d19_body, "/usr/local/bin/tool") & true
+_d19_has_model: strings.Contains(_d19_body, "/model.bin") & true
+
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
+	d19_tool:  _d19_has_tool
+	d19_model: _d19_has_model
 	d1: _d1_dc
 	d2: _d2_dc
 	d3: _d3_dc

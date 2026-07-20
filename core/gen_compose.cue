@@ -97,12 +97,6 @@ import (
 		][0]
 	}
 
-	// Helper: format one mount directive. Emits
-	// "--mount=type=<t>,target=<x>,sharing=<s>" etc. Optional fields are
-	// pulled with "" fallbacks so interpolation is concrete-safe, and
-	// all pair strings are fused into a single `out` in one pass (no
-	// intermediate lists — CUE's lazy eval struggles with conditional
-	// list-building through nested helpers).
 	// Combined emit set: user-target dockerfiles + synthetic `_srcs` /
 	// `_outs` per target + the per-project `bayt` synthetic. Used to
 	// gate _targetDeps's same-project filter so synthetic refs like
@@ -214,21 +208,26 @@ import (
 	}
 
 	// _mount renders one `--mount=...` directive. Cache-mount id and
-	// sharing are synthesised from `scope` + target; the #mount
-	// schema's disjunction already disallows user-supplied id on
-	// cache mounts.
+	// sharing are synthesised from the (project, name) pair: per-target
+	// locked by default, per-project shared for `scope: "project"`
+	// mounts (tool-managed stores); the #mount schema's disjunction
+	// already disallows user-supplied id on cache mounts.
 	_mount: {
-		m:     #dockerfile.#mount
-		scope: string
-		out:   string
+		m:       #dockerfile.#mount
+		project: string
+		name:    string
+		out:     string
 		let _t  = m.type
 		let _tg = [if m.target != _|_                {",target=\(m.target)"}, ""][0]
 		let _sc = [if m.source != _|_                {",source=\(m.source)"}, ""][0]
 		let _rq = [if m.required                     {",required=true"},      ""][0]
 		// id: synthesised for cache, user-provided for everything else.
 		let _id = [
-			if m.type == "cache" && m.target != _|_ {
-				",id=\(scope):\(m.target),sharing=locked"
+			if m.type == "cache" && m.scope != _|_ {
+				",id=\(project):\(m.target),sharing=shared"
+			},
+			if m.type == "cache" {
+				",id=\(project)-\(name):\(m.target),sharing=locked"
 			},
 			if m.type != "cache" && m.id != _|_ {",id=\(m.id)"},
 			"",
@@ -259,10 +258,9 @@ import (
 		// and `default` otherwise. Used throughout for nullable cmd
 		// sub-fields and for OS-axis overrides on linux.
 		let _cmdMounts = [if c.dockerfile != _|_ && c.dockerfile.mounts != _|_ {c.dockerfile.mounts}, []][0]
-		let _mountScope = "\(t.project)-\(t.name)"
 		let _mountStrs = [
-			for m in t.dockerfile.mounts {(_mount & {"m": m, scope: _mountScope}).out},
-			for m in _cmdMounts {(_mount & {"m": m, scope: _mountScope}).out},
+			for m in t.dockerfile.mounts {(_mount & {"m": m, project: t.project, name: t.name}).out},
+			for m in _cmdMounts {(_mount & {"m": m, project: t.project, name: t.name}).out},
 		]
 
 		// inject. When set, the cmd's RUN line is a heredoc body that
@@ -279,13 +277,23 @@ import (
 			]},
 		][0]
 
-		// Mount-flag prefix combines target mounts + cmd mounts + inject mounts.
+		// Mount-flag prefix combines target mounts + cmd mounts + inject mounts + network.
 		let _allMountStrs = list.Concat([_mountStrs, _injectMountStrs])
-		_prefix: [if len(_allMountStrs) > 0 {strings.Join(_allMountStrs, " ") + " "}, ""][0]
+		let _net = [
+			if c.dockerfile != _|_ && c.dockerfile.network != _|_ && (c.dockerfile.network & ("none" | "host")) != _|_ {
+				["--network=\(c.dockerfile.network)"]
+			},
+			[]
+		][0]
+		let _allPrefixStrs = list.Concat([_allMountStrs, _net])
+		_prefix: [if len(_allPrefixStrs) > 0 {strings.Join(_allPrefixStrs, " ") + " "}, ""][0]
 
-		// OS axis: linux overrides cmd-level for container builds.
-		let _do        = [if c.linux != _|_ && c.linux.do != _|_       {c.linux.do},     c.do][0]
-		let _shell     = [if c.linux != _|_ && c.linux.shell != _|_    {c.linux.shell},  c.shell][0]
+		// Container RUN form: `dockerfile.do` (output axis) overrides the
+		// base `do`. The windows/linux/darwin OS axes are host-only
+		// (gen_taskfile) — a container is always linux, so no OS selection
+		// happens here.
+		let _do        = [if c.dockerfile != _|_ && c.dockerfile.do != _|_ {c.dockerfile.do}, c.do][0]
+		let _shell     = [if c.dockerfile != _|_ && c.dockerfile.shell != _|_ {c.dockerfile.shell}, c.shell][0]
 		let _activated = [if len(t.activate) > 0                       {"\(t.activate) \(_do)"}, _do][0]
 
 		// --- inject body assembly ---
@@ -615,13 +623,12 @@ import (
 		// RUN must carry every mount any cmd needs (gradle cache, pnpm
 		// store, secret mounts). Direct mode has one RUN per cmd with
 		// only that cmd's mounts.
-		let _mountScope = "\(t.project)-\(t.name)"
-		_targetMountStrs: [for m in t.dockerfile.mounts {(_mount & {"m": m, scope: _mountScope}).out}]
+		_targetMountStrs: [for m in t.dockerfile.mounts {(_mount & {"m": m, project: t.project, name: t.name}).out}]
 		_cmdMountStrs: [
 			for c in t.cmds
 			if c.dockerfile != _|_ && c.dockerfile.mounts != _|_
 			for m in c.dockerfile.mounts {
-				(_mount & {"m": m, scope: _mountScope}).out
+				(_mount & {"m": m, project: t.project, name: t.name}).out
 			},
 		]
 
@@ -637,7 +644,7 @@ import (
 		// goes through cache.nu's network backends
 		// (`BAYT_CACHE_URL` / `BAYT_CACHE_REGISTRY`).
 		_baytCacheMount: {type: "cache", target: "/root/.cache/bayt"}
-		_baytCacheMountStr: (_mount & {m: _baytCacheMount, scope: "\(t.project)-\(t.name)"}).out
+		_baytCacheMountStr: (_mount & {m: _baytCacheMount, project: t.project, name: t.name}).out
 
 		_runs: list.Concat([
 			if t.dockerfile.incremental {
@@ -899,7 +906,45 @@ import (
 		][0]
 	}
 
-	// Render T_srcs body: FROM scratch + COPY srcs from host + chained
+	// A target's `_srcs`-bearing chained deps: same filter feeds the
+	// Dockerfile COPY (_renderSyntheticSrcs) and the compose
+	// additional_contexts (_syntheticSrcsService), so it lives here once.
+	// Skips `:x:bayt` (scaffolding synths have no `_srcs` variant) and deps
+	// whose manifest doesn't emit `_srcs`.
+	_srcsChainDeps: D={
+		t:   _
+		out: [...]
+		out: [for d in D.t.chainedDeps if d.name != "bayt" if (_depHasSrcs & {"d": d}).out {d}]
+	}
+
+	// _clampFlatten — the shared synthetic-image skeleton. A busybox
+	// `_ctxs` stage runs `bodyLines` to assemble /monorepo, clamps every
+	// mtime to SOURCE_DATE_EPOCH (buildkit leaves implicitly-created dirs
+	// at build time, so the digest would otherwise float; busybox `find`
+	// lacks `-newermt`, hence the reference-file dance), then flattens into
+	// `FROM scratch AS stage`. The clamp+flatten is what gives synthetics a
+	// stable digest for service-graph dedup — an inline normalise can't
+	// (the underlying COPY layers still float). See
+	// docs/bayt-synthetic-digest-investigation.md.
+	_clampFlatten: F={
+		ctxsStage: string
+		stage:     string
+		workdir:   string
+		bodyLines: [...string]
+		out:       string
+		out: strings.Join(list.Concat([
+			["FROM \(lock.images.busybox) AS \(F.ctxsStage)", "WORKDIR \(F.workdir)"],
+			F.bodyLines,
+			[
+				"ARG SOURCE_DATE_EPOCH",
+				"RUN touch -hd @${SOURCE_DATE_EPOCH:-0} /tmp/ref && find /monorepo -newer /tmp/ref -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && rm /tmp/ref",
+				"FROM scratch AS \(F.stage)",
+				"COPY --from=\(F.ctxsStage) /monorepo /monorepo",
+			],
+		]), "\n") + "\n"
+	}
+
+	// Render T_srcs body: COPY srcs from host + a chained
 	// `COPY --from=<dep>_srcs /monorepo /monorepo` per direct dep that
 	// itself has a _srcs image (transitive content flows because each
 	// dep's _srcs already contains its own transitive chain). Both
@@ -919,45 +964,26 @@ import (
 				"COPY --parents \(_excludeJoin)\(strings.Join(R.t.srcs.globs, " ")) ./"
 			},
 		]
-		// Skip `:x:bayt` deps: scaffolding synths have no `_srcs`
-		// variant, so `<x>_bayt_srcs` would reference a missing service.
-		// Non-link: the clamp below normalises mtimes anyway, and a `--link`
+		// Non-link: the clamp normalises mtimes anyway, and a `--link`
 		// cross-stage copy re-synthesises the dest parent chain.
 		_depCopies: [
-			for d in R.t.chainedDeps
-			if d.name != "bayt"
-			if (_depHasSrcs & {"d": d}).out {
+			for d in (_srcsChainDeps & {"t": R.t}).out {
 				"COPY --from=\(d.project)-\(d.name)_srcs /monorepo /monorepo"
 			},
 		]
-		// Two stages. `_ctxs` (a local stage, not a compose service) is the
-		// sole disk reader: it assembles the source closure and clamps all
-		// mtimes to SOURCE_DATE_EPOCH, since buildkit leaves implicitly-created
-		// dirs at build time and the digest would otherwise float. The
-		// `FROM scratch` flatten collapses the result into one reproducible
-		// layer, giving `_srcs` a stable digest for service-graph dedup; an
-		// inline normalise can't (the underlying COPY layers still float).
-		// busybox `find` lacks `-newermt`, hence the reference-file clamp.
-		// See docs/bayt-synthetic-digest-investigation.md.
-		_lines: [
-			"FROM \(lock.images.busybox) AS \(_ctxsStage)",
-			"WORKDIR \(_workdir)",
-			for l in _srcCopy {l},
-			for l in _depCopies {l},
-			"ARG SOURCE_DATE_EPOCH",
-			"RUN touch -hd @${SOURCE_DATE_EPOCH:-0} /tmp/ref && find /monorepo -newer /tmp/ref -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && rm /tmp/ref",
-			"FROM scratch AS \(_stage)",
-			"COPY --from=\(_ctxsStage) /monorepo /monorepo",
-		]
-		out: string
-		out: strings.Join(_lines, "\n") + "\n"
+		out: (_clampFlatten & {
+			ctxsStage: _ctxsStage
+			stage:     _stage
+			workdir:   _workdir
+			bodyLines: list.Concat([_srcCopy, _depCopies])
+		}).out
 	}
 
-	// Render T_outs body: busybox `_outs_ctxs` stage COPYing --from=T
-	// <outs.globs>, clamped, then flattened into FROM scratch.
-	// Leaf only — no transitive walk. T's outs are pulled from T's
-	// actual build stage (via additional_contexts wired in the compose
-	// service definition below).
+	// Render T_outs body: COPY --from=T <outs.globs> (leaf only, no
+	// transitive walk; T's outs come from T's build stage via the
+	// additional_contexts wired in the compose service below). Unclamped,
+	// the digest floats per build even with the producing stage cache-hit
+	// (guarded by d9_outs_clamp).
 	_renderSyntheticOuts: R={
 		t:          _
 		_workdir:   (_syntheticWorkdir & {dir: R.t.dir}).out
@@ -972,20 +998,12 @@ import (
 				"COPY --from=\(R.t.project)-\(R.t.name)\(_excludeJoin) --parents \(_outsPaths) /"
 			},
 		]
-		// Same `_ctxs`→flatten dance as _renderSyntheticSrcs (see there);
-		// unclamped, the digest floats per build even with the producing
-		// stage cache-hit (guarded by d9_outs_clamp).
-		_lines: [
-			"FROM \(lock.images.busybox) AS \(_ctxsStage)",
-			"WORKDIR \(_workdir)",
-			for l in _copy {l},
-			"ARG SOURCE_DATE_EPOCH",
-			"RUN touch -hd @${SOURCE_DATE_EPOCH:-0} /tmp/ref && find /monorepo -newer /tmp/ref -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && rm /tmp/ref",
-			"FROM scratch AS \(_stage)",
-			"COPY --from=\(_ctxsStage) /monorepo /monorepo",
-		]
-		out: string
-		out: strings.Join(_lines, "\n") + "\n"
+		out: (_clampFlatten & {
+			ctxsStage: _ctxsStage
+			stage:     _stage
+			workdir:   _workdir
+			bodyLines: _copy
+		}).out
 	}
 
 	// Cross-project deps that the project's bayt synthetic must chain
@@ -1049,18 +1067,15 @@ import (
 		_ctxsStage: "\(_n)_bayt_ctxs"
 		_files:     R.t.synthetics.bayt.outs.globs
 		_chain:     (_baytChain & {"t": R.t}).out
-		_lines: [
-			"FROM \(lock.images.busybox) AS \(_ctxsStage)",
-			"WORKDIR \(_workdir)",
-			"COPY --parents \(strings.Join(_files, " ")) ./",
-			for e in _chain {"COPY --from=\(e) /monorepo /monorepo"},
-			"ARG SOURCE_DATE_EPOCH",
-			"RUN touch -hd @${SOURCE_DATE_EPOCH:-0} /tmp/ref && find /monorepo -newer /tmp/ref -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && rm /tmp/ref",
-			"FROM scratch AS \(_stage)",
-			"COPY --from=\(_ctxsStage) /monorepo /monorepo",
-		]
-		out: string
-		out: strings.Join(_lines, "\n") + "\n"
+		out: (_clampFlatten & {
+			ctxsStage: _ctxsStage
+			stage:     _stage
+			workdir:   _workdir
+			bodyLines: list.Concat([
+				["COPY --parents \(strings.Join(_files, " ")) ./"],
+				[for e in _chain {"COPY --from=\(e) /monorepo /monorepo"}],
+			])
+		}).out
 	}
 
 	// Per-target Dockerfile bodies. A target's `<n>_srcs`/`<n>_outs`/
@@ -1428,19 +1443,14 @@ import (
 		n: string
 		t: _
 		_svc: "\(S.t.project)-\(S.n)"
-		// Matches the dep-filter in _renderSyntheticSrcs: skip `:x:bayt`
-		// deps because scaffolding synths have no `_srcs` variant.
 		_depCtxEntries: [
-			for d in S.t.chainedDeps
-			if d.name != "bayt"
-			if (_depHasSrcs & {"d": d}).out {
+			for d in (_srcsChainDeps & {"t": S.t}).out {
 				"\(d.project)-\(d.name)_srcs"
 			},
 		]
 		out: {
 			build: {
 				context: ".."
-				// `<n>_srcs` stage lives in the parent target's Dockerfile.
 				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
 				if len(_depCtxEntries) > 0 {
@@ -1458,8 +1468,10 @@ import (
 		}
 	}
 
-	// T_outs service: pulls from T's actual build stage via
-	// additional_contexts. Leaf-only, no transitive walk.
+	// T_outs service: additional_contexts pull T's actual build stage
+	// (leaf-only, no transitive walk). Kept standalone (not on
+	// _syntheticService): its single context is unconditional, and routing
+	// it through the helper's `if len>0` gate reorders the emitted key.
 	_syntheticOutsService: S={
 		n:       string
 		t:       _
@@ -1468,15 +1480,12 @@ import (
 		out: {
 			build: {
 				context: ".."
-				// `<n>_outs` stage lives in the parent target's Dockerfile.
 				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
 				additional_contexts: {
 					(_parent): "service:\(_parent)"
 				}
 			}
-			// max: the `_outs_ctxs` stage is an unmodelled intermediate
-			// (see #bakeCacheRefs.mode; guarded by _d11_outs_to).
 			build: (_xbakeCache & {svc: _svc, mode: "max"}).out
 			image: "bayt-\(_svc):latest"
 			// Packaging stage, never a container — see _service's scale rule.
@@ -1484,11 +1493,8 @@ import (
 		}
 	}
 
-	// T_bayt service: scaffolding synth in the parent's Dockerfile;
-	// additional_contexts wire each chain dep's `_bayt` service so the
-	// stage's COPY --from refs resolve through the compose graph.
-	// x-bake cache like the other synthetics — the dindbox warm floor
-	// needs every inner-bake stage restorable from registry cache.
+	// T_bayt service: additional_contexts wire each chain dep's `_bayt`
+	// service so the stage's COPY --from refs resolve through the graph.
 	_syntheticBaytTService: S={
 		n: string
 		t: _

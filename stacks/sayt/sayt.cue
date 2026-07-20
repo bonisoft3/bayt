@@ -65,6 +65,7 @@ import (
 	// Capitalized aliases for the toolchain-stack imports so the
 	// lowercase `gradle:` / `pnpm:` umbrella exports below don't
 	// shadow them.
+	Go     "github.com/bonisoft3/bayt/stacks/go"
 	Gradle "github.com/bonisoft3/bayt/stacks/gradle"
 	Mise   "github.com/bonisoft3/bayt/stacks/mise"
 	Pnpm   "github.com/bonisoft3/bayt/stacks/pnpm"
@@ -176,14 +177,11 @@ release: {
 	// default, a project's null would clash with the struct
 	// activation rule and fail unification.
 	//
-	// tagPolicy.gitCommit.variant: AbbrevCommitSha avoids the same
-	// monorepo-tag warning bayt-dev avoids (skaffold's default
-	// `gitCommit: {variant: Tags}` uses `git describe --tags` →
-	// returns `services/tracker/v…` → skaffold normalizes `/` to
-	// `_` and warns). For release invocations driven by goreleaser,
-	// the explicit `--tag={{ .Version }}` CLI flag overrides this
-	// policy anyway. AbbrevCommitSha just covers the manual
-	// `skaffold build` path that's used for verification today.
+	// tagPolicy.gitCommit.variant: AbbrevCommitSha for the same
+	// monorepo-tag reason bayt-dev avoids it (see launch above).
+	// goreleaser-driven releases override it with an explicit
+	// `--tag={{ .Version }}`; this just covers the manual `skaffold
+	// build` verification path.
 	skaffold: profiles: {
 		"bayt-build": *{
 			activation: [{command: "build"}]
@@ -364,6 +362,19 @@ gradle: bayt.#project & {
 			// from: ref: ...` and inherit the preset via FROM.
 		}) | null
 		"doctor": *(doctor & Mise.doctor) | null
+		// Non-verb deps target, opt-in (default null): materializes the
+		// wrapper dist + RO dep cache as layers on the setup chain
+		// (Gradle.depsResolve). An adopting project writes
+		// `"deps": {deps: [<its included builds>]}` and flips its
+		// build's `dockerfile.from.ref` to ":deps" so the layers (and
+		// the GRADLE_RO_DEP_CACHE env) ride the FROM chain. Default
+		// stays null until the library projects wire their composite
+		// includes.
+		"deps": *null | (Gradle.depsResolve & Mise.exec & {
+			deps: *[] | [...string]
+			taskfile: run: "when_changed"
+			dockerfile: from: ref: ":setup"
+		})
 		// build defaults to bayt.incremental so the Dockerfile RUN
 		// invokes `task build:build`, which walks :setup:setup inside
 		// the stage and installs the toolchain fresh via mise. Without
@@ -371,8 +382,10 @@ gradle: bayt.#project & {
 		// /root/.local/share/mise/ where mise put the tools — direct
 		// `mise x -- ./gradlew assemble` would then fail to find java.
 		// Consumers can opt out with `dockerfile: incremental: false`.
+		// from.ref is a default: deps-adopting projects flip it to
+		// ":deps" so the RO cache + wrapper layers ride the chain.
 		"build": *(build & Mise.exec & Gradle.assemble & bayt.incremental & {
-			dockerfile: from: ref: ":setup"
+			dockerfile: from: ref: *":setup" | string
 		}) | null
 		"test": *(test & Mise.exec & Gradle.test) | null
 		"launch": *(launch & Mise.exec & Gradle.run) | null
@@ -408,6 +421,46 @@ gradle: bayt.#project & {
 		// arm's gradle cmd + per-task outs).
 		"release": *(release & Mise.exec & Gradle.JibRelease) | (release & Mise.exec & Gradle.GradleRelease) | null
 		"verify":   *(verify   & Mise.exec & Gradle.check) | null
+		"generate": *(generate & {cmd: "builtin": do: *"nu sayt.nu generate" | string}) | null
+		"lint":     *(lint     & {cmd: "builtin": do: *"nu sayt.nu lint" | string}) | null
+	}
+}
+
+// sayt.go — pure-go project using mise as the toolchain executor,
+// plus a non-verb `deps` target that materializes the module closure
+// (Go.modDownload) as a layer on the setup chain. Setup churn re-keys
+// the layer, and that's fine: the re-run hits the warm cache mount.
+go: bayt.#project & {
+	activate: *"mise x --" | string
+	targets: {
+		"setup": *(Mise.install & {
+			srcs: globs: Mise.installFiles.globs
+			outs: globs: list.Concat([Mise.installFiles.globs, [".task/bayt/setup.hash"]])
+			taskfile: setup.taskfile
+		}) | null
+		"doctor": *(doctor & Mise.doctor) | null
+		"deps": *(Go.modDownload & Mise.exec & {
+			deps: *[] | [...string]
+			taskfile: run: "when_changed"
+			dockerfile: from: ref: ":setup"
+		}) | null
+		// Consumers list `deps: [":setup", ":deps:outs", …]` themselves —
+		// a second disjunction default here would collide with the build
+		// fragment's. The `:outs` view COPYs the closure without a task
+		// edge: in-container chains must not re-run the download, and on
+		// the host go's native auto-download fills .gomodcache.
+		"build": *(build & Mise.exec & Go.build & bayt.incremental & {
+			dockerfile: from: ref: ":setup"
+		}) | null
+		"test": *(test & Mise.exec & Go.test) | null
+		"launch": *(launch & Mise.exec & Go.run) | null
+		"integrate": *(integrate & Mise.exec & Go.integrationTest & {
+			dockerfile: from: ref: ":build"
+		}) | null
+		// release carries no toolchain opinion: go deployables are image
+		// shapes the leaf provides (FROM + epilogue COPY of the binary).
+		"release":  *(release & Mise.exec) | null
+		"verify":   *(verify   & Mise.exec & Go.vet) | null
 		"generate": *(generate & {cmd: "builtin": do: *"nu sayt.nu generate" | string}) | null
 		"lint":     *(lint     & {cmd: "builtin": do: *"nu sayt.nu lint" | string}) | null
 	}

@@ -3,39 +3,44 @@
 // `mise` is the polyglot version manager (https://mise.jdx.dev/)
 // that provisions per-project toolchain binaries from .mise.toml.
 // This stack exports concepts a mise user would name, with no
-// opinion about what sayt verbs they map to.
+// opinion about which target each lands on.
 //
-// Usage (composes with sayt verbs and other concept stacks):
+// Usage (unified into a project's targets alongside other stacks):
 //
-//   import (
-//       sayt "bonisoft.org/plugins/sayt/bayt"
-//       mise "github.com/bonisoft3/bayt/stacks/mise"
-//   )
+//   import mise "github.com/bonisoft3/bayt/stacks/mise"
 //
 //   targets: {
-//       "setup":  sayt.setup  & mise.install
-//       "doctor": sayt.doctor & mise.doctor
-//       "build":  sayt.build  & mise.exec & {cmd: do: "go build"}
+//       "setup":  mise.install
+//       "doctor": mise.doctor
+//       "build":  mise.exec & {cmd: do: "go build"}
 //   }
 package mise
 
-// install — `mise install` runs the toolchain provisioning. Stages
-// .mise.toml + mise.lock as the cmd's own srcs so its BuildKit COPY
-// is independent of any other cmd in the same target. In a multi-cmd
-// setup (mise.install & pnpm.install), editing package.json
-// invalidates pnpm install's layer but leaves mise install's cached.
-// Empty `activate` so the install runs without a preceding
-// `mise x --` wrap (mise's own CLI is on PATH directly via
-// lazybox/leap, not via mise's shim).
+// Cache mount over mise's download store only — the checksummed tarballs,
+// NOT the extracted tools. `installs/` (a sibling, not mounted) is rebuilt
+// in the layer on every RUN, so a stale/poisoned mount can't fake "already
+// installed": `installs/` is empty at RUN start, mise re-extracts, and
+// re-verifies each kept tarball against mise.lock (a corrupt one → refetch).
+// This is what makes the store safe to share; the extracted tree stays
+// deterministic and in-layer.
+_downloadsMount: {type: "cache", target: "/root/.local/share/mise/downloads", scope: "project"}
+
+// install — `mise install`. One cmd, identical on host and in-container:
+// installs land in mise's default data dir either way; the container only
+// adds the download mount (+ MISE_ALWAYS_KEEP_DOWNLOAD so the mount actually
+// retains tarballs — mise deletes them post-extract by default). Empty
+// `activate` so it runs without a `mise x --` wrap (mise's CLI is on PATH
+// via lazybox/leap, not its shim).
 install: {
 	activate: ""
+	env: MISE_ALWAYS_KEEP_DOWNLOAD: "1"
 	cmd: "builtin": {
 		priority: -1
 		do:       *"mise install" | string
-		// Concrete (not disjunction-default) — list disjunctions
-		// inside the cmd map break MapToList's `if v != null`
-		// evaluation. To override, users compose via cmd nullification:
-		//   "setup": Mise.install & {cmd: "builtin": null} & {cmd: ...}
+		dockerfile: mounts: [_downloadsMount]
+		// Concrete (not disjunction-default) — list disjunctions inside
+		// the cmd map break MapToList's `if v != null`. Override via cmd
+		// nullification: `Mise.install & {cmd: "builtin": null} & {...}`.
 		srcs: globs: installFiles.globs
 	}
 }

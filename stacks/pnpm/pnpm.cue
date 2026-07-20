@@ -1,38 +1,47 @@
 // stacks/pnpm — pnpm/Node.js toolchain concept library.
 //
-// Pure pnpm concepts — no opinion about which sayt verb each maps
-// to. Projects compose these with sayt verb fragments (or use the
-// `sayt.pnpm` / `sayt.pnpmWorkspace` standard mappings in
-// plugins/bayt/stacks/sayt) to land them on canonical bayt targets.
+// Pure pnpm concepts — no opinion about which target each lands on.
+// A project unifies these fragments into its bayt targets.
 package pnpm
+
+import "list"
 
 // =============================================================================
 // Toolchain concept library.
 // =============================================================================
 
 // Cache mount for pnpm's download store.
-_storeMount: {type: "cache", target: "/root/.local/share/pnpm/store"}
+storeMount: {type: "cache", target: "/root/.local/share/pnpm/store", scope: "project"}
 
-// pnpm.install — `pnpm install --frozen-lockfile` as a separate cmd
-// alongside mise's toolchain install. Cmd-level srcs put the pnpm
-// manifest files (project's package.json) in the COPY layer that
-// directly feeds the pnpm-install RUN, so a `mise.install &
-// pnpm.install` setup gives `mise install` and `pnpm install` their
-// own independent BuildKit cache keys: editing .mise.toml leaves
-// pnpm's node_modules layer cached, editing package.json leaves
-// the toolchain layer cached. The pnpm cmd has no priority
-// (default 0) so it sorts after mise.install (priority -1).
+// installFlags — exported so consumer overrides of the install `do`
+// (e.g. adding `--filter <pkg>...`) can't drift the flag set:
+// --prefer-offline keeps the store mount non-load-bearing (network
+// only on store misses); --package-import-method copy lands real
+// file copies in the layer, not hardlinks into the mount.
+installFlags: "--prefer-offline --frozen-lockfile --package-import-method copy"
+
+// lockFiles — bracket-glob: workspace members have no project-local
+// lockfile (theirs sits at the workspace root via workspaceroot:setup).
+lockFiles: globs: ["[p]npm-lock.yaml"]
+
+// pnpm.install — the dependency closure as a real layer. pnpm's CAS
+// store (on the cache mount) is the opportunistic store and
+// node_modules the exact filter-scoped materialization, so one RUN
+// covers both. Do NOT add a `pnpm fetch` phase: fetch is unfiltered
+// and materializes the whole workspace lockfile into the layer's
+// virtual store. Cmd-level srcs key the layer on manifest +
+// lockfile, independent of mise.install (priority -1, sorts first).
 //
 // Compose with mise.install — no manual srcs splice needed:
 //
 //   "setup": mise.install & pnpm.install
 install: {
 	cmd: "pnpm": {
-		do: *"mise x -- pnpm install --frozen-lockfile" | string
-		dockerfile: mounts: [_storeMount]
+		do: *"mise x -- pnpm install \(installFlags)" | string
+		dockerfile: mounts: [storeMount]
 		// Concrete (not disjunction-default) — list disjunctions
 		// inside the cmd map break MapToList's `if v != null` check.
-		srcs: globs: projectFiles.globs
+		srcs: globs: list.Concat([projectFiles.globs, lockFiles.globs])
 	}
 }
 
@@ -47,7 +56,7 @@ testInt: _exec & {_sub: "test:int"}
 testE2E: _exec & {_sub: "test:e2e"}
 lint:    _exec & {_sub: "lint"}
 
-// pnpm.dev — runtime dev server for launch verbs. Bakes `pnpm dev`
+// pnpm.dev — runtime dev server for a launch target. Bakes `pnpm dev`
 // into the Dockerfile CMD (build-time RUN would hang the builder).
 // The renderer prepends the project's activate tokens, so pnpm here
 // stays toolchain-agnostic. hmr.native: true — pnpm-managed
@@ -64,7 +73,7 @@ _exec: E={
 	_sub: string
 	cmd: "builtin": {
 		do: *"mise x -- pnpm \(E._sub)" | string
-		dockerfile: mounts: [_storeMount]
+		dockerfile: mounts: [storeMount]
 	}
 }
 

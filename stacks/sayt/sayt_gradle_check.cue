@@ -15,7 +15,6 @@ _g1: activate: "mise x --"
 _g1: targets: build: cmd: "builtin": do:            "./gradlew assemble"
 _g1: targets: build: cmd: "builtin": windows: do:   ".\\gradlew.bat assemble"
 _g1: targets: build: cmd: "builtin": windows: shell: "pwsh"
-_g1: targets: release: skaffold: profiles: "bayt-build": build: artifact: image: "gcr.io/proj/g1"
 
 // --- G2: Consumer adds cross-project deps.
 // Cross-project deps are string refs `project:target` (the producer's
@@ -27,8 +26,6 @@ _g2: gradle & {
 		"build": deps: ["libbuild:build"]
 	}
 }
-
-_g2: targets: build: deps: ["libbuild:build"]
 
 // --- G3: Consumer overrides integrate cmd + secrets.
 _g3: gradle & {
@@ -49,3 +46,19 @@ _g3: gradle & {
 
 // Assert secrets entry + cmd-level mount survive after override.
 _g3: targets: integrate: dockerfile: secrets: "creds": null
+
+// --- G4: deps opt-in — RO dep cache shape survives the mapping.
+_g4: gradle & {
+	name: "g4"
+	dir:  "services/g4"
+	targets: {
+		"deps": {deps: ["lib:build"]}
+		"build": dockerfile: from: ref: ":deps"
+	}
+}
+
+_g4: targets: deps: {
+	env: GRADLE_RO_DEP_CACHE: "/opt/gradle-ro-cache"
+	cmd: "resolve": dockerfile: mounts: [{type: "cache", target: "/root/.gradle", scope: "project"}]
+	dockerfile: from: ref: ":setup"
+}

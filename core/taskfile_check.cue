@@ -174,6 +174,54 @@ _t7_tf: (#taskfileGen & {project: _t7, depManifests: {}})
 _t7_tf: bayt_root: version: "3"
 _t7_tf: bayt_root: {[!="version"]: _|_}
 
+// --- T8: a cmd with a windows override lowers into per-OS `platforms:`
+// branches — windows gets the pwsh override, linux/darwin the base do.
+// BAYTW stays OS-invariant; the `pwsh -c` wrap rides the windows line.
+_t8: #project & {
+	name: "t8"
+	dir:  "t8"
+	targets: {
+		"build": {
+			taskfile: {}
+			cmd: "builtin": {
+				do: "./gradlew assemble"
+				windows: {do: ".\\gradlew.bat assemble", shell: "pwsh"}
+			}
+		}
+	}
+}
+_t8_tf: (#taskfileGen & {project: _t8, depManifests: {}})
+_t8_tf: files: build: tasks: default: vars: BAYTW: =~"-- mise x --$"
+_t8_tf: files: build: tasks: default: cmds: [
+	{cmd: =~"^\\{\\{\\.BAYTW\\}\\} pwsh -c \".*gradlew.bat assemble\"$", platforms: ["windows"]},
+	{cmd: =~"^\\{\\{\\.BAYTW\\}\\} ./gradlew assemble$", platforms: ["linux"]},
+	{cmd: =~"^\\{\\{\\.BAYTW\\}\\} ./gradlew assemble$", platforms: ["darwin"]},
+	{defer: string},
+]
+
+// --- T9: a RAW (non-incremental taskfile) cmd with a windows override
+// branches by OS too — same shape, but bw: "" so no BAYTW cache wrap and
+// no defer stamp. Pins that the raw path honors OS axes as well.
+_t9: #project & {
+	name: "t9"
+	dir:  "t9"
+	targets: {
+		"doctor": {
+			taskfile: incremental: false
+			cmd: "builtin": {
+				do: "check.sh"
+				windows: {do: "check.ps1", shell: "pwsh"}
+			}
+		}
+	}
+}
+_t9_tf: (#taskfileGen & {project: _t9, depManifests: {}})
+_t9_tf: files: doctor: tasks: default: cmds: [
+	{cmd: "pwsh -c \"check.ps1\"", platforms: ["windows"]},
+	{cmd: "check.sh", platforms: ["linux"]},
+	{cmd: "check.sh", platforms: ["darwin"]},
+]
+
 // Public aggregator forces evaluation of the hidden _t* bindings.
 Tests: taskfile: {
 	t1: _t1_tf
@@ -183,4 +231,6 @@ Tests: taskfile: {
 	t5: _t5_tf
 	t6: _t6_tf
 	t7: _t7_tf
+	t8: _t8_tf
+	t9: _t9_tf
 }

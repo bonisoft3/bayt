@@ -92,13 +92,11 @@ inject: {
 		buildx_builder:            environment: "BUILDX_BUILDER"
 		buildx_instance:           environment: "BUILDX_INSTANCE"
 		docker_config:             environment: "DOCKER_AUTH_CONFIG"
-		// testcontainers_host — propagated so consumers that compose-up
-		// downstream test services (e.g. tracker integrate) can read
-		// $TESTCONTAINERS_HOST_OVERRIDE in their service env and tell
-		// the testcontainers Java client which host address routes to
-		// the spawned containers. dind.nu's `env-file --socat` derives
-		// the value from a host-gateway probe; the GHA action's
-		// inline equivalent does the same.
+		// testcontainers_host — the host address that routes to spawned
+		// containers' published ports. The docker gateway address works
+		// from every sandbox topology (host-netns and bridged builders
+		// alike), so dind.nu derives it host-side via its gateway-ip
+		// probe when the caller doesn't set one.
 		testcontainers_host:       environment: "TESTCONTAINERS_HOST_OVERRIDE"
 		// cache_scope + cache_scope_fallback — pre-composed scope
 		// identifiers. Dumb transport: the host decides the inner's

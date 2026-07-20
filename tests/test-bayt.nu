@@ -84,6 +84,7 @@ def main [] {
 		"./core/emitter_check.cue"
 		"./core/docker_compose_check.cue"
 		"./core/taskfile_check.cue"
+		"./core/dockerfile_run_check.cue"
 		"./core/bayt_cycle_check.cue"
 		"./core/bayt_cycle_deep_check.cue"
 	]

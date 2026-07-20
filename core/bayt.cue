@@ -50,8 +50,10 @@ import (
 	name:     string
 	priority: *0 | int
 	shell:    #shell
-	do:       string
-	stop:     *false | bool
+	// Optional so a cmd can be RUN-only via `dockerfile.do` (below).
+	// #target.cmds enforces that one of the two is present.
+	do?:  string
+	stop: *false | bool
 
 	// Per-cmd srcs — additive to the enclosing target's srcs. Same
 	// {globs, defaultGlobs, exclude, defaultExclude} shape as
@@ -129,6 +131,15 @@ import (
 		mounts?:  [...#dockerfile.#mount]
 		secrets?: [...string]
 		network?: *"default" | "none" | "host"
+
+		// RUN-only command form: the Dockerfile RUN renders this instead
+		// of the base `do`. A cmd with ONLY `dockerfile.do` (no base `do`)
+		// emits a RUN but no go-task — so it never runs on the host or
+		// re-runs in a downstream task chain. Only meaningful on a
+		// non-incremental target (an incremental one's container runs
+		// `task bayt:<n>`, so its cmds must be tasks).
+		do?:    string
+		shell?: #shell
 	}
 
 	// Inject mode wraps cmd.do as the last shell line of a `RUN
@@ -185,9 +196,8 @@ noop: #cmd & {
 //   `proj:target:srcs|outs` cross-project, same view discrimination
 //   `:bayt` / `proj:bayt`   per-project scaffolding stage (the .bayt/ tree)
 //
-// Returns `name` (the qualified compose service) and `_kind` ∈
-// {workdir, srcs, outs, bayt} so downstream emitters can dispatch on
-// view without re-parsing.
+// Returns `name`, the qualified compose service. `_kind` (workdir/srcs/
+// outs/bayt) is an internal discriminator used only to compute `name`.
 #qualifyRef: {
 	ref:  string
 	proj: string
@@ -232,9 +242,8 @@ noop: #cmd & {
 	//
 	// The disjunction enforces per-type field shapes:
 	//   - Cache mounts can't carry `id` or `sharing` — the emitter
-	//     synthesises both per-target. Every other cache-mount mode
-	//     has subtle problems; a per-target locked mount captures
-	//     most of the benefit without hitting any:
+	//     synthesises both. Default: per-target id + locked. Every
+	//     other free-form mode has subtle problems:
 	//       - `sharing=shared` lets concurrent RUNs touch the cache
 	//         while buildkit is still using it for layer reuse,
 	//         silently rebuilding layers on subsequent runs.
@@ -245,6 +254,13 @@ noop: #cmd & {
 	//         same path on one global lock, killing cold-build
 	//         parallelism.
 	//     Trade-off: each (project, target) keeps its own cache slot.
+	//     `scope: "project"` opts a mount into a per-project id with
+	//     sharing=shared, so sibling targets (test ∥ integrate) share
+	//     one store without lock serialisation. Reserve it for
+	//     tool-managed stores whose own locking makes concurrent
+	//     multi-process access a documented guarantee (pnpm store,
+	//     go modcache, gradle user home) — isolation is the safety
+	//     mechanism for everything else.
 	//   - Secret/ssh mounts accept `id` (the secret/ssh-key name).
 	// #add — one `add` entry.
 	//   local:  {src, dest}         — build-context path; tar archives
@@ -272,6 +288,7 @@ noop: #cmd & {
 	#mount: {
 		type:   "cache"
 		target: string
+		scope?: "project"
 		required: *false | bool
 	} | {
 		type:     "secret"
@@ -437,7 +454,9 @@ noop: #cmd & {
 	// in additional_contexts is `docker-image://<name>`; `image:`
 	// overrides that so one fixed key aliases a pinned digest
 	// (bayt-runtime → docker-image://bonitao/bayt:…).
-	copy: [...{
+	//
+	// Open (not closed) so `defaultCopy`'s #MapAsList can add name/priority.
+	_copyEntry: {
 		from: *null | close({
 			name:   string & !~"^scratch$"
 			image?: string
@@ -452,7 +471,12 @@ noop: #cmd & {
 		link:    *true  | bool
 		parents: *false | bool
 		exclude: [...string]
-	}]
+	}
+	// Two-position, same as preamble: `copy` (user-side) is appended after
+	// `defaultCopy` (framework-side, keyed) at manifest emit, so a mixin's
+	// COPYs and a consumer's own `copy` coexist instead of conflicting.
+	copy: [..._copyEntry]
+	defaultCopy: *null | {[Name=string]: (_copyEntry & {name: Name, priority?: int}) | null}
 
 	// Structured HEALTHCHECK directive. Maps directly to Dockerfile
 	// HEALTHCHECK grammar. `test` follows compose-spec convention:
@@ -1024,6 +1048,12 @@ noop: #cmd & {
 
 	// Resolved cmd list (priority-sorted, nulls removed).
 	cmds: (#MapToList & {in: cmd}).out
+	// Every emitted cmd must carry a form (base `do` or `dockerfile.do`); a
+	// form-less one trips the empty-list index and fails generation. On the
+	// concrete list, not #cmd — the bare definition legitimately has neither.
+	_cmdForms: [for c in cmds {
+		[if c.do != _|_ {c.do}, if c.dockerfile != _|_ && c.dockerfile.do != _|_ {c.dockerfile.do}][0]
+	}]
 
 	// cache — content-addressable cache.nu wrap behavior. Two
 	// orthogonal opt-in flags; defaults to "exact-match only, run

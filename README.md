@@ -134,7 +134,7 @@ A minimal target:
 }
 ```
 
-For the 20% of targets that need OS variants, dockerfile mounts, or compose decoration, the full `cmd: "builtin": { do, windows, dockerfile, compose }` rulemap is available alongside.
+For the 20% of targets that need OS variants (`windows`/`linux`/`darwin`, lowered into go-task `platforms:` so `task bayt:build` runs the right one per host), a container-only step (`dockerfile.do` — a Dockerfile RUN that emits no host task), dockerfile mounts, or compose decoration, the full `cmd: "builtin": { do, windows, dockerfile, compose }` rulemap is available alongside.
 
 ### Producer-controlled exposure: `outs` and `visibility`
 
@@ -179,12 +179,15 @@ The chain form means the build stage *is* the setup stage extended — no `mise 
 
 ## Stacks: toolchain knowledge, reusable
 
-A *stack* captures what a language toolchain needs. Bayt ships four:
+A *stack* captures what a language toolchain needs. Bayt ships four toolchain stacks (go, gradle, pnpm, mise) plus the `sayt` umbrella:
 
-- **`stacks/gradle`** — kotlin/java/gradle concept fragments: `assemble`, `test`, `integrationTest`, `jibBuildTar`, `check`, `run`. Default srcs scoped to `src/main/` for `assemble` (so test edits don't invalidate build); `bayt.cache.full` on `assemble` and `integrationTest` (gradle's daemon cold-start is too costly to pay on every cache hit). Emits `.bayt/init.gradle.kts` per project pointing gradle's local build cache at `$BAYT_CACHE_DIR/gradle` — gradle's per-task cache and bayt's per-target cache share the same on-disk store and complement each other (per-task hits when only some inputs changed, per-target full skips when nothing changed).
-- **`stacks/pnpm`** — pnpm/node/vite/vitest concept fragments: `install`, `build`, `test`, `dev`, `testInt`, `testE2E`, `lint`. Test srcs split between `srcsTest` (`*.test.ts(x)`) and `srcsIntegrate` (`*.spec.ts(x)`) matching the repo's vitest convention. pnpm store cache mount.
+- **`stacks/go`** — go concept fragments: `modDownload` (the module closure as a `deps` layer), `build`, `test`, `integrationTest` (a nested `it/` module keeps daemon-needing testcontainers off the service graph), `vet`, `run`. A stage preamble points `GOMODCACHE` at a project-local closure in-container; the host keeps go's shared modcache.
+- **`stacks/gradle`** — kotlin/java/gradle concept fragments: `depsResolve` (the dependency closure as a read-only dep-cache layer), `assemble`, `test`, `integrationTest`, `jibBuildTar`, `check`, `run`. Default srcs scoped to `src/main/` for `assemble` (so test edits don't invalidate build); `bayt.cache.full` on `assemble` and `integrationTest` (gradle's daemon cold-start is too costly to pay on every cache hit). Emits `.bayt/init.gradle.kts` per project pointing gradle's local build cache at `$BAYT_CACHE_DIR/gradle` — gradle's per-task cache and bayt's per-target cache share the same on-disk store and complement each other (per-task hits when only some inputs changed, per-target full skips when nothing changed).
+- **`stacks/pnpm`** — pnpm/node/vite/vitest concept fragments: `install` (the dependency closure as a layer), `build`, `test`, `dev`, `testInt`, `testE2E`, `lint`. Test srcs split between `srcsTest` (`*.test.ts(x)`) and `srcsIntegrate` (`*.spec.ts(x)`) matching the repo's vitest convention. pnpm store cache mount.
 - **`stacks/mise`** — toolchain installer. `install` (provisions the project's `.mise.toml`), `exec` (sets `activate: "mise x --"` so cmds resolve through mise's shim layer), `doctor`. Used as a building block by other stacks.
-- **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace` are the standard mappings projects compose against. `sayt.inject` adds the dind plumbing for ci-cascade flows; `sayt.ci` is a one-line recipe combining inject + the standard bake-and-up-the-integrate-closure RUN body + FROM `:dindbox`; `sayt.dindbox` is the matching dindbox-target preset.
+- **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.go`, `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace` are the standard mappings projects compose against. `sayt.inject` adds the dind plumbing for ci-cascade flows; `sayt.ci` is a one-line recipe combining inject + the standard bake-and-up-the-integrate-closure RUN body + FROM `:dindbox`; `sayt.dindbox` is the matching dindbox-target preset.
+
+The go/gradle/pnpm stacks ship an opt-in non-verb `deps` target that bakes the dependency closure into an image layer (via the RUN-only `dockerfile.do` form, below) so downstream `build` COPYs it instead of re-fetching.
 
 Using the umbrella collapses a typical service to a handful of lines:
 
@@ -248,6 +251,10 @@ for slow cold-starts.
     ...
 }
 ```
+
+The mixin's tool COPY rides `dockerfile.defaultCopy`, so a target can add
+its own `dockerfile.copy: [...]` (a model file, an asset) and keep the
+mixin — the two lists concatenate rather than conflict.
 
 `compose.healthcheck` carries the compose-spec extension `start_interval`
 (probe rapidly during the start_period window) which Dockerfile
@@ -431,8 +438,10 @@ plugins/bayt/
 │   ├── listutils.cue
 │   └── *_check.cue          (vet-as-test stress patterns)
 ├── stacks/                ← language preset libraries
-│   ├── gradle/gradle.cue   (gradle concept fragments: assemble, test,
-│   │                        integrationTest, jibBuildTar, check, run)
+│   ├── go/go.cue           (go concept fragments: modDownload, build,
+│   │                        test, integrationTest, vet, run)
+│   ├── gradle/gradle.cue   (gradle concept fragments: depsResolve, assemble,
+│   │                        test, integrationTest, jibBuildTar, check, run)
 │   ├── pnpm/pnpm.cue       (pnpm concept fragments + pnpmWorkspace)
 │   ├── mise/mise.cue       (install / exec / doctor — used by other stacks)
 │   └── sayt/               (umbrella — maps 10 sayt verbs onto stack

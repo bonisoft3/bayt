@@ -29,26 +29,6 @@ import (
 	// to install bayt globally via mise/PATH overrides.
 	_baytPath: "bayt"
 
-	// Helper: build one full cmd line (activate prefix + rule body).
-	_cmdLine: {
-		activate: string
-		c:        #cmd
-		out:      string
-		out: [if len(activate) > 0 {"\(activate) \(c.do)"}, c.do][0]
-	}
-
-	// Helper: sources with glob-exclude prefix applied (for `sources:`
-	// which go-task uses for --watch and as documentation; the authoritative
-	// short-circuit is the `status:` hook that calls fingerprint.nu).
-	_sources: {
-		t: _
-		out: [...string]
-		out: list.Concat([
-			[for s in t.srcs.globs {s}],
-			[for e in t.srcs.exclude {"!\(e)"}],
-		])
-	}
-
 	// Helper: fingerprint.nu invocation. Manifest carries srcs/excludes/
 	// outs/chainedDeps; fingerprint.nu reads them and handles cross-
 	// project `../` traversal for dep stamps. The local stamp path is
@@ -90,89 +70,82 @@ import (
 		out: "\(_baytPath) fingerprint --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
 	}
 
-	// Helper: build the YAML cmds list for a (possibly per-cmd) task.
-	// Wraps the actual cmd in a defer-EXIT_CODE pattern that writes the
-	// stamp only on success, plus the cmd line itself.
-
-	// _baytWrap — emits the value for the per-task BAYTW variable: the
-	// full bookkeeping prefix that wraps the inner cmd. Layout:
+	// _baytWrap — the per-task BAYTW variable: the cache-run prefix that
+	// wraps each cmd line. Layout:
 	//
-	//   mise x -- nu <runtime>/cache.nu run --manifest <m>[ --cmd <c>][ --full][ --similar] -- [<activate>]
+	//   bayt cache run --manifest <m>[ --cmd <c>][ --full][ --similar] --[ <activate>]
 	//
-	// cache.nu restores the manifest's outs on hit, runs the inner cmd
-	// (or skips it when --full is set on EXACT hit), and stores outs on
-	// success. The hash-stamp defer (in _cmdsBlock below) still fires
-	// after — go-task's `status:` short-circuit skips THIS task entirely
-	// on next run when the stamp matches, so cache.nu only fires when
-	// the local stamp is stale (fresh checkout, branch switch, deleted
-	// .task/).
-	//
-	// Activate (typically `mise x --`) is appended at the tail when
-	// non-empty so cmds whose `do:` is just `./gradlew assemble` resolve
-	// through mise's shim. Cmds that bake their own activate (e.g.
-	// pnpm.install with target.activate="" and do:"mise x -- pnpm
-	// install") emit BAYTW with no activate suffix; their c.do carries
-	// the activate inline. Either way the resolved string is identical
-	// to the pre-BAYTW form.
+	// The activate suffix (typically `mise x --`) resolves cmds through
+	// mise's shim; cmds that bake their own activate get no suffix.
 	_baytWrap: W={
 		t:   _
 		cmd: *"" | string
 		out: string
-		// Each flag is `[if cond { value }, ""][0]` — CUE picks the
-		// first list element, which is `value` when the condition
-		// holds and `""` (the trailing default) otherwise.
-		// cache.full → --full (skip cmd entirely on exact hit).
-		// cache.similar → --similar (warm-start on miss). Both opt-in;
-		// cache.nu without flags = "exact-match only, run cmd on hit".
+		// cache.full → --full (skip cmd on exact hit); cache.similar →
+		// --similar (warm-start on miss). Both opt-in.
 		let _cmdFlag      = [if W.cmd != ""           {" --cmd \(W.cmd)"},     ""][0]
 		let _fullFlag     = [if W.t.cache.full        {" --full"},             ""][0]
 		let _similarFlag  = [if W.t.cache.similar     {" --similar"},          ""][0]
 		let _activateTail = [if len(W.t.activate) > 0 {" \(W.t.activate)"},    ""][0]
 
-		// Shell wrap: when the matching cmd's shell != "exec", append
-		// `<shell> -c` to the BAYTW prefix. The cmds-block then emits
-		// the innerDo wrapped in double-quotes so the shell receives
-		// it as a single arg. shell == "exec" leaves BAYTW without a
-		// wrap; the inner do is interpreted by go-task's runtime
-		// shell directly (sh on Linux/macOS, cmd on Windows).
-		let _matchingCmds = [for c in W.t.cmds if W.cmd == "" || c.name == W.cmd {c}]
-		let _shell        = [if len(_matchingCmds) > 0 {_matchingCmds[0].shell}, "exec"][0]
-		let _shellTail    = [if _shell != "exec"       {" \(_shell) -c"},        ""][0]
-
-		out: "\(_baytPath) cache run --manifest {{.TASKFILE_DIR}}/bayt.\(W.t.name).json\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)\(_shellTail)"
+		// No shell wrap here: per-OS variants can each pick their own
+		// shell, so `<shell> -c` lives per-line in _osCmdList.
+		out: "\(_baytPath) cache run --manifest {{.TASKFILE_DIR}}/bayt.\(W.t.name).json\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)"
 	}
 
-	// _cmdsBlock — emits the per-task cmds list as
-	//   [ "{{.BAYTW}} <innerDo>", {defer: <hash-stamp>} ]
-	// Defer is listed last for visual parity with execution order
-	// (go-task fires defers at task exit regardless of position; this
-	// is purely a readability win). innerDo is the user's `do:` string
-	// untouched — the activate prefix already lives in BAYTW.
-	//
-	// Shell handling: when the cmd's shell != "exec", BAYTW already
-	// ends with `<shell> -c` (see _baytWrap). The innerDo gets wrapped
-	// in double quotes and `\` / `"` JSON-escaped so the shell receives
-	// the whole script as one argument. exec form leaves innerDo bare.
-	_cmdsBlock: B={
-		t:       _
-		cmd:     *"" | string  // empty = target-level wrapper / single-cmd
-		innerDo: string         // c.do — no activate prefix
-		out: [...]
-		let _matchingCmds = [for c in B.t.cmds if B.cmd == "" || c.name == B.cmd {c}]
-		let _shell = [
-			if len(_matchingCmds) > 0 {_matchingCmds[0].shell},
-			"exec",
-		][0]
-		let _esc1 = strings.Replace(B.innerDo, "\\", "\\\\", -1)
+	// _taskCmdLine — a (do, shell) pair as a go-task cmd string, prefixed
+	// by `bw` (the BAYTW cache-run prefix, "" for raw cmds). A non-exec
+	// shell gets `<shell> -c "…"` so the whole do reaches it as one arg.
+	_taskCmdLine: L={
+		do:    string
+		shell: string
+		bw:    string
+		let _esc1 = strings.Replace(L.do, "\\", "\\\\", -1)
 		let _esc2 = strings.Replace(_esc1, "\"", "\\\"", -1)
-		let _innerLine = [
-			if _shell == "exec" {"{{.BAYTW}} \(B.innerDo)"},
-			if _shell != "exec" {"{{.BAYTW}} \"\(_esc2)\""},
-		][0]
 		out: [
-			_innerLine,
-			{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": B.t, mode: "stamp", "cmd": B.cmd}).out){{end}}"},
-		]
+			if L.shell == "exec" {"\(L.bw)\(L.do)"},
+			"\(L.bw)\(L.shell) -c \"\(_esc2)\"",
+		][0]
+	}
+
+	// _osCmdList — a cmd's task-cmds entries: one line, or one `platforms:`
+	// branch per OS (carrying that OS's effective do/shell) when the cmd
+	// has a windows/linux/darwin override. A host outside those three
+	// matches no branch and runs nothing — safer than an untested unix-ism.
+	_osCmdList: X={
+		c:  _
+		bw: string
+		out: [...]
+		let _oses  = ["windows", "linux", "darwin"]
+		let _hasOS = len([for os in _oses if X.c[os] != _|_ {os}]) > 0
+		out: [
+			if !_hasOS {[(_taskCmdLine & {do: X.c.do, shell: X.c.shell, bw: X.bw}).out]},
+			[for os in _oses {
+				let _o = X.c[os]
+				{
+					cmd: (_taskCmdLine & {
+						do:    [if _o != _|_ && _o.do != _|_ {_o.do}, X.c.do][0]
+						shell: [if _o != _|_ && _o.shell != _|_ {_o.shell}, X.c.shell][0]
+						bw:    X.bw
+					}).out
+					platforms: [os]
+				}
+			}],
+		][0]
+	}
+
+	// _cmdsBlock — a cmd's _osCmdList lines plus the defer hash-stamp. The
+	// defer is unguarded (runs on every host); its list position is
+	// cosmetic (go-task fires defers at task exit).
+	_cmdsBlock: B={
+		t:   _
+		cmd: *"" | string  // empty = target-level wrapper / single-cmd
+		c:   _             // the cmd object — drives OS branching + shell
+		out: [...]
+		out: list.Concat([
+			(_osCmdList & {"c": B.c, bw: "{{.BAYTW}} "}).out,
+			[{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": B.t, mode: "stamp", "cmd": B.cmd}).out){{end}}"}],
+		])
 	}
 
 	// Per-target Taskfile files.
@@ -201,10 +174,16 @@ import (
 				// are COPYd in and the fingerprint Merkle chain reads
 				// them directly. Same-project deps (e.g. `::bayt:setup`)
 				// use `::` safely because setup lives in the same
-				// Taskfile root as build.
-				let _sameProjectDeps = [for d in t.chainedDeps if d.dir == t.dir {"::bayt:\(d.name)"}]
+				// Taskfile root as build. Synthetic views (`:x:srcs`,
+				// `:x:outs`, `:x:bayt` — folded to `x_srcs`-style names)
+				// are packaging stages with no runnable task: they feed
+				// the Dockerfile COPY only, never the task chain.
+				let _sameProjectDeps = [for name in t.sameProjectDeps if !(name =~ "_(srcs|outs|bayt)$") {"::bayt:\(name)"}]
+				// Cmds with a base `do` emit tasks; a cmd with only
+				// `dockerfile.do` is RUN-only (Dockerfile RUN, no task).
+				let _taskCmds = [for c in t.cmds if c.do != _|_ {c}]
 
-				if len(t.cmds) <= 1 {
+				if len(_taskCmds) <= 1 {
 					// SINGLE-CMD (or zero-cmd) PATH — flat default
 					// task. When taskfile.incremental is true (default),
 					// the cmd is wrapped in the cache.nu BAYTW + the
@@ -226,23 +205,25 @@ import (
 							status: [(_fingerprint & {"t": t, mode: "check"}).out]
 						}
 
-						if len(t.cmds) == 1 {
-							let _c = t.cmds[0]
+						if len(_taskCmds) == 1 {
+							let _c = _taskCmds[0]
 							if t.taskfile.incremental {
 								// BAYTW absorbs cache.nu wrapper + activate
 								// suffix; cmd reads as `{{.BAYTW}} <do>`
 								// so the user's actual command stays
 								// unobscured.
 								vars: BAYTW: (_baytWrap & {"t": t}).out
-								cmds: (_cmdsBlock & {"t": t, "innerDo": _c.do}).out
+								cmds: (_cmdsBlock & {"t": t, "c": _c}).out
 							}
 							if !t.taskfile.incremental {
 								// Raw cmd — go-task evaluates as a shell
 								// command. No stamp-skip; no cache.nu
 								// wrap. Use when the cmd should run every
 								// time it's invoked (ephemeral / runtime
-								// driven by outer cache layers).
-								cmds: [_c.do]
+								// driven by outer cache layers). Still
+								// OS-branched (bw: "") so a windows/darwin
+								// override is honored here too.
+								cmds: (_osCmdList & {"c": _c, bw: ""}).out
 							}
 						}
 
@@ -255,13 +236,13 @@ import (
 					}
 				}
 
-				if len(t.cmds) > 1 {
+				if len(_taskCmds) > 1 {
 					// MULTI-CMD PATH — one internal task per cmd,
 					// chained via deps in priority order; default
 					// wrapper holds shared bits and (when incremental)
 					// writes the target-level stamp. Per-cmd tasks gate
 					// status/stamp/BAYTW on taskfile.incremental.
-					let _last = t.cmds[len(t.cmds)-1].name
+					let _last = _taskCmds[len(_taskCmds)-1].name
 
 					tasks: default: {
 						if t.taskfile.desc != _|_ {desc: t.taskfile.desc}
@@ -286,14 +267,14 @@ import (
 					}
 
 					tasks: {
-						for i, _c in t.cmds {
+						for i, _c in _taskCmds {
 							(_c.name): {
 								internal: true
 								// Deps chain: each cmd-task depends on the
 								// previous one (priority-ordered). The
 								// first cmd has no intra-target dep.
 								if i > 0 {
-									deps: [t.cmds[i-1].name]
+									deps: [_taskCmds[i-1].name]
 								}
 								if len(t.env) > 0 {env: t.env}
 								if t.taskfile.incremental {
@@ -303,10 +284,10 @@ import (
 									vars: BAYTW: (_baytWrap & {"t": t, "cmd": _c.name}).out
 									status: [(_fingerprint & {"t": t, mode: "check", "cmd": _c.name}).out]
 									generates: [".task/bayt/\(t.name).\(_c.name).hash"]
-									cmds: (_cmdsBlock & {"t": t, "cmd": _c.name, "innerDo": _c.do}).out
+									cmds: (_cmdsBlock & {"t": t, "cmd": _c.name, "c": _c}).out
 								}
 								if !t.taskfile.incremental {
-									cmds: [_c.do]
+									cmds: (_osCmdList & {"c": _c, bw: ""}).out
 								}
 							}
 						}

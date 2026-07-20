@@ -1,9 +1,7 @@
 // stacks/gradle — Gradle/JVM toolchain concept library.
 //
-// Pure gradle concepts — no opinion about which sayt verb each maps
-// to. Projects compose these with sayt verb fragments (or use the
-// `sayt.gradle` standard mapping in plugins/bayt/stacks/sayt) to
-// land them on canonical bayt targets.
+// Pure gradle concepts — no opinion about which target each lands on.
+// A project unifies these fragments into its bayt targets.
 package gradle
 
 import (
@@ -15,7 +13,14 @@ import (
 // =============================================================================
 
 // Cache mount for gradle's dependency + build cache.
-_cacheMount: {type: "cache", target: "/root/.gradle"}
+_cacheMount: {type: "cache", target: "/root/.gradle", scope: "project"}
+
+// The read-only dependency cache's in-image home. Gradle consults it
+// natively (GRADLE_RO_DEP_CACHE) before the writable user home and never
+// writes to it; misses fall through to repositories, so the mount is
+// never load-bearing — and unlike a copied live `caches/`, the RO cache
+// is designed to be relocated.
+roDepCacheDir: "/opt/gradle-ro-cache"
 
 // Per-project gradle configuration cache. Lives at <build-root>/.gradle/
 // configuration-cache (project-local, NOT in $GRADLE_USER_HOME); the
@@ -39,6 +44,67 @@ _initFlag: "--init-script .bayt/init.gradle.kts"
 setupSrcs: globs: [
 	"gradle/wrapper/gradle-wrapper.properties",
 ]
+
+// _manifestGlobs — the gradle-project manifest files, shared by the
+// fragments whose stages must key on them (depsResolve, assemble).
+// Each fragment adds its own extras (wrapper jar vs whole wrapper
+// dir, language srcs, daemon-jvm criteria) on top.
+_manifestGlobs: {
+	"build-gradle":      {glob: "build.gradle.kts"}
+	"settings-gradle":   {glob: "settings.gradle.kts"}
+	"gradle-properties": {glob: "gradle.properties"}
+	"gradlew":           {glob: "gradlew"}
+	"libs-versions":     {glob: "gradle/lib[s].versions.toml"}
+}
+
+// gradle.depsResolve — the dependency closure as a real layer on a
+// dedicated `deps` target (opt-in; the consuming project's build
+// chains FROM it). The store is the project-shared
+// /root/.gradle mount every gradle cmd already mounts: the resolve
+// fills it (wrapper dist, jars, jdks), then copies caches/modules-2
+// into the RO dep cache, read by every downstream stage via the
+// inherited GRADLE_RO_DEP_CACHE env. Materializing the wrapper into
+// the layer is deliberately NOT done: downstream cmds mount the whole
+// user home, which would shadow it — the dist stays mount-side (one
+// bounded refetch per cold builder, needed only at build time), while
+// the many-artifact jar closure rides the layer.
+// `--write-verification-metadata sha256 help` is gradle's
+// resolve-everything invocation (all resolvable configurations in all
+// projects, plugin classpaths included); the metadata file is a side
+// effect the same RUN removes. No --init-script: the init script only
+// wires the local build cache, and its .bayt/ COPY lands after the
+// cmds in this stage. Composite-build consumers list their included
+// builds on the target's `deps:` so the trees are present for
+// configuration.
+depsResolve: {
+	srcs: defaultGlobs: _manifestGlobs & {
+		"gradle-wrapper": {glob: "gradle/wrapper/**/*"}
+		"daemon-jvm":     {glob: "gradle/gradle-daemon-jvm.propertie[s]"}
+	}
+	env: GRADLE_RO_DEP_CACHE: roDepCacheDir
+	// Phase 1 — resolve (network on): fills the mount; a warm mount
+	// re-resolves against it, misses fall through to repos (never
+	// load-bearing).
+	cmd: "resolve": {
+		priority: -1
+		shell:    "sh"
+		do:       *#"./gradlew --write-verification-metadata sha256 help && rm -f gradle/verification-metadata.xml"# | string
+		dockerfile: mounts: [_cacheMount]
+	}
+	// Phase 2 — copy the closure into the RO cache. RUN-only
+	// (`dockerfile.do`, see #cmd): a build-time `cp` into /opt with no host
+	// analogue (host gradle resolves into ~/.gradle natively).
+	// `network: "none"` on its own RUN (pure-local cp).
+	cmd: "materialize": {
+		priority: 0
+		dockerfile: {
+			do:      *#"mkdir -p \#(roDepCacheDir) && cp -a \#(_cacheMount.target)/caches/modules-2 \#(roDepCacheDir)/"# | string
+			shell:   "sh"
+			mounts:  [_cacheMount]
+			network: "none"
+		}
+	}
+}
 
 // gradle.assemble — `./gradlew assemble` with project-local sources.
 // Whole-tree outs so gradle composite-build consumers (`includeBuild`
@@ -68,33 +134,20 @@ assemble: bayt.cache.full & {
 	// test and integrate targets bring in their own src/test/ and
 	// src/it/ via their own defaultGlobs (Gradle.test and
 	// Gradle.integrationTest).
-	//
-	// Defaults registered as a MapAsList so other stacks / project-
-	// level conventions can compose, override, or null-delete by key.
-	// Project leaves that just want to add a glob write
-	// `srcs: globs: [...]` (the user-side plain list); the manifest
-	// concatenates defaults + user list at emit time.
-	srcs: defaultGlobs: {
-		"kotlin":           {glob: "src/main/**/*.kt"}
-		"gradle-kts-srcs":  {glob: "src/main/**/*.gradle.kts"}
-		"java":             {glob: "src/main/**/*.java"}
-		"sql":              {glob: "src/main/**/*.sql"}
-		"sq":               {glob: "src/main/**/*.sq"}
-		"sqm":              {glob: "src/main/**/*.sqm"}
-		"build-gradle":     {glob: "build.gradle.kts"}
-		"settings-gradle":  {glob: "settings.gradle.kts"}
-		// gradle.properties is per-project because gradle's own
-		// resolution rules only consult `<project-root>/gradle.properties`
-		// (and `$GRADLE_USER_HOME/gradle.properties`), never parent
-		// directories. Each gradle project keeps its own canonical copy
-		// so both host invocations (`cd <proj> && ./gradlew build`) and
-		// container builds see the same daemon JVM args / cache flags.
-		// `sayt lint` (planned) keeps these in sync against the
-		// workspace template.
-		"gradle-properties": {glob: "gradle.properties"}
-		"gradlew":          {glob: "gradlew"}
-		"gradle-wrapper":   {glob: "gradle/wrapper/gradle-wrapper.jar"}
-		"libs-versions":    {glob: "gradle/lib[s].versions.toml"}
+	// Manifest set shared with depsResolve via _manifestGlobs.
+	// gradle.properties is in it because gradle's own resolution rules
+	// only consult `<project-root>/gradle.properties` (and
+	// `$GRADLE_USER_HOME/gradle.properties`), never parent directories:
+	// each gradle project keeps its own canonical copy so host and
+	// container invocations see the same daemon JVM args / cache flags.
+	srcs: defaultGlobs: _manifestGlobs & {
+		"kotlin":          {glob: "src/main/**/*.kt"}
+		"gradle-kts-srcs": {glob: "src/main/**/*.gradle.kts"}
+		"java":            {glob: "src/main/**/*.java"}
+		"sql":             {glob: "src/main/**/*.sql"}
+		"sq":              {glob: "src/main/**/*.sq"}
+		"sqm":             {glob: "src/main/**/*.sqm"}
+		"gradle-wrapper":  {glob: "gradle/wrapper/gradle-wrapper.jar"}
 	}
 	// build/** + .gradle/** + project metadata. src/main/** is omitted
 	// on purpose — composite-build consumers find existing build/classes
@@ -186,7 +239,7 @@ integrationTest: bayt.cache.full & {
 
 // JibRelease — FROM-scratch deployable image, holding jib's pre-baked
 // layers (which themselves include the JVM via jib.from.image). The
-// final release verb output for jib-based services.
+// final release output for jib-based services.
 //
 // This recipe defines only the image SHAPE — it doesn't run gradle.
 // The leaf is responsible for the upstream artifact-production chain:
@@ -207,7 +260,7 @@ JibRelease: {
 }
 
 // GradleRelease — generic gradle artifact producer. Used either as
-// the entire release verb (non-image releases: JAR published, distTar
+// the entire release (non-image releases: JAR published, distTar
 // shipped) or as the upstream artifact-production stage feeding into
 // a JibRelease-shaped image (tracker's `release-artifact`).
 //
@@ -223,24 +276,17 @@ JibRelease: {
 // (build/jib-image.tar for jibBuildTar, build/libs/*.jar for bootJar,
 // build/distributions/*.tar for distTar, etc.).
 GradleRelease: {
-	_target: *"distTar" | "bootJar" | "shadowJar" | "jibBuildTar" | string
+	_target: *"distTar" | string
 	cmd: "builtin": {
 		do: *"./gradlew \(_initFlag) \(_target)" | string
 		dockerfile: mounts: [_cacheMount]
 	}
 }
 
-// gradle.check — `./gradlew check`. Conventional verify-verb cmd.
 check: {
 	cmd: "builtin": do: *"./gradlew \(_initFlag) check" | string
 }
 
-// gradle.run — `./gradlew run`. Conventional launch-verb cmd.
 run: {
 	cmd: "builtin": do: *"./gradlew \(_initFlag) run" | string
 }
-
-// The standard sayt-verb mapping for pure-gradle projects lives at
-// `sayt.gradle` (plugins/bayt/stacks/sayt). It composes these
-// concepts with sayt + mise to produce the canonical 10-target
-// shape.
