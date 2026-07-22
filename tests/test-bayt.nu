@@ -57,38 +57,11 @@ def main [] {
 	# ./core/; stacks + tests are relative packages.
 	#
 	# Check files use the `_check.cue` suffix (not `_test.cue`) because
-	# `cue eval` silently excludes `_test.cue` files in non-test mode.
-	# Files carrying the `.cue.pending` extension are check files
-	# that haven't been migrated to the current schema yet — CUE
-	# skips them during package import so they don't break stack
-	# evaluation. Rename them back to `.cue` as each one is updated.
-	let core = [
-		"./core/bayt.cue"
-		"./core/mapaslist.cue"
-		"./core/listutils.cue"
-		"./core/images.cue"
-		"./core/images.lock.cue"
-		"./core/capabilities.cue"
-		"./core/gen_bayt.cue"
-		"./core/gen_taskfile.cue"
-		"./core/gen_compose.cue"
-		"./core/gen_skaffold.cue"
-		"./core/gen_vscode.cue"
-		"./core/gen_bake.cue"
-		"./core/emitter.cue"
-		# Smoke check: minimal project struct + Tests aggregator.
-		"./core/bayt_smoke_check.cue"
-		"./core/images_check.cue"
-		"./core/capabilities_check.cue"
-		"./core/skaffold_vscode_bake_check.cue"
-		"./core/emitter_check.cue"
-		"./core/docker_compose_check.cue"
-		"./core/taskfile_check.cue"
-		"./core/dockerfile_run_check.cue"
-		"./core/bayt_cycle_check.cue"
-		"./core/bayt_cycle_deep_check.cue"
-	]
+	# Package dirs, not file lists — new gen_*/_check files join the
+	# suite by existing. CUE's package import already excludes
+	# `_test.cue` (non-test mode) and `.cue.pending` (extension).
 	# cue rejects absolute paths for package args — keep these relative.
+	let core = ["./core/"]
 	# stacks/sayt holds the sayt-verb conventions + standard sayt.gradle
 	# / sayt.pnpm / sayt.pnpmWorkspace mappings; sibling stacks (gradle,
 	# pnpm, mise) hold pure toolchain concepts.

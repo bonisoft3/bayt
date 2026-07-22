@@ -47,6 +47,14 @@ def main [] {
 	# git mode
 	test_git_mode_succeeds
 
+	# state: in-place products gate presence like outs
+	test_state_absence_fails_check
+
+	# bracket-class globs (the optional-file idiom: `[m]ise.toml`)
+	test_bracket_glob_hashes_matching_file
+	test_bracket_glob_hashes_in_git_mode
+	test_check_tolerates_missing_optional_bracket_out
+
 	print "\nAll fingerprint.nu tests passed!"
 }
 
@@ -68,6 +76,7 @@ def write-manifest [
 	path: string
 	srcs: list<string>
 	--outs: list<string> = []
+	--state: list<string> = []
 	--cmds: list = []
 ] {
 	{
@@ -75,6 +84,7 @@ def write-manifest [
 		dir: ""
 		srcs: {globs: $srcs, exclude: []}
 		outs: {globs: $outs, exclude: []}
+		state: {globs: $state}
 		chainedDeps: []
 		cmds: $cmds
 	} | to json | save -f $path
@@ -408,6 +418,81 @@ def test_no_paths_errors [] {
 # A tracked file in a git work tree hashes via git hash-object.
 # This exercises the git branch of compute-fingerprint (vs. the
 # glob+sha256 fallback every other test runs).
+# Bracket-class pattern must resolve to its file (no-git mode) — a
+# pattern like `[m]ise.toml` is a glob, not a literal, and editing the
+# matched file must flip the hash.
+def test_bracket_glob_hashes_matching_file [] {
+	print "test bracket glob hashes its matching file..."
+	let tmp = (make-tmp)
+	"tools-v1\n" | save -f ($tmp | path join "mise.toml")
+	let r1 = (run-fp $tmp ["-q" "[m]ise.toml"])
+	assert ($r1.exit == 0) $"bracket glob should resolve: ($r1.stderr)"
+	let direct = (run-fp $tmp ["-q" "mise.toml"])
+	assert ($r1.stdout == $direct.stdout) "bracket glob should hash the same file as the literal"
+	"tools-v2\n" | save -f ($tmp | path join "mise.toml")
+	let r2 = (run-fp $tmp ["-q" "[m]ise.toml"])
+	assert ($r1.stdout != $r2.stdout) "hash should change when the bracket-matched file changes"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# Same contract in git mode: bracket patterns route through the git
+# pathspec branch (git ls-files understands them), not the literal
+# existence probe.
+def test_bracket_glob_hashes_in_git_mode [] {
+	print "test bracket glob resolves through git pathspecs..."
+	let tmp = (make-tmp)
+	"tools\n" | save -f ($tmp | path join "mise.toml")
+	let init = (do {
+		cd $tmp
+		^git init -q
+		^git -c user.email=t@t -c user.name=t add mise.toml
+		^git -c user.email=t@t -c user.name=t commit -q -m init
+	} | complete)
+	assert ($init.exit_code == 0) $"git init/commit failed: ($init.stderr)"
+	let r = (run-fp $tmp ["-q" "[m]ise.toml"])
+	assert ($r.exit == 0) $"git-mode bracket glob should succeed: ($r.stderr)"
+	assert (not ($r.stderr | str contains "skipping")) $"bracket glob must not be dropped as a missing literal: ($r.stderr)"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# Bracket-only outs are the optional-file idiom: absence is a valid
+# state and must not fail the stamp check. Star globs keep the strict
+# ≥1-match contract (covered by test_check_misses_when_outs_missing).
+def test_check_tolerates_missing_optional_bracket_out [] {
+	print "test check tolerates absent bracket-only optional out..."
+	let tmp = (make-tmp)
+	"src\n" | save -f ($tmp | path join "src.txt")
+	let stamp = ($tmp | path join "s.hash")
+	run-fp $tmp ["--stamp-file" $stamp "--update-stamp" "src.txt"]
+	let r = (run-fp $tmp ["--stamp-file" $stamp "--outs" "[o]ptional.toml" "src.txt"])
+	assert ($r.exit == 0) $"optional bracket out should not fail the check, got ($r.exit): ($r.stderr)"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# state entries join the presence probe (never the cache payload): a
+# stamped check fails when a state path is deleted, forcing the cmd —
+# whose tool owns the restore — to rerun.
+def test_state_absence_fails_check [] {
+	print "test state absence fails the stamp check..."
+	let tmp = (make-tmp)
+	"src\n" | save -f ($tmp | path join "src.txt")
+	mkdir ($tmp | path join "node_modules")
+	"x\n" | save -f ($tmp | path join "node_modules/marker")
+	write-manifest ($tmp | path join "m.json") ["src.txt"] --state ["node_modules"]
+	let stamp = ($tmp | path join "s.hash")
+	run-fp $tmp ["--manifest" "m.json" "--stamp-file" $stamp "--update-stamp"]
+	let ok = (run-fp $tmp ["--manifest" "m.json" "--stamp-file" $stamp])
+	assert ($ok.exit == 0) $"check should pass with state present: ($ok.stderr)"
+	rm -rf ($tmp | path join "node_modules")
+	let r = (run-fp $tmp ["--manifest" "m.json" "--stamp-file" $stamp])
+	assert ($r.exit == 1) "check must fail when a state path is deleted"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
 def test_git_mode_succeeds [] {
 	print "test git-mode (ls-files + hash-object) succeeds..."
 	let tmp = (make-tmp)

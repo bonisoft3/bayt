@@ -152,11 +152,6 @@ import (
 	if dockerfile != _|_ && dockerfile.inject != _|_ {
 		shell: "sh"
 	}
-	vscode?: {
-		windows?: {
-			command?: string
-		}
-	}
 }
 
 // noop — a #cmd that does no real work but emits a real RUN/cmd line
@@ -623,11 +618,16 @@ noop: #cmd & {
 	}
 }
 
+// #shellQuote — a cmd `do` escaped for embedding inside a double-
+// quoted shell string. The single escaping authority for every
+// emitter (Taskfile, say fragments, vscode tasks).
+#shellQuote: Q={
+	in:  string
+	out: strings.Replace(strings.Replace(Q.in, "\\", "\\\\", -1), "\"", "\\\"", -1)
+}
+
 #taskfile: {
-	task?:   string
-	run:     *"when_changed" | "once" | "always"
-	silent:  *false | bool
-	desc?:   string
+	run: *"when_changed" | "once" | "always"
 
 	// incremental — when true (default), the per-target Taskfile entry
 	// emits go-task's `status:` hook (fingerprint.nu stamp check),
@@ -768,11 +768,7 @@ noop: #cmd & {
 }
 
 #vscode: {
-	label?:       string
-	group?:       {kind: "build" | "test" | "none", isDefault?: bool}
-	detail?:      string
-	dependsOn:    [...string]
-	dependsOrder: *"sequence" | "parallel"
+	group?: {kind: "build" | "test" | "none", isDefault?: bool}
 }
 
 #bake: {
@@ -955,6 +951,15 @@ noop: #cmd & {
 	outs: {
 		globs:   *[] | [...string]
 		exclude: *[] | [...string]
+	}
+
+	// state — in-place, tool-owned products (node_modules, warm tool
+	// caches). Presence gates the status skip exactly like outs, but
+	// entries are never CAS-stored/restored and never enter the :outs
+	// synthetic view: the owning tool is the canonical cache, its own
+	// invocation the restore path.
+	state: {
+		globs: *[] | [...string]
 	}
 
 	// visibility — who is allowed to consume this target.

@@ -233,7 +233,7 @@ _expandCopy: {
 	// the cross-project scoping (the real cache win) is untouched.
 	// Cross fragments still arrive via the `_bayt` dep chain.
 	_baytScaffold: B={
-		n: _
+		n: string
 		t: _
 		// Disjunction-default, not `&&` (CUE doesn't short-circuit).
 		let _isUp = [if B.t.compose != _|_ {B.t.compose.up}, false][0]
@@ -511,9 +511,16 @@ _expandCopy: {
 				}
 				srcs: _targetSrcs
 				outs:       t.outs
+				state:      t.state
 				env:        t.env
 				visibility: t.visibility
 				class:      t.class
+				// Passthrough emission entries ride the manifest so a
+				// content edit re-keys the target's fingerprint like any
+				// other declaration change.
+				if t.files != _|_ {
+					files: t.files
+				}
 				// The one srcs-emission gate (read here, in gen_compose, and by
 				// cross-project consumers via G.depManifests). See _emitsSrcs.
 				emitsSrcs: _emitsSrcs[n]

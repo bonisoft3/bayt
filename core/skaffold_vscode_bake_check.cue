@@ -68,8 +68,8 @@ _s2_sk: files: {[string]: _|_}
 // ============================================================================
 
 // --- V1: build target → tasks.json entry. Cwd is workspace-relative.
-// With a `taskfile` block on the target, the vscode entry routes
-// through `task bayt:<n>` instead of invoking the cmd directly.
+// The entry addresses the gated task; engine-direct dispatch lives in
+// sayt's verb rules, not tasks.json.
 _v1: #project & {
 	name: "v1"
 	dir:  "guis/v1"
@@ -88,7 +88,7 @@ _v1_vs: files: build: version: "2.0.0"
 _v1_vs: files: build: tasks: [{
 	label:   "build"
 	type:    "shell"
-	command: "task -t .bayt/Taskfile.yml bayt:build"
+	command: "mise x -- pnpm build"
 	options: cwd: "${workspaceFolder}/guis/v1"
 	group: {kind: "build", isDefault: true}
 }]

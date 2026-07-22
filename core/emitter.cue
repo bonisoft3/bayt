@@ -8,9 +8,14 @@ package bayt
 #render: G={
 	project:      #project
 	depManifests: {[string]: _}
+	// Workspace-root-relative dir of the bayt checkout ("" = consumer
+	// mode: bare `bayt`/`sayt` tokens resolved via PATH). Injected by
+	// generate.nu's pass-2 expression — cue tags don't propagate into
+	// imported packages (cue-lang/cue#1530).
+	runtime: *"" | string
 
 	manifest: (#manifestGen & {"project":      G.project, "depManifests": G.depManifests})
-	taskfile: (#taskfileGen & {"project":      G.project, "depManifests": G.depManifests})
+	taskfile: (#taskfileGen & {"project":      G.project, "depManifests": G.depManifests, "runtime": G.runtime})
 	docker:   (#dockerComposeGen & {"project": G.project, "depManifests": G.depManifests})
 	skaffold: (#skaffoldGen & {"project":      G.project, "depManifests": G.depManifests})
 	vscode:   (#vscodeGen & {"project":        G.project, "depManifests": G.depManifests})

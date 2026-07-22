@@ -54,7 +54,6 @@ build:   _exec & {_sub: "build"}
 test:    _exec & {_sub: "test"}
 testInt: _exec & {_sub: "test:int"}
 testE2E: _exec & {_sub: "test:e2e"}
-lint:    _exec & {_sub: "lint"}
 
 // pnpm.dev — runtime dev server for a launch target. Bakes `pnpm dev`
 // into the Dockerfile CMD (build-time RUN would hang the builder).
@@ -72,7 +71,7 @@ dev: {
 _exec: E={
 	_sub: string
 	cmd: "builtin": {
-		do: *"mise x -- pnpm \(E._sub)" | string
+		do: *"pnpm \(E._sub)" | string
 		dockerfile: mounts: [storeMount]
 	}
 }

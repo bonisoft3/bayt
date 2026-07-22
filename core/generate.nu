@@ -118,10 +118,9 @@ def atomic-write [target: string, content: string] {
 # write-bundle writes all output files for a pre-loaded render bundle.
 # base — workspace-root-relative project dir (e.g. "services/tracker" or ".")
 # Rewrite `bayt: docker-image://…` to a compose-YAML-relative path when
-# BAYT_RUNTIME_DIR is set (monorepo-dev mode). Tag-based injection in
-# gen_compose.cue would have been cleaner but cue tags don't propagate
-# to imported packages (cue-lang/cue#1530), so the rewrite happens
-# here at write time.
+# BAYT_RUNTIME_DIR is set (monorepo-dev mode). Post-write rewrite
+# predates the runtimeIn channel gen_taskfile uses; migrate into
+# gen_compose when next touching its emission.
 #
 # Path points at `runtime/`, not the bayt project root — inner-bake
 # FS only has /monorepo/plugins/bayt/runtime, so any broader context
@@ -129,7 +128,10 @@ def atomic-write [target: string, content: string] {
 def _inject-runtime [content: string, base: string]: nothing -> string {
 	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
 	if ($runtime_dir | is-empty) { return $content }
-	let depth = if ($base == "." or $base == "") { 0 } else { ($base | split row "/" | length) }
+	# base arrives with OS separators when generation runs on Windows —
+	# normalize before splitting or the depth (and every ../ prefix)
+	# comes out short.
+	let depth = if ($base == "." or $base == "") { 0 } else { ($base | str replace --all '\' '/' | split row "/" | length) }
 	let prefix = (0..$depth | each {|_| "../" } | str join "")
 	let rel_path = $"($prefix)($runtime_dir)/runtime"
 	$content | str replace --regex --all 'bayt: docker-image://[^\n"]+' $"bayt: ($rel_path)"
@@ -143,27 +145,6 @@ def _inject-dockerfile-runtime [content: string]: nothing -> string {
 	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
 	if ($runtime_dir | is-empty) { return $content }
 	$content | str replace --regex --all '(COPY (?:--link )?--from=bayt) runtime ' '$1 . '
-}
-
-# Rewrite `bayt <subcommand>` invocations in Taskfile YAML to the
-# depth-aware in-tree slim CLI when BAYT_RUNTIME_DIR is set (monorepo-
-# dev mode). Default emission from gen_taskfile.cue is the bare `bayt`
-# command, which non-monorepo consumers resolve via their host PATH
-# (e.g. `mise install github:bonisoft3/bayt`). Monorepo developers
-# pass `bayt generate --runtime plugins/bayt`, which flips this rewrite
-# on so `task bayt:<n>` works from the monorepo without needing bayt
-# installed globally.
-#
-# Paths are relative to PROJECT ROOT (the cwd inherited by every
-# emitted task via `.bayt`'s `dir: ../` include): depth=0 prefixes `./`
-# for argv unambiguity, depth>=1 emits `../` per level.
-def _inject-taskfile-runtime [content: string, base: string]: nothing -> string {
-	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
-	if ($runtime_dir | is-empty) { return $content }
-	let depth = if ($base == "." or $base == "") { 0 } else { ($base | split row "/" | length) }
-	let prefix = if $depth == 0 { "./" } else { (1..$depth | each {|_| "../" } | str join "") }
-	let rel_path = $"($prefix)($runtime_dir)/runtime/bayt"
-	$content | str replace --regex --all '\bbayt (cache|fingerprint|where)\b' $"($rel_path) $1"
 }
 
 # Generated-from header, line 1 of every hash-comment file. JSON gets
@@ -190,6 +171,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 		rm -rf $bayt_dir
 	}
 	mkdir $bayt_dir
+	write-render-driver $"($prefix)bayt.cue"
 
 	# --- canonical per-target manifests. Synthetics nest under
 	# `.synthetics.{srcs,outs}`; uniq the nested srcs transitiveDeps (outs has none).
@@ -203,7 +185,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 
 	# --- Taskfile (the project-root Taskfile.yml is user-authored)
 	atomic-write $"($prefix).bayt/Taskfile.yml" (_hash-header ($bundle.taskfile.root | to yaml))
-	atomic-write $"($prefix).bayt/Taskfile.bayt.yml" (_hash-header (_inject-taskfile-runtime ($bundle.taskfile.bayt_root | to yaml) $base))
+	atomic-write $"($prefix).bayt/Taskfile.bayt.yml" (_hash-header ($bundle.taskfile.bayt_root | to yaml))
 	# Migration guard: a pre-0.28 generated project root includes the
 	# aggregate at .bayt/Taskfile.yml — now the launch shim — silently
 	# chaining host addresses to bayt:bayt:<n>. Warn loudly; the root is
@@ -213,7 +195,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 		print -e $"bayt: ($user_root) includes ./.bayt/Taskfile.yml \(the launch shim, not the task aggregate) — point its bayt: include at ./.bayt/Taskfile.bayt.yml"
 	}
 	for entry in ($bundle.taskfile.files | transpose name data) {
-		atomic-write $"($prefix).bayt/Taskfile.($entry.name).yaml" (_hash-header (_inject-taskfile-runtime ($entry.data | to yaml) $base))
+		atomic-write $"($prefix).bayt/Taskfile.($entry.name).yaml" (_hash-header ($entry.data | to yaml))
 	}
 
 	# --- Dockerfile
@@ -360,9 +342,23 @@ def pass1 [bayt_cue: string] {
 # pass2 runs the full render with depManifests injected via stdin.
 # bayt_cue      — path to bayt.cue.
 # dep_manifests — record keyed by dep string, value = target manifest JSON.
+#
+# The render entry lives in a generated driver (.bayt/render.cue), not
+# in the user's bayt.cue: `-e` expressions can't reach import aliases,
+# cue tags don't propagate into imported packages (cue-lang/cue#1530),
+# and injected params must be declared SOMEWHERE — the driver is that
+# somewhere, keeping user files free of render plumbing.
+def write-render-driver [bayt_cue: string] {
+	let pkg = (open --raw $bayt_cue | lines | where ($it | str starts-with "package ") | first | str replace "package " "")
+	let driver = ($bayt_cue | path dirname | path join ".bayt" "render.cue")
+	atomic-write $driver $"// generated from bayt.cue — do not edit\npackage ($pkg)\n\nimport bayt_ \"bonisoft.org/plugins/bayt/core:bayt\"\n\ndepManifestsIn: {[string]: _}\nruntimeIn: *\"\" | string\n_render: \(bayt_.#render & {\"project\": project, depManifests: depManifestsIn, runtime: runtimeIn}\)\n"
+}
+
 def pass2 [bayt_cue: string, dep_manifests: record] {
-	let inject = ({depManifestsIn: $dep_manifests} | to json --raw)
-	let r = (do { $inject | run-cue export - $bayt_cue -e _render --out json } | complete)
+	write-render-driver $bayt_cue
+	let driver = ($bayt_cue | path dirname | path join ".bayt" "render.cue")
+	let inject = ({depManifestsIn: $dep_manifests, runtimeIn: ($env.BAYT_RUNTIME_DIR? | default "")} | to json --raw)
+	let r = (do { $inject | run-cue export - $bayt_cue $driver -e _render --out json } | complete)
 	if $r.exit_code != 0 {
 		print -e $"bayt: pass-2 failed for ($bayt_cue)"
 		print -e $r.stderr

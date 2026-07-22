@@ -1,121 +1,105 @@
 // gen_vscode.cue — per-target vscode task entry emission.
 //
-// Every entry shells out to `task <name>:<name>`. That hands work-
-// avoidance + dep resolution off to the Taskfile pipeline (go-task's
-// `status:` hook calls fingerprint.nu — see #taskfileGen), so vscode
-// task runs are sub-second when inputs are unchanged instead of
-// re-invoking the builder directly.
-//
-// For targets with a `vscode` block but no `taskfile` block (rare —
-// a pure-compose or pure-skaffold target), we fall back to direct
-// cmd invocation with the `activate` prefix.
+// Entries carry the raw engine cmd (activate-prefixed; non-exec
+// shells wrapped as `<shell> -c "…"`): the IDE loop wants the engine
+// directly — its own incrementality, no gate stamps, no dep walk
+// (run setup once first). OS cmd arms emit as vscode-native per-task
+// overrides (windows/linux/osx); target env emits as options.env.
+// The gated run stays a terminal away: `task -t .bayt/Taskfile.yml
+// bayt:<n>`.
 //
 // tasks.json has no native include mechanism, so we don't write it
-// directly. Per-target entries are emitted to .bayt/vscode.<target>.json
-// (named after the generator, not after vscode's tasks.json — the file
-// can't be included into tasks.json anyway, so we keep the bayt.<target>
-// / vscode.<target> family naming consistent). The user concatenates
-// them into .vscode/tasks.json and `sayt lint` flags drift. Only
-// `build` and `test` targets are emitted — other targets (setup,
-// integrate, release, ...) don't fit vscode's build/test workflow and
-// don't belong in the IDE's run/build menu.
+// directly. Per-target entries are emitted to .bayt/vscode.<target>.json;
+// the user concatenates them into .vscode/tasks.json and `sayt lint`
+// warns on drift. Only `build` and `test` targets are emitted — other
+// targets don't fit vscode's build/test workflow.
 package bayt
 
-import "strings"
+import (
+	"strings"
+)
 
 #vscodeGen: G={
-	project: #project
-	depManifests:   {[string]: _}
+	project:      #project
+	depManifests: {[string]: _}
 
 	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
 
-	// Build/test only — and only if they declared a vscode block.
-	_emit: {for n, t in G._m.files if t.vscode != _|_ if (n == "build" || n == "test") {(n): t}}
-
-	// Direct-cmd fallback for vscode-only targets (no taskfile block).
-	// Priority-sorted rules are joined with `&&` so vscode runs them
-	// in order, stopping on first failure — matches go-task semantics.
-	_directCmd: {
-		t: _
-		out: string
-		let _bodies = [for c in t.cmds {
-			[if len(t.activate) > 0 {"\(t.activate) \(c.do)"}, c.do][0]
-		}]
-		out: [if len(_bodies) > 0 {strings.Join(_bodies, " && ")}, "true"][0]
+	// Build/test only — with a vscode block and at least one host cmd
+	// (RUN-only targets have nothing an IDE task could run).
+	_emit: {
+		for n, t in G._m.files
+		if t.vscode != _|_
+		if (n == "build" || n == "test")
+		if len([for c in t.cmds if c.do != _|_ {c}]) > 0 {(n): t}
 	}
 
-	// The vscode command for a target:
-	//   - `task -t .bayt/Taskfile.yml bayt:<n>`  if the target
-	//     emits a Taskfile (workflow-like)
-	//   - direct cmd  otherwise (rare)
-	// Launching via the generated root shim keeps bayt-initiated calls
-	// independent of the user-authored project-root Taskfile.yml.
-	_command: {
-		t: _
-		out: string
-		out: [if t.taskfile != _|_ {"task -t .bayt/Taskfile.yml bayt:\(t.name)"}, (_directCmd & {"t": t}).out][0]
+	// bayt OS axis → vscode task-override key.
+	_vsKey: {windows: "windows", linux: "linux", darwin: "osx"}
+
+	// A cmd's effective (do, shell) for an OS arm ("" = generic).
+	_eff: F={
+		c:  _
+		os: string
+		let _o = [if F.os != "" if F.c[F.os] != _|_ {F.c[F.os]}, {}][0]
+		do:    [if _o.do != _|_ {_o.do}, F.c.do][0]
+		shell: [if _o.shell != _|_ {_o.shell}, F.c.shell][0]
 	}
 
-	// Windows override pulled from cmd.builtin.vscode.windows, if set.
-	// Only applies when we're using the direct-cmd path; `task` runs
-	// identically on all platforms.
-	_windowsCmd: {
-		t: _
-		out: {
-			hasOverride: bool
-			command?:    string
-		}
-		let _c = [if t.cmds[0] != _|_ {t.cmds[0]}, {}][0]
-		let _has = _c.vscode != _|_ && _c.vscode.windows != _|_ && _c.vscode.windows.command != _|_
-		out: {
-			hasOverride: _has
-			if _has {
-				command: _c.vscode.windows.command
-			}
-		}
+	// One OS arm as a vscode command block. A single exec cmd emits a
+	// flat command string; anything else emits `command: "<act><shell>",
+	// args: ["-c", body]` — the args array survives vtr's command-string
+	// splitting, so the body needs no outer quote-escaping. Multi-cmd
+	// bodies chain per-cmd lines with &&, each line honoring its own
+	// shell (non-exec lines nest as `<shell> -c "…"`); the joiner shell
+	// is sh, pwsh on windows.
+	_arm: A={
+		act:  string
+		cmds: [...]
+		os:   string
+		let _effs = [for c in A.cmds {(_eff & {"c": c, "os": A.os})}]
+		let _one = len(_effs) == 1
+		// [if..][0] guard, not direct indexing in conditions — CUE's
+		// && doesn't short-circuit.
+		let _first = [if _one {_effs[0]}, {do: "", shell: ""}][0]
+		out: [
+			if _one && _first.shell == "exec" {{command: "\(A.act)\(_first.do)"}},
+			if _one {{command: "\(A.act)\(_first.shell)", args: ["-c", _first.do]}},
+			{
+				command: "\(A.act)\([if A.os == "windows" {"pwsh"}, "sh"][0])"
+				args: ["-c", strings.Join([for e in _effs {
+					[
+						if e.shell == "exec" {e.do},
+						"\(e.shell) -c \"\((#shellQuote & {in: e.do}).out)\"",
+					][0]
+				}], " && ")]
+			},
+		][0]
 	}
 
-	// Per-target task entry. Each emitted file at .bayt/vscode.<target>.json
-	// contains a single tasks.json-shaped record (version + tasks array
-	// of one). The user concatenates these into .vscode/tasks.json and
-	// `sayt lint` warns on drift (vscode tasks.json has no native
-	// include mechanism, so we don't overwrite the user's file).
 	files: {
 		for n, t in _emit {
-			let _cmd = (_command & {"t": t}).out
-			let _wc = (_windowsCmd & {"t": t}).out
-			let _useTask = t.taskfile != _|_
 			(n): {
+				let _act = [if len(t.activate) > 0 {"\(t.activate) "}, ""][0]
+				let _cmds = [for c in t.cmds if c.do != _|_ {c}]
 				version: "2.0.0"
 				tasks: [{
-					label: [
-						if t.vscode.label != _|_ {t.vscode.label},
-						if t.vscode.label == _|_ {n},
-					][0]
-					type:    "shell"
-					command: _cmd
-					if !_useTask && _wc.hasOverride {
-						windows: command: _wc.command
+					label: n
+					type:  "shell"
+					(_arm & {act: _act, cmds: _cmds, os: ""}).out
+					// An OS override emits when any cmd declares that
+					// arm; multi-cmd targets always get a windows arm
+					// (the posix joiner shell is sh).
+					for os, key in _vsKey
+					if len([for c in _cmds if c[os] != _|_ {c}]) > 0 || (os == "windows" && len(_cmds) > 1) {
+						(key): (_arm & {act: _act, cmds: _cmds, "os": os}).out
 					}
-					options: cwd: "${workspaceFolder}/\(t.dir)"
+					options: {
+						cwd: "${workspaceFolder}/\(t.dir)"
+						if len(t.env) > 0 {env: t.env}
+					}
 					if t.vscode.group != _|_ {
 						group: t.vscode.group
-					}
-					if t.vscode.detail != _|_ {
-						detail: t.vscode.detail
-					}
-					if len(t.vscode.dependsOn) > 0 {
-						dependsOn:    t.vscode.dependsOn
-						dependsOrder: t.vscode.dependsOrder
-					}
-					let _pm = [
-						if t.cmds[0] != _|_ && t.cmds[0].vscode != _|_ && t.cmds[0].vscode.problemMatcher != _|_ {
-							t.cmds[0].vscode.problemMatcher
-						},
-						if true {[]},
-					][0]
-					if len(_pm) > 0 {
-						problemMatcher: _pm
 					}
 				}]
 			}

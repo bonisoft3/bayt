@@ -222,15 +222,68 @@ _t9_tf: files: doctor: tasks: default: cmds: [
 	{cmd: "check.sh", platforms: ["darwin"]},
 ]
 
+// --- T10: cross-project chainedDeps become `cross_*` runner tasks in
+// bayt_root (union over targets, `run: once`, container-skipped via the
+// workspace-root .git probe) plus `::bayt:cross_*` deps on the
+// per-target default. Depth-aware paths: dir "apps/t10" → `../../`; a
+// workspaceroot dep (dir "") drops the dir segment. Synthetic views and
+// same-project entries never produce runners (t1–t9 stay runner-free —
+// see T7's includes-only pin).
+_t10: #project & {
+	name: "t10"
+	dir:  "apps/t10"
+	targets: {
+		"setup": {taskfile: {}, deps: ["workspaceroot:setup"], cmd: "builtin": do: "true"}
+		"build": {
+			taskfile: {}
+			deps: [":setup", "libx:build"]
+			cmd: "builtin": do: "cargo build"
+		}
+	}
+}
+_t10_tf: (#taskfileGen & {project: _t10, depManifests: {
+	"libx:build": {
+		visibility: "public"
+		name:       "build"
+		project:    "libx"
+		dir:        "libs/x"
+		outs: {globs: ["out/**"], exclude: []}
+		class: "build"
+	}
+	"workspaceroot:setup": {
+		visibility: "public"
+		name:       "setup"
+		project:    "workspaceroot"
+		dir:        ""
+		outs: {globs: [], exclude: []}
+		class: "build"
+	}
+}})
+_t10_tf: bayt_root: tasks: cross_libs_x_build: {
+	internal: true
+	run:      "once"
+	status: ["test ! -e ../../.git"]
+	cmds: ["{{.TASK_EXE}} -t ../../libs/x/.bayt/Taskfile.yml bayt:build"]
+}
+_t10_tf: bayt_root: tasks: cross_workspaceroot_setup: {
+	internal: true
+	run:      "once"
+	status: ["test ! -e ../../.git"]
+	cmds: ["{{.TASK_EXE}} -t ../../.bayt/Taskfile.yml bayt:setup"]
+}
+_t10_tf: files: build: tasks: default: deps: ["::bayt:setup", "::bayt:cross_libs_x_build"]
+_t10_tf: files: setup: tasks: default: deps: ["::bayt:cross_workspaceroot_setup"]
+
 // Public aggregator forces evaluation of the hidden _t* bindings.
 Tests: taskfile: {
-	t1: _t1_tf
-	t2: _t2_tf
-	t3: _t3_tf
-	t4: _t4_tf
-	t5: _t5_tf
-	t6: _t6_tf
-	t7: _t7_tf
-	t8: _t8_tf
-	t9: _t9_tf
+	t1:  _t1_tf
+	t2:  _t2_tf
+	t3:  _t3_tf
+	t4:  _t4_tf
+	t5:  _t5_tf
+	t6:  _t6_tf
+	t7:  _t7_tf
+	t8:  _t8_tf
+	t9:  _t9_tf
+	t10: _t10_tf
 }

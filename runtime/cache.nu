@@ -37,12 +37,17 @@ use ./tools.nu [run-oras]
 # Similarity scoring (used by every backend's lookup path)
 # ============================================================================
 #
-# Each cache entry carries a metadata record:
-#   {user: string, branch: string, ts: string, inputs: {path: hash, ...}}
-# Captured at PUT time. user defaults to $env.USER; branch to
-# $env.BAYT_CACHE_BRANCH (caller injects, e.g. from `git rev-parse
-# --abbrev-ref HEAD`); ts to current timestamp; inputs to the per-file
-# hash map fingerprint.nu produces.
+# Each cache entry carries three records, one per concern:
+#   metadata.json      — {user, branch, ts} scoring metadata (PUT time;
+#                        user from $env.USER, branch from
+#                        $env.BAYT_CACHE_BRANCH, ts current timestamp)
+#   srcs.manifest.json — [{path, hash}] the inputs fingerprint.nu saw
+#                        (hash flavor is mode-dependent: git blob hash
+#                        or raw sha256) — feeds --similar scoring
+#   outs.manifest.json — [{path, size, sha256}] the payload contract,
+#                        verified before any restore
+# Entries missing either manifest are quarantined on hit — the schema
+# has no legacy mode.
 #
 # Lookup ranks candidates by weighted intersection. Weights are fixed
 # constants — promoting them to a per-project DSL is cheap if real
@@ -52,14 +57,13 @@ const WEIGHT_BRANCH = 30.0
 const WEIGHT_USER   = 50.0
 const WEIGHT_DAY    = 5.0
 
-def current-meta [project: string, target: string, inputs: record]: nothing -> record {
+def current-meta [project: string, target: string]: nothing -> record {
 	{
 		project: $project,
 		target: $target,
 		user: ($env.USER? | default ""),
 		branch: ($env.BAYT_CACHE_BRANCH? | default ""),
 		ts: (date now | format date "%+"),
-		inputs: $inputs,
 	}
 }
 
@@ -67,11 +71,11 @@ def current-meta [project: string, target: string, inputs: record]: nothing -> r
 # starting point. Returns 0 for entries with zero overlap (no shared
 # files, no shared user/branch, different day) — caller filters those
 # out.
-def similarity-score [current: record, entry_meta: record]: nothing -> float {
+def similarity-score [current: record, entry_meta: record, entry_inputs: record]: nothing -> float {
 	let file_score = (
 		$current.inputs | columns | reduce --fold 0.0 { |path, acc|
 			let cur = ($current.inputs | get $path)
-			let other = ($entry_meta.inputs? | default {} | get -o $path)
+			let other = ($entry_inputs | get -o $path)
 			if $other == $cur { $acc + $WEIGHT_FILE } else { $acc }
 		}
 	)
@@ -117,9 +121,9 @@ def debug-log [record: record] {
 # `--no-dir` filters real directories but NOT symlinks-to-directories;
 # Nuxt-style build trees can include those. The `path type == "file"`
 # filter catches both — a file or a symlink-to-file.
-def expand-globs [globs: list<string>]: nothing -> list<string> {
+def expand-globs [globs: list<string>, excludes: list<string>]: nothing -> list<string> {
 	$globs
-	| each { |g| try { glob $g --no-dir } catch { [] } }
+	| each { |g| try { glob $g --no-dir --exclude $excludes } catch { [] } }
 	| flatten
 	| where { |p| ($p | path type) == "file" }
 }
@@ -171,20 +175,46 @@ def restore-outs-from [outs_dir: path] {
 	}
 }
 
-# Restore from a local entry. Returns true on hit (restored) or the
-# entry-doesn't-exist false. Errors during the copy itself bubble up
+# Verify an entry against its outs.manifest.json: every recorded file
+# present with matching size; BAYT_CACHE_VERIFY=full re-hashes content
+# (one read pass — bitrot check). Both manifests are required — a
+# failing or pre-schema entry degrades to a miss, never an error: the
+# caller quarantines and reruns the cmd.
+def local-verify [entry: path]: nothing -> bool {
+	let mpath = ($entry | path join "outs.manifest.json")
+	if not ($mpath | path exists) { return false }
+	if not (($entry | path join "srcs.manifest.json") | path exists) { return false }
+	let base = ($entry | path join "outs")
+	let full = (($env.BAYT_CACHE_VERIFY? | default "") == "full")
+	for r in (open $mpath) {
+		let f = ($base | path join $r.path)
+		if ($f | path type) != "file" { return false }
+		if ((ls $f | first | get size | into int) != $r.size) { return false }
+		if $full and ((open --raw $f | hash sha256) != $r.sha256) { return false }
+	}
+	true
+}
+
+# Restore from a local entry. Returns true on hit (restored) or false
+# on entry-missing/corrupt (corrupt entries are quarantined so the
+# next run doesn't re-trip). Errors during the copy itself bubble up
 # to the caller's try/catch as warnings (broken cache shouldn't block
 # the build).
 def local-get [key: string]: nothing -> bool {
 	let entry = (local-entry $key)
 	if not ($entry | path exists) { return false }
+	if not (local-verify $entry) {
+		print -e $"BAYT_CACHE warn: corrupt entry quarantined: ($entry | path basename)"
+		rm -rf $entry
+		return false
+	}
 	restore-outs-from ($entry | path join "outs")
 	true
 }
 
 # Store an entry locally. Atomic via tempdir + rename. Skip on
 # already-published (winner-takes-all race semantics).
-def local-put [key: string, outs_globs: list<string>, manifest: string, meta: record] {
+def local-put [key: string, e: record] {
 	let entry = (local-entry $key)
 	if ($entry | path exists) { return }
 
@@ -195,13 +225,26 @@ def local-put [key: string, outs_globs: list<string>, manifest: string, meta: re
 	mkdir $outs_tmp
 
 	let cwd = (pwd)
-	for src in (expand-globs $outs_globs) {
-		let dst = ($outs_tmp | path join ($src | path relative-to $cwd))
+	# outs.manifest.json — the entry's own contract: {path, size, sha256}
+	# per payload file, verified by local-verify before any restore.
+	# metadata.json records what went IN (inputs, for --similar); this
+	# records what must come OUT.
+	mut rows = []
+	for src in (expand-globs $e.outs $e.outs_exclude) {
+		let rel = ($src | path relative-to $cwd)
+		let dst = ($outs_tmp | path join $rel)
 		mkdir ($dst | path dirname)
 		cp $src $dst
+		$rows = ($rows | append {
+			path:   $rel,
+			size:   (ls $src | first | get size | into int),
+			sha256: (open --raw $src | hash sha256),
+		})
 	}
-	cp $manifest ($tmp | path join "manifest.json")
-	$meta | to json | save -f ($tmp | path join "metadata.json")
+	$rows | to json | save -f ($tmp | path join "outs.manifest.json")
+	($e.inputs | transpose path hash) | to json | save -f ($tmp | path join "srcs.manifest.json")
+	cp $e.manifest ($tmp | path join "manifest.json")
+	$e.meta | to json | save -f ($tmp | path join "metadata.json")
 
 	mkdir ($entry | path dirname)
 	# The path-exists check catches the common race; mv inside try
@@ -240,7 +283,12 @@ def local-similar [current: record]: nothing -> any {
 			# never share inputs in any meaningful way.
 			if ($meta.project? | default "") != $current.project { return null }
 			if ($meta.target?  | default "") != $current.target  { return null }
-			{ entry: $entry, meta: $meta, score: (similarity-score $current $meta) }
+			let srcs_path = ($entry | path join "srcs.manifest.json")
+			if not ($srcs_path | path exists) { return null }
+			let entry_inputs = (try {
+				open $srcs_path | reduce --fold {} { |r, acc| $acc | insert $r.path $r.hash }
+			} catch { return null })
+			{ entry: $entry, meta: $meta, score: (similarity-score $current $meta $entry_inputs) }
 		}
 		| where { |x| $x != null and $x.score > 0 }
 		| sort-by score --reverse
@@ -296,9 +344,9 @@ def bazel-get [key: string]: nothing -> bool {
 	true
 }
 
-def bazel-put [key: string, outs_globs: list<string>, _manifest: string] {
+def bazel-put [key: string, outs_globs: list<string>, outs_exclude: list<string>, _manifest: string] {
 	let cwd = (pwd)
-	let files = (expand-globs $outs_globs)
+	let files = (expand-globs $outs_globs $outs_exclude)
 	# Skip empty PUTs: bazel-get treats an empty response body as miss
 	# (no way to distinguish "stored an empty archive" from "404"
 	# without an extra HEAD request), so storing an empty archive
@@ -343,12 +391,12 @@ def oras-get [project: string, target: string, key: string]: nothing -> bool {
 	true
 }
 
-def oras-put [project: string, target: string, key: string, outs_globs: list<string>, _manifest: string] {
+def oras-put [project: string, target: string, key: string, outs_globs: list<string>, outs_exclude: list<string>, _manifest: string] {
 	if (which oras | is-empty) {
 		error make { msg: "cache.nu: BAYT_CACHE_REGISTRY set but `oras` CLI not on PATH" }
 	}
 	let cwd = (pwd)
-	let files = (expand-globs $outs_globs | each { |f| $f | path relative-to $cwd })
+	let files = (expand-globs $outs_globs $outs_exclude | each { |f| $f | path relative-to $cwd })
 	if ($files | is-empty) { return }
 	run-oras push (oras-ref $project $target $key) ...$files
 }
@@ -373,11 +421,11 @@ def backend-get [project: string, target: string, key: string]: nothing -> bool 
 	}
 }
 
-def backend-put [project: string, target: string, key: string, outs_globs: list<string>, manifest: string, meta: record] {
+def backend-put [project: string, target: string, key: string, e: record] {
 	match (backend) {
-		"bazel" => { bazel-put $key $outs_globs $manifest }
-		"oras"  => { oras-put  $project $target $key $outs_globs $manifest }
-		_       => { local-put $key $outs_globs $manifest $meta }
+		"bazel" => { bazel-put $key $e.outs $e.outs_exclude $e.manifest }
+		"oras"  => { oras-put  $project $target $key $e.outs $e.outs_exclude $e.manifest }
+		_       => { local-put $key $e }
 	}
 }
 
@@ -400,7 +448,14 @@ def backend-similar [current: record]: nothing -> any {
 # handle (a path for local-FS, a key for bazel/oras).
 def backend-restore-from [handle: any] {
 	match (backend) {
-		"local" => { restore-outs-from ($handle | path join "outs") }
+		"local" => {
+			if (local-verify $handle) {
+				restore-outs-from ($handle | path join "outs")
+			} else {
+				print -e $"BAYT_CACHE warn: corrupt entry quarantined: ($handle | path basename)"
+				rm -rf $handle
+			}
+		}
 		_ => { }   # phase 2/3
 	}
 }
@@ -476,7 +531,12 @@ export def --wrapped "main run" [
 			ok: true,
 			key: $fp.hash,
 			inputs: $fp.inputs,
-			outs: $resolved.outs,
+			# Payload = declared outs only. resolve-manifest's outs union
+			# state for the presence probe; state never enters the cache.
+			# outs.exclude prunes the store-side walk (tool-owned trees
+			# like node_modules must not enter entries).
+			outs: $m.outs.globs,
+			outs_exclude: $m.outs.exclude,
 			project: $m.project,
 			target: $m.name,
 		}
@@ -489,9 +549,11 @@ export def --wrapped "main run" [
 	}
 	let key     = $m_or_err.key
 	let outs    = $m_or_err.outs
+	let outs_exclude = $m_or_err.outs_exclude
 	let project = $m_or_err.project
 	let target  = $m_or_err.target
-	let meta    = (current-meta $project $target $m_or_err.inputs)
+	let meta    = (current-meta $project $target)
+	let inputs  = $m_or_err.inputs
 
 	# Three lookup phases:
 	#   1. exact-match on content key
@@ -508,11 +570,12 @@ export def --wrapped "main run" [
 	# behaviour collapses to "exact-match only" — the safe-but-low-
 	# benefit shape that doesn't risk surprising the user.
 	let warm_result = if $exact_hit or (not $similar) { null } else {
-		try { backend-similar $meta } catch { null }
+		try { backend-similar ($meta | insert inputs $inputs) } catch { null }
 	}
+	# try: a broken warm entry degrades to a cold miss, same contract
+	# as the exact-hit path.
 	let warm_hit = if $warm_result != null {
-		backend-restore-from $warm_result.entry
-		true
+		try { backend-restore-from $warm_result.entry; true } catch { false }
 	} else { false }
 
 	let base_mode = if $full { "full" } else { "run" }
@@ -554,7 +617,7 @@ export def --wrapped "main run" [
 		# this build's output under our key. No try/catch — silent
 		# PUT failure means caching is broken for the user explicitly
 		# opted into backend.
-		backend-put $project $target $key $outs $manifest $meta
+		backend-put $project $target $key {outs: $outs, outs_exclude: $outs_exclude, manifest: $manifest, meta: $meta, inputs: $inputs}
 	}
 	exit 0
 }

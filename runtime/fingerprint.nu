@@ -32,6 +32,15 @@ def git-available []: nothing -> bool {
   (do -i { ^git rev-parse --is-inside-work-tree } | complete | get exit_code) == 0
 }
 
+# A pattern is a glob when it carries any wildcard metachar. `[` covers
+# the bracket-class idiom bayt emission uses for optional single files
+# (`[m]ise.toml`, `gradle/lib[s].versions.toml`) — git pathspecs and
+# nu's glob both understand it; classifying those as literals silently
+# dropped them from every fingerprint.
+def is-glob [p: string]: nothing -> bool {
+  ($p | str contains "*") or ($p | str contains "?") or ($p | str contains "[")
+}
+
 # Enumerate files matching the given patterns, pruning excluded dirs
 # at walk time. nu's `glob` returns [] for no-match (deliberately
 # silent); errors only on malformed patterns, which we let propagate.
@@ -44,7 +53,7 @@ def expand-paths [paths: list<string>, excludes: list<string>]: nothing -> list<
     } else if $t == "dir" {
       glob $"($p)/**/*" --exclude $excludes
       | where ($it | path type) == "file"
-    } else if ($p | str contains "*") or ($p | str contains "?") {
+    } else if (is-glob $p) {
       glob $p --exclude $excludes
       | where ($it | path type) == "file"
     } else {
@@ -157,8 +166,8 @@ export def compute-fingerprint [
 ]: nothing -> record {
   let pairs = if (git-available) {
     let gpaths = (git-patterns $paths)
-    let globs = ($gpaths | where { |p| ($p | str contains "*") or ($p | str contains "?") })
-    let literals = ($gpaths | where { |p| not (($p | str contains "*") or ($p | str contains "?")) })
+    let globs = ($gpaths | where { |p| is-glob $p })
+    let literals = ($gpaths | where { |p| not (is-glob $p) })
     let present_literals = ($literals | where { |p| ($p | path type) == "file" })
     let missing = ($literals | where { |p| ($p | path type) != "file" })
     if not ($missing | is-empty) {
@@ -238,6 +247,12 @@ def outs-present [pats: list<string>]: nothing -> bool {
       true
     } else if ($p | str contains "*") or ($p | str contains "?") {
       not ((glob $p --no-dir) | is-empty)
+    } else if (is-glob $p) {
+      # Bracket-only pattern: the optional-file idiom. Zero matches is a
+      # legitimate state (the file simply isn't part of this project), not
+      # a missing output — probing it strictly would permanently fail the
+      # status short-circuit of any target declaring an optional out.
+      true
     } else {
       false
     }
@@ -259,7 +274,7 @@ export def resolve-manifest [manifest: string, cmd: string = ""]: nothing -> rec
   # `../` hops from consumer's dir to repo root: one per path segment.
   let hops = ($consumer_dir | path split | where { |s| not ($s | is-empty) } | length)
   let up = (0..<$hops | each { "../" } | str join)
-  let dep_stamps = ($m.chainedDeps | default [] | each { |d|
+  let dep_stamps = ($m.chainedDeps | each { |d|
     if $d.dir == $consumer_dir {
       $".task/bayt/($d.name).hash"
     } else {
@@ -269,8 +284,8 @@ export def resolve-manifest [manifest: string, cmd: string = ""]: nothing -> rec
   let scope = if ($cmd | is-empty) {
     {
       stamp_name: $m.name
-      srcs:       ($m.srcs.globs? | default [])
-      excludes:   ($m.srcs.exclude? | default [])
+      srcs:       $m.srcs.globs
+      excludes:   $m.srcs.exclude
     }
   } else {
     let entry = ($m.cmds | where name == $cmd | first)
@@ -279,15 +294,17 @@ export def resolve-manifest [manifest: string, cmd: string = ""]: nothing -> rec
     }
     {
       stamp_name: $"($m.name).($cmd)"
-      srcs:       ($entry.srcs.globs? | default [])
-      excludes:   ($entry.srcs.exclude? | default [])
+      srcs:       $entry.srcs.globs
+      excludes:   $entry.srcs.exclude
     }
   }
   {
     stamp:    $".task/bayt/($scope.stamp_name).hash"
     paths:    ([$manifest] ++ $scope.srcs ++ $dep_stamps)
     excludes: $scope.excludes
-    outs:     ($m.outs.globs? | default [])
+    # state entries gate presence like outs but are never CAS payload —
+    # cache.nu reads m.outs.globs directly and never sees them.
+    outs:     ($m.outs.globs ++ $m.state.globs)
   }
 }
 

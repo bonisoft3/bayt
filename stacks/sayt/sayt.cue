@@ -89,12 +89,18 @@ doctor: {
 }
 
 // build — primary artifact producer. Toolchain stack supplies the
-// command and srcs.
+// command and srcs. `sayt build` reaches the same cmd through the
+// builtin engine (build.nu → vtr → tasks.json, OS-aware); the vscode
+// emission is the sayt-facing artifact. `activate: string` is a hard
+// requirement: a build/test target without an activate convention
+// should fail generation rather than emit tasks that resolve tools
+// off bare PATH.
 build: {
 	deps: *[":setup"] | [...string]
 	taskfile: {}
 	dockerfile: {}
 	vscode: group: {kind: "build", isDefault: true}
+	activate: string
 }
 
 // test — unit tests. Convention: produce JUnit-style XML at the
@@ -104,6 +110,7 @@ test: {
 	deps: *[":build"] | [...string]
 	taskfile: {}
 	vscode: group: {kind: "test", isDefault: true}
+	activate: string
 }
 
 // launch — dev-loop container. HMR-enabled where the toolchain
@@ -202,11 +209,28 @@ verify: {
 	taskfile: {}
 }
 
-// generate — codegen; outputs committed.
+// generate — regenerate config-derived files; outputs committed.
+// Standalone host task, never a dep: config inputs (bayt.cue) stay
+// out of image layers, so in-container regeneration cannot exist.
+// srcs live off the fragment — sayt.generate also bases custom
+// generate-shaped targets with their own srcs (xproto's descriptor).
 generate: {
 	deps: *[] | [...string]
 	taskfile: {}
 }
+
+// Config inputs of the rulemap verbs — bayt.cue plus every form
+// load-config reads (.say.{cue,yaml,yml,json,toml,nu}, listed out:
+// git pathspecs have no brace expansion). Bracket-glob: each optional.
+configSrcs: srcs: globs: [
+	"[b]ayt.cue",
+	"[.]say.cue",
+	"[.]say.yaml",
+	"[.]say.yml",
+	"[.]say.json",
+	"[.]say.toml",
+	"[.]say.nu",
+]
 
 // lint — static checks. Always runs (no cache); fast enough that
 // short-circuiting doesn't pay.
@@ -357,6 +381,7 @@ gradle: bayt.#project & {
 			// cache key.
 			outs: globs: list.Concat([Gradle.setupSrcs.globs, Mise.installFiles.globs, [".task/bayt/setup.hash"]])
 			taskfile: setup.taskfile
+			deps:     setup.deps
 			// Image preset is a per-target choice. Leaf setups compose
 			// `bayt.nubox` explicitly; chained setups set `dockerfile:
 			// from: ref: ...` and inherit the preset via FROM.
@@ -421,8 +446,8 @@ gradle: bayt.#project & {
 		// arm's gradle cmd + per-task outs).
 		"release": *(release & Mise.exec & Gradle.JibRelease) | (release & Mise.exec & Gradle.GradleRelease) | null
 		"verify":   *(verify   & Mise.exec & Gradle.check) | null
-		"generate": *(generate & {cmd: "builtin": do: *"nu sayt.nu generate" | string}) | null
-		"lint":     *(lint     & {cmd: "builtin": do: *"nu sayt.nu lint" | string}) | null
+		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
+		"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
 	}
 }
 
@@ -437,6 +462,7 @@ go: bayt.#project & {
 			srcs: globs: Mise.installFiles.globs
 			outs: globs: list.Concat([Mise.installFiles.globs, [".task/bayt/setup.hash"]])
 			taskfile: setup.taskfile
+			deps:     setup.deps
 		}) | null
 		"doctor": *(doctor & Mise.doctor) | null
 		"deps": *(Go.modDownload & Mise.exec & {
@@ -461,8 +487,8 @@ go: bayt.#project & {
 		// shapes the leaf provides (FROM + epilogue COPY of the binary).
 		"release":  *(release & Mise.exec) | null
 		"verify":   *(verify   & Mise.exec & Go.vet) | null
-		"generate": *(generate & {cmd: "builtin": do: *"nu sayt.nu generate" | string}) | null
-		"lint":     *(lint     & {cmd: "builtin": do: *"nu sayt.nu lint" | string}) | null
+		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
+		"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
 	}
 }
 
@@ -499,6 +525,10 @@ pnpm: bayt.#project & {
 			// COPY --from=<project>-setup to inherit the pnpm store +
 			// node tools mise installed. Chained setups inherit via FROM.
 			taskfile: setup.taskfile
+			deps:     setup.deps
+			// Deleted node_modules must fail the status skip; pnpm's own
+			// store is the cache, `pnpm install` the restore.
+			state: globs: ["node_modules"]
 		}) | null
 		"doctor": *(doctor & Mise.doctor) | null
 		"build": *(build & Mise.exec & Pnpm.build & {
@@ -548,8 +578,8 @@ pnpm: bayt.#project & {
 			dockerfile: from: ref: ":build"
 		}) | null
 		"verify":   *(verify   & Mise.exec & Pnpm.testE2E) | null
-		"generate": *(generate & {cmd: "builtin": do: *"nu sayt.nu generate" | string}) | null
-		"lint":     *(lint     & Mise.exec & Pnpm.lint) | null
+		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
+		"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
 	}
 }
 
@@ -605,9 +635,10 @@ pnpmWorkspace: bayt.#project & {
 					// chain — no per-project preamble COPYs needed
 					// (which would fail anyway, since each project's
 					// build context is its own dir, not the monorepo
-					// root). node_modules and similar build-output
-					// directories are filtered by the root .dockerignore,
-					// so this glob only picks up source-tree manifests.
+					// root). node_modules stays out via .dockerignore
+					// (container) and the outs exclude below (host CAS);
+					// srcs need neither — host fingerprinting is
+					// git-scoped and never sees ignored trees.
 					"**/package.json",
 				],
 			])
@@ -619,6 +650,11 @@ pnpmWorkspace: bayt.#project & {
 			// per-COPY cache on any unrelated repo edit — a major
 			// cache-blast-radius regression.
 			outs: globs: list.Concat([P.srcs.globs, [".task/bayt/setup.hash"]])
+			// The CAS put walks the filesystem (no git scoping): without
+			// this exclude `**/package.json` sweeps vendored node_modules
+			// manifests — huge entries, and a hash race against sibling
+			// projects' concurrent pnpm installs.
+			outs: exclude: ["**/node_modules/**"]
 			env: SHARP_IGNORE_GLOBAL_LIBVIPS: "1"
 			dockerfile: bayt.nubox
 			// The cmd (from Mise.install) is `mise install` only —

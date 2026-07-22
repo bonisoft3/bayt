@@ -4,6 +4,8 @@ use cache.nu
 use fingerprint.nu
 use where.nu
 
+const _fat_cli = (path self | path dirname | path join ".." "bayt.nu")
+
 def --wrapped "main cache run" [
 	--manifest: string
 	--cmd: string = ""
@@ -33,6 +35,15 @@ def "main fingerprint" [
 
 def "main where" [target: string = "root"] {
 	where $target
+}
+
+# generate — regenerate this project's .bayt from bayt.cue. No bayt.cue
+# in cwd → nothing to generate (containers never stage config, so this
+# is the in-container no-op). The fat CLI sibling only exists where
+# bayt.cue does (checkout layouts), so the guard also gates the exec.
+def "main generate" [] {
+	if not ("bayt.cue" | path exists) { return }
+	^$nu.current-exe $_fat_cli generate --runtime plugins/bayt
 }
 
 def main [] { print (help main) }

@@ -5,6 +5,7 @@ package bayt
 
 import (
 	"list"
+	"path"
 	"strings"
 )
 
@@ -12,22 +13,31 @@ import (
 #taskfileGen: G={
 	project: #project
 	depManifests:   {[string]: _}
+	runtime: *"" | string
 
 	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
 
 	// Only targets that declared a taskfile block on their #target.
 	_emit: {for n, t in G._m.files if t.taskfile != _|_ {(n): t}}
 
-	// bayt invocation token emitted into each Taskfile cmd. Default
-	// emission is plain `bayt` — consumers must have it on PATH (e.g.
-	// installed via `mise install github:bonisoft3/bayt`).
-	//
-	// Monorepo developers pass `bayt generate --runtime plugins/bayt`,
-	// which sets BAYT_RUNTIME_DIR and triggers a post-write regex
-	// rewrite in generate.nu (`_inject-runtime`) replacing `bayt` with
-	// a depth-aware in-tree path. That avoids requiring the monorepo
-	// to install bayt globally via mise/PATH overrides.
-	_baytPath: "bayt"
+	// bayt/sayt invocation tokens. Consumer mode (runtime == ""): bare
+	// names resolved via PATH (`mise install github:bonisoft3/bayt`).
+	// Monorepo mode (`bayt generate --runtime plugins/bayt`): depth-
+	// aware in-tree paths — the POSIX launcher on the else arm, the
+	// mise tool-stub pair on Windows (a sh script Windows cannot exec);
+	// go-task templates the OS branch at run time. Workspaceroot
+	// (depth 0) prefixes `./` for argv unambiguity.
+	let _prefix = [if G._m._depth == 0 {"./"}, strings.Repeat("../", G._m._depth)][0]
+	let _rt = "\(_prefix)\(G.runtime)/runtime"
+	_baytPath: [
+		if G.runtime != "" {"{{if eq OS \"windows\"}}mise tool-stub \(_rt)/nu.toml \(_rt)/bayt.nu{{else}}\(_rt)/bayt{{end}}"},
+		"bayt",
+	][0]
+	// sayt lives beside bayt (`<parent>/sayt`); its entry is nu source.
+	_saytPath: [
+		if G.runtime != "" {"nu \(_prefix)\(path.Dir(G.runtime))/sayt/sayt.nu"},
+		"sayt",
+	][0]
 
 	// Helper: fingerprint.nu invocation. Manifest carries srcs/excludes/
 	// outs/chainedDeps; fingerprint.nu reads them and handles cross-
@@ -58,15 +68,6 @@ import (
 		let _cmdFlag    = [if F.cmd != "" {" --cmd \(F.cmd)"}, ""][0]
 		let _stampName  = [if F.cmd != "" {"\(F.t.name).\(F.cmd)"}, F.t.name][0]
 		let _updateFlag = [if F.mode == "stamp" {" --update-stamp"}, ""][0]
-		// Depth-aware in-tree path to bayt. From project root (the cwd
-		// inherited by every task via .bayt's `dir: ../` include), we
-		// walk up `G._m._depth` levels to reach the workspace root,
-		// then into plugins/bayt/bin/bayt. On host this is the in-tree
-		// host CLI. In containers, the generated Dockerfile creates a
-		// symlink `plugins/bayt/bin/bayt -> runtime/bayt` so the same
-		// relative path resolves to the slim in-container CLI.
-		// Workspaceroot (depth=0) prefixes `./` to avoid bare-path
-		// ambiguity.
 		out: "\(_baytPath) fingerprint --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
 	}
 
@@ -96,15 +97,30 @@ import (
 	// _taskCmdLine — a (do, shell) pair as a go-task cmd string, prefixed
 	// by `bw` (the BAYTW cache-run prefix, "" for raw cmds). A non-exec
 	// shell gets `<shell> -c "…"` so the whole do reaches it as one arg.
+	// _crossName — runner-task name for a cross-project chainedDep
+	// (`cross_<proj-slug>_<target>`; workspaceroot when dir is "").
+	_crossName: N={
+		d: _
+		out: "cross_\([if N.d.dir == "" {"workspaceroot"}, strings.Replace(N.d.dir, "/", "_", -1)][0])_\(N.d.name)"
+	}
+
+	// No {{.CLI_ARGS}} forwarding: the variable is run-global in
+	// go-task, so it would leak the caller's args into every dep task.
+	// Gate cmds are closed; interactive args go through `sayt <verb>`.
 	_taskCmdLine: L={
 		do:    string
 		shell: string
 		bw:    string
-		let _esc1 = strings.Replace(L.do, "\\", "\\\\", -1)
-		let _esc2 = strings.Replace(_esc1, "\"", "\\\"", -1)
+		// bayt/sayt-prefixed dos take the runtime-aware token (prefix
+		// form only — a mid-string `sayt` never rewrites).
+		let _do = [
+			if strings.HasPrefix(L.do, "bayt ") {_baytPath + strings.TrimPrefix(L.do, "bayt")},
+			if strings.HasPrefix(L.do, "sayt ") {_saytPath + strings.TrimPrefix(L.do, "sayt")},
+			L.do,
+		][0]
 		out: [
-			if L.shell == "exec" {"\(L.bw)\(L.do)"},
-			"\(L.bw)\(L.shell) -c \"\(_esc2)\"",
+			if L.shell == "exec" {"\(L.bw)\(_do)"},
+			"\(L.bw)\(L.shell) -c \"\((#shellQuote & {in: _do}).out)\"",
 		][0]
 	}
 
@@ -127,6 +143,7 @@ import (
 						do:    [if _o != _|_ && _o.do != _|_ {_o.do}, X.c.do][0]
 						shell: [if _o != _|_ && _o.shell != _|_ {_o.shell}, X.c.shell][0]
 						bw:    X.bw
+						ca:    X.ca
 					}).out
 					platforms: [os]
 				}
@@ -164,21 +181,26 @@ import (
 			(n): {
 				version: "3"
 
-				// Cross-project deps are intentionally omitted from the
-				// per-target Taskfile. go-task's `::` prefix inside a
-				// nested-included file escapes only to that file's own
-				// root (the including project's namespace), not the
-				// absolute launch root. Cross-project build ordering is
-				// handled by Docker's COPY --from chains in the
-				// Dockerfile; in-container stamp files from dep builds
-				// are COPYd in and the fingerprint Merkle chain reads
-				// them directly. Same-project deps (e.g. `::bayt:setup`)
-				// use `::` safely because setup lives in the same
-				// Taskfile root as build. Synthetic views (`:x:srcs`,
-				// `:x:outs`, `:x:bayt` — folded to `x_srcs`-style names)
-				// are packaging stages with no runnable task: they feed
-				// the Dockerfile COPY only, never the task chain.
-				let _sameProjectDeps = [for name in t.sameProjectDeps if !(name =~ "_(srcs|outs|bayt)$") {"::bayt:\(name)"}]
+				// Same-project deps use `::` (setup lives in the same
+				// Taskfile root as build). Cross-project deps cannot —
+				// go-task's `::` inside a nested include escapes only to
+				// that file's own root, not the absolute launch root — so
+				// they address the `cross_*` runners in bayt_root instead.
+				// `_srcs`/`_bayt` views are committed files — no runnable
+				// task, filtered from both. `_outs` views are PRODUCTS:
+				// on host the base target's run is what materializes
+				// them, so the ref maps to the base task.
+				let _sameRefs = [for name in t.sameProjectDeps if !(name =~ "_(srcs|bayt)$") {"::bayt:\(strings.TrimSuffix(name, "_outs"))"}]
+				let _sameProjectDeps = [for i, r in _sameRefs if !list.Contains(list.Slice(_sameRefs, 0, i), r) {r}]
+				let _crossRefs = [
+					for d in t.chainedDeps
+					if d.dir != G.project.dir
+					if !(d.name =~ "_(srcs|bayt)$") {
+						"::bayt:\((_crossName & {"d": {dir: d.dir, name: strings.TrimSuffix(d.name, "_outs")}}).out)"
+					},
+				]
+				let _crossDeps = [for i, r in _crossRefs if !list.Contains(list.Slice(_crossRefs, 0, i), r) {r}]
+				let _allDeps = list.Concat([_sameProjectDeps, _crossDeps])
 				// Cmds with a base `do` emit tasks; a cmd with only
 				// `dockerfile.do` is RUN-only (Dockerfile RUN, no task).
 				let _taskCmds = [for c in t.cmds if c.do != _|_ {c}]
@@ -190,9 +212,7 @@ import (
 					// target stamp short-circuits reruns via `status:`.
 					// When false, cmds emit raw — no machinery.
 					tasks: default: {
-						if t.taskfile.desc != _|_ {desc: t.taskfile.desc}
-						if t.taskfile.silent {silent: true}
-						if len(_sameProjectDeps) > 0 {deps: _sameProjectDeps}
+						if len(_allDeps) > 0 {deps: _allDeps}
 						if len(t.env) > 0 {env: t.env}
 
 						// status: target-level hash-check (no --cmd).
@@ -245,9 +265,10 @@ import (
 					let _last = _taskCmds[len(_taskCmds)-1].name
 
 					tasks: default: {
-						if t.taskfile.desc != _|_ {desc: t.taskfile.desc}
-						if t.taskfile.silent {silent: true}
-						deps: list.Concat([_sameProjectDeps, [_last]])
+						// _allDeps ride the first cmd-task; listing them
+						// here too would start them a second time, in
+						// parallel with the cmd chain.
+						deps: [_last]
 						if t.taskfile.incremental {
 							// Wrapper writes the target-level stamp (full
 							// union of all srcs). Cross-project consumers
@@ -270,9 +291,15 @@ import (
 						for i, _c in _taskCmds {
 							(_c.name): {
 								internal: true
-								// Deps chain: each cmd-task depends on the
-								// previous one (priority-ordered). The
-								// first cmd has no intra-target dep.
+								// Deps chain in priority order. The first
+								// cmd carries the target's dep set: deps
+								// anchored only on the default wrapper run
+								// parallel to the cmd chain — :generate
+								// would rewrite this target's manifest and
+								// cross runners would write stamps mid-read.
+								if i == 0 && len(_allDeps) > 0 {
+									deps: _allDeps
+								}
 								if i > 0 {
 									deps: [_taskCmds[i-1].name]
 								}
@@ -309,6 +336,45 @@ import (
 	bayt_root: {
 		version: "3"
 		let _relRootFromBayt = "../" + strings.Repeat("../", G._m._depth)
+
+		// cross_* gate runners — host-side merkle completion. The
+		// fingerprint chain reads dep-project stamps
+		// (`../../<dep>/.task/bayt/<t>.hash`); containers materialize
+		// them via COPY --from, but on the host only these runners
+		// produce and refresh them. One runner per cross-project
+		// chainedDep, union over all targets: living here (not in the
+		// per-target files) lets `run: once` dedupe a dep shared by
+		// build and deps within one graph walk. `task -t` into the
+		// dep's own launch root sidesteps the nested-include `::`
+		// limitation; `{{.TASK_EXE}}` pins the running task binary.
+		// The workspace-root `.git` probe skips runners in containers
+		// (images COPY no .git; the COPY chain is the stamp authority
+		// there). Recursion terminates at projects without cross deps;
+		// bayt's cycle checks forbid dep cycles.
+		let _rootRelFromProject = strings.Repeat("../", G._m._depth)
+		let _crossChain = {
+			for _, t in _emit
+			for d in t.chainedDeps
+			if d.dir != G.project.dir
+			if !(d.name =~ "_(srcs|bayt)$") {
+				let _b = {dir: d.dir, name: strings.TrimSuffix(d.name, "_outs")}
+				((_crossName & {"d": _b}).out): _b
+			}
+		}
+		if len(_crossChain) > 0 {
+			tasks: {
+				for k, d in _crossChain {
+					let _depPath = [if d.dir != "" {"\(d.dir)/"}, ""][0]
+					(k): {
+						internal: true
+						run:      "once"
+						status: ["test ! -e \(_rootRelFromProject).git"]
+						cmds: ["{{.TASK_EXE}} -t \(_rootRelFromProject)\(_depPath).bayt/Taskfile.yml bayt:\(d.name)"]
+					}
+				}
+			}
+		}
+
 		let _localIncludes = {
 			for n, _ in _emit {
 				(n): {

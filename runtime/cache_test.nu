@@ -19,8 +19,10 @@ def main [] {
 	print "Running cache.nu tests...\n"
 
 	test_miss_runs_cmd_and_stores
+	test_outs_exclude_filters_store
 	test_hit_restores_and_runs_cmd
 	test_hit_full_restores_without_running
+	test_corrupt_entry_degrades_to_miss
 	test_disabled_bypasses_entirely
 	test_failed_cmd_does_not_pollute_cache
 	test_gc_evicts_oldest_to_budget
@@ -54,6 +56,7 @@ def make-fixture []: nothing -> record {
 		dir: ""
 		srcs: {globs: ["input.txt"], exclude: []}
 		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
 		chainedDeps: []
 		cmds: []
 	} | to json | save -f $fix.manifest
@@ -102,9 +105,46 @@ def test_miss_runs_cmd_and_stores [] {
 	assert ($r.stdout | str contains "MARKER") "cmd stdout should reach caller on miss"
 	assert (($fix.output | path exists)) "output.txt should be written by the cmd"
 
-	# Cache directory has at least one shard with one entry.
+	# Cache directory has at least one shard with one entry, carrying
+	# the full v2 schema (both manifests are required by local-verify).
 	let entries = (glob ($fix.cache | path join "*/*") | where { |p| ($p | path type) == "dir" })
 	assert ((($entries | length) >= 1)) "expected at least one cache entry after miss"
+	let entry = ($entries | first)
+	for f in ["outs.manifest.json" "srcs.manifest.json" "metadata.json" "manifest.json"] {
+		assert ((($entry | path join $f) | path exists)) $"entry should carry ($f)"
+	}
+	assert ("inputs" not-in (open ($entry | path join "metadata.json") | columns)) "metadata.json should not carry inputs anymore"
+	print "  ok\n"
+}
+
+# outs.exclude prunes the store-side glob walk — tool-owned trees
+# (node_modules) must not enter the entry payload.
+def test_outs_exclude_filters_store [] {
+	print "test outs exclude filters stored payload..."
+	let fix = (make-fixture)
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["**/package.json"], exclude: ["**/node_modules/**"]}
+		state: {globs: []}
+		chainedDeps: []
+		cmds: []
+	} | to json | save -f $fix.manifest
+	mkdir ($fix.project | path join "pkg")
+	mkdir ($fix.project | path join "node_modules" "dep")
+	"{}" | save -f ($fix.project | path join "pkg" "package.json")
+	"{}" | save -f ($fix.project | path join "node_modules" "dep" "package.json")
+
+	let r = (run-cache $fix [sh -c "exit 0"])
+	assert ($r.exit == 0) $"unexpected exit: ($r.exit)"
+
+	let entries = (glob ($fix.cache | path join "*/*") | where { |p| ($p | path type) == "dir" and not ($p | str contains "_tmp") })
+	assert ((($entries | length) == 1)) "expected one cache entry"
+	let stored = (open (($entries | first) | path join "outs.manifest.json") | get path)
+	assert ("pkg/package.json" in $stored) "tracked package.json should be stored"
+	assert (($stored | where { |p| $p | str contains "node_modules" } | is-empty)) "excluded node_modules files must not be stored"
 	print "  ok\n"
 }
 
@@ -128,6 +168,30 @@ def test_hit_restores_and_runs_cmd [] {
 	assert ($r.exit == 0) $"unexpected exit: ($r.exit)"
 	assert ($r.stdout | str contains "SAW_RESTORED") "cmd should see restored output before running"
 	assert ((open $fix.output | str trim) == "modified") "cmd should have run and overwritten output"
+	print "  ok\n"
+}
+
+# Corrupt entry (payload truncated after store) → quarantined, treated
+# as a miss: the cmd runs again and the entry is re-stored.
+def test_corrupt_entry_degrades_to_miss [] {
+	print "test corrupt entry quarantined and rerun..."
+	let fix = (make-fixture)
+
+	run-cache $fix [sh -c "echo first > output.txt"]
+	# Hollow the stored payload: truncate the copied out inside the entry.
+	let payloads = (glob ($fix.cache | path join "*/*/outs/**/*") --no-dir)
+	assert (($payloads | length) >= 1) "precondition: entry payload exists"
+	"" | save -f ($payloads | first)
+	rm $fix.output
+
+	let r = (run-cache $fix [sh -c "echo repaired > output.txt && echo RAN"])
+	assert ($r.exit == 0) $"unexpected exit: ($r.exit)"
+	assert ($r.stdout | str contains "RAN") "cmd should have rerun (corrupt entry = miss)"
+	assert ((open $fix.output | str trim) == "repaired") "workspace out should be the rerun's"
+	# Quarantine + re-store: the fresh entry's payload matches the rerun.
+	let stored = (glob ($fix.cache | path join "*/*/outs/**/*") --no-dir)
+	assert (($stored | length) >= 1) "entry should be re-stored after quarantine"
+	assert ((open ($stored | first) | str trim) == "repaired") "re-stored payload should be fresh"
 	print "  ok\n"
 }
 
