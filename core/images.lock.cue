@@ -51,7 +51,8 @@ lock: images: {
 	// tarampampam/microcheck — tiny static healthcheck binaries
 	// (httpcheck, portcheck) for COPY-from in dockerfile preambles.
 	microcheck: "tarampampam/microcheck:1@sha256:79c187c05bfa67518078bf4db117771942fa8fe107dc79a905861c75ddf28dfa"
-	// mockserver/mockserver — HTTP mock with declarative expectations
-	// loaded from MOCKSERVER_INITIALIZATION_JSON_PATH.
-	mockserver: "mockserver/mockserver:mockserver-5.15.0@sha256:0f9ef78c94894ac3e70135d156193b25e23872575d58e2228344964273b4af6b"
+	// mockoon/cli — multi-arch (arm64+amd64) Node HTTP mock driven by a
+	// declarative environment file. Replaces mockserver, whose x86-only
+	// JVM image ran under qemu on Apple Silicon and never bound its port.
+	mockoon: "mockoon/cli:9.3.0@sha256:71b47e0ff0c4db496e63fc36a710ce971084e2e31f7504deb5cdf15555af598f"
 }

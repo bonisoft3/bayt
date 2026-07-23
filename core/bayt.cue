@@ -157,11 +157,12 @@ import (
 // noop — a #cmd that does no real work but emits a real RUN/cmd line
 // in every format. Use when a target needs a step in the chain (e.g.
 // to anchor a stamp, hold a place in the dep graph, or carry an
-// epilogue COPY) but has no actual command to run. Bare-exec form
-// across the board: `/bin/true` on Linux/macOS, `where /q where` on
-// Windows (where.exe is always at C:\Windows\System32\where.exe; the
-// /q flag suppresses output; looking for `where` itself reflexively
-// signals "this is a noop" in the source).
+// epilogue COPY) but has no actual command to run. Bare `true`, exec'd
+// externally so it resolves on PATH — portable across /usr/bin/true
+// (macOS) and /bin/true (the images), which a hardcoded path can't
+// span; keep it a bare name. Windows: `where /q where` (where.exe is
+// always at C:\Windows\System32\where.exe; /q suppresses output;
+// looking for `where` itself reflexively signals "this is a noop").
 //
 // Distinct from `cmd: <name>: null`, which drops the cmd from the
 // rulemap entirely — emitter writes nothing. Use null when there's

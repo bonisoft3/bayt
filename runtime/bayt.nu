@@ -11,9 +11,11 @@ def --wrapped "main cache run" [
 	--cmd: string = ""
 	--full
 	--similar
-	...cmd_args: string
+	...cmd_args                               # untyped: a typed `...string` rejects a bare keyword arg (`true`/`false`/`null`) at parse time
 ] {
-	let inner = if ($cmd_args | length) > 0 and ($cmd_args | first) == "--" { $cmd_args | skip 1 } else { $cmd_args }
+	let raw = if ($cmd_args | length) > 0 and ($cmd_args | first) == "--" { $cmd_args | skip 1 } else { $cmd_args }
+	# nu parsed a keyword arg as its bool/null value; stringify so it runs as a command
+	let inner = ($raw | each {|a| $a | into string })
 	cache main run --manifest $manifest --cmd $cmd --full=$full --similar=$similar -- ...$inner
 }
 
