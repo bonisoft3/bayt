@@ -1,0 +1,5 @@
+# CUE import path for the generated .bayt/render.cue driver, kept out of
+# generate.nu so copybara can rewrite the identity on a data file rather
+# than in nushell source: github.com/bonisoft3/bayt -> github.com/bonisoft3/bayt
+# on the mirror (copy.bara.sky **.nuon glob), matching the mirror's cue.mod.
+"github.com/bonisoft3/bayt/core:bayt"

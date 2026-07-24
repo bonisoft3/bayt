@@ -58,6 +58,10 @@
 
 use ../runtime/tools.nu [run-cue, run-nu]
 
+# Data file holding the render.cue core-package import, so copybara can
+# rewrite the mirror identity on the .nuon (not in this source). See it.
+const render_import_file = (path self | path dirname | path join "render_import.nuon")
+
 # BAYT_TIMING=1 prints generate phase timings to stderr.
 def print-timing [label: string, start: datetime] {
 	if ($env.BAYT_TIMING? | default "") != "" {
@@ -351,7 +355,8 @@ def pass1 [bayt_cue: string] {
 def write-render-driver [bayt_cue: string] {
 	let pkg = (open --raw $bayt_cue | lines | where ($it | str starts-with "package ") | first | str replace "package " "")
 	let driver = ($bayt_cue | path dirname | path join ".bayt" "render.cue")
-	atomic-write $driver $"// generated from bayt.cue — do not edit\npackage ($pkg)\n\nimport bayt_ \"bonisoft.org/plugins/bayt/core:bayt\"\n\ndepManifestsIn: {[string]: _}\nruntimeIn: *\"\" | string\n_render: \(bayt_.#render & {\"project\": project, depManifests: depManifestsIn, runtime: runtimeIn}\)\n"
+	let core_import = (open $render_import_file)
+	atomic-write $driver $"// generated from bayt.cue — do not edit\npackage ($pkg)\n\nimport bayt_ \"($core_import)\"\n\ndepManifestsIn: {[string]: _}\nruntimeIn: *\"\" | string\n_render: \(bayt_.#render & {\"project\": project, depManifests: depManifestsIn, runtime: runtimeIn}\)\n"
 }
 
 def pass2 [bayt_cue: string, dep_manifests: record] {

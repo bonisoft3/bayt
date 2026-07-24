@@ -851,7 +851,7 @@ Stacks are language presets. They unify verb fragments with language-specific `s
 ```cue
 // plugins/sayt/stacks/gradle.cue
 package gradle
-import "bonisoft.org/plugins/bayt/core:bayt"
+import "github.com/bonisoft3/bayt/core:bayt"
 
 #gradleProject: bayt.#project & {
     activate: *"mise x --" | string
@@ -893,7 +893,7 @@ import "bonisoft.org/plugins/bayt/core:bayt"
 ```cue
 // plugins/sayt/stacks/pnpm.cue
 package pnpm
-import "bonisoft.org/plugins/bayt/core:bayt"
+import "github.com/bonisoft3/bayt/core:bayt"
 
 #pnpmProject: bayt.#project & {
     activate: *"mise x --" | string
@@ -939,7 +939,7 @@ import "bonisoft.org/plugins/bayt/core:bayt"
 ```cue
 // plugins/sayt/stacks/sayt.cue — the self-hosted stack, shortest.
 package sayt
-import "bonisoft.org/plugins/bayt/core:bayt"
+import "github.com/bonisoft3/bayt/core:bayt"
 
 #saytProject: bayt.#project & {
     activate: *"mise x --" | string
@@ -974,7 +974,7 @@ Sayt self-hosts on the most opinionated stack. Everything defaults.
 
 ```cue
 package sayt
-import saytstack "bonisoft.org/plugins/bayt/stacks/saytstack"
+import saytstack "github.com/bonisoft3/bayt/stacks/saytstack"
 
 #sayt: saytstack.#saytProject & {
     dir:  "plugins/sayt"
@@ -994,7 +994,7 @@ Web adds a k8s image name and an expose for `launch`.
 
 ```cue
 package web
-import pnpm "bonisoft.org/plugins/bayt/stacks/pnpm"
+import pnpm "github.com/bonisoft3/bayt/stacks/pnpm"
 
 #web: pnpm.#pnpmProject & {
     dir:  "guis/web"
@@ -1018,7 +1018,7 @@ Tracker adds cross-project deps (xproto generation, libstoml config) and secret-
 ```cue
 package tracker
 import (
-    gradle "bonisoft.org/plugins/bayt/stacks/gradle"
+    gradle "github.com/bonisoft3/bayt/stacks/gradle"
     xproto "bonisoft.org/libraries/xproto"
     pbt    "bonisoft.org/libraries/pbtables"
     logs   "bonisoft.org/libraries/logs"

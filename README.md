@@ -50,8 +50,8 @@ Start with one target. Here's a gradle service:
 package my_service
 
 import (
-    bayt "bonisoft.org/plugins/bayt/core:bayt"
-    sayt "bonisoft.org/plugins/bayt/stacks/sayt"
+    bayt "github.com/bonisoft3/bayt/core:bayt"
+    sayt "github.com/bonisoft3/bayt/stacks/sayt"
 )
 
 _proj: sayt.gradle & {
