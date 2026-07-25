@@ -12,8 +12,13 @@ import (
 // Toolchain concept library.
 // =============================================================================
 
-// Cache mount for gradle's dependency + build cache.
-_cacheMount: {type: "cache", target: "/root/.gradle", scope: "project"}
+// gradle's dependency + build cache. scope: "global" (bare /root/.gradle,
+// shared across projects) so the wrapper dist + jars download once per builder.
+// Safe on sharing=shared: gradle file-locks $GRADLE_USER_HOME for concurrent
+// processes (docs.gradle.org/current/userguide/dependency_caching.html) — a
+// contended writer waits out its lock, never corrupts. Locks need a local fs;
+// buildkit mounts are builder-local.
+_cacheMount: {type: "cache", target: "/root/.gradle", scope: "global"}
 
 // The read-only dependency cache's in-image home. Gradle consults it
 // natively (GRADLE_RO_DEP_CACHE) before the writable user home and never
@@ -21,6 +26,12 @@ _cacheMount: {type: "cache", target: "/root/.gradle", scope: "project"}
 // never load-bearing — and unlike a copied live `caches/`, the RO cache
 // is designed to be relocated.
 roDepCacheDir: "/opt/gradle-ro-cache"
+
+// Baked GRADLE_USER_HOME: the pre-unpacked wrapper distribution as an image
+// layer, so the mount-less integrate runtime finds it offline instead of
+// refetching gradle-<v>-bin.zip. Outside /root/.gradle so the build-time mount
+// never shadows it. Filled by depsResolve.materialize; used by integrationTest.
+roUserHomeDir: "/opt/gradle-home"
 
 // Per-project gradle configuration cache. Lives at <build-root>/.gradle/
 // configuration-cache (project-local, NOT in $GRADLE_USER_HOME); the
@@ -57,17 +68,11 @@ _manifestGlobs: {
 	"libs-versions":     {glob: "gradle/lib[s].versions.toml"}
 }
 
-// gradle.depsResolve — the dependency closure as a real layer on a
-// dedicated `deps` target (opt-in; the consuming project's build
-// chains FROM it). The store is the project-shared
-// /root/.gradle mount every gradle cmd already mounts: the resolve
-// fills it (wrapper dist, jars, jdks), then copies caches/modules-2
-// into the RO dep cache, read by every downstream stage via the
-// inherited GRADLE_RO_DEP_CACHE env. Materializing the wrapper into
-// the layer is deliberately NOT done: downstream cmds mount the whole
-// user home, which would shadow it — the dist stays mount-side (one
-// bounded refetch per cold builder, needed only at build time), while
-// the many-artifact jar closure rides the layer.
+// gradle.depsResolve — the dependency closure as a real layer on a dedicated
+// `deps` target (the consuming build chains FROM it). resolve fills the shared
+// /root/.gradle mount (wrapper dist, jars, jdks); materialize copies two slices
+// OUT into layers — caches/modules-2 → roDepCacheDir and wrapper/ →
+// roUserHomeDir (both outside /root/.gradle, see those consts).
 // `--write-verification-metadata sha256 help` is gradle's
 // resolve-everything invocation (all resolvable configurations in all
 // projects, plugin classpaths included); the metadata file is a side
@@ -91,14 +96,13 @@ depsResolve: {
 		do:       *#"./gradlew --write-verification-metadata sha256 help && rm -f gradle/verification-metadata.xml"# | string
 		dockerfile: mounts: [_cacheMount]
 	}
-	// Phase 2 — copy the closure into the RO cache. RUN-only
-	// (`dockerfile.do`, see #cmd): a build-time `cp` into /opt with no host
-	// analogue (host gradle resolves into ~/.gradle natively).
-	// `network: "none"` on its own RUN (pure-local cp).
+	// Phase 2 — copy the two slices (modules-2, wrapper/) into image layers.
+	// RUN-only (`dockerfile.do`): a build-time `cp` into /opt, no host analogue
+	// (host gradle resolves into ~/.gradle natively). network:"none" (local cp).
 	cmd: "materialize": {
 		priority: 0
 		dockerfile: {
-			do:      *#"mkdir -p \#(roDepCacheDir) && cp -a \#(_cacheMount.target)/caches/modules-2 \#(roDepCacheDir)/"# | string
+			do:      *#"mkdir -p \#(roDepCacheDir) \#(roUserHomeDir) && cp -a \#(_cacheMount.target)/caches/modules-2 \#(roDepCacheDir)/ && cp -a \#(_cacheMount.target)/wrapper \#(roUserHomeDir)/"# | string
 			shell:   "sh"
 			mounts:  [_cacheMount]
 			network: "none"
@@ -199,15 +203,16 @@ test: {
 }
 
 // gradle.integrationTest — `./gradlew integrationTest --rerun`.
-// Integration test srcs (src/it/resources). Cache mount lives on the
-// target's dockerfile (not the cmd's), so it doesn't collide with
-// cmd-level mounts contributed by other fragments (e.g. a project-
-// supplied secret mount). Without it, integrate stages re-download
-// the gradle distribution + plugin jars into an empty /root/.gradle/
-// every run — visible as "Downloading
-// https://services.gradle.org/distributions/gradle-X.Y-bin.zip"
-// at the top of the integrate RUN.
+// Integration test srcs (src/it/resources). Cache mount on the target's
+// dockerfile (not the cmd's) so it doesn't collide with cmd-level mounts (e.g.
+// a project secret mount). integrate runs as a compose *runtime* command (no
+// build mount): GRADLE_USER_HOME → the baked roUserHomeDir so ./gradlew is
+// offline — no services.gradle.org dist refetch (the "Connection reset" flake).
+// Build RUNs keep the default /root/.gradle mount. Without an adopted `deps`
+// target roUserHomeDir is unbaked and gradle just downloads (no regression).
 integrationTest: bayt.cache.full & {
+	// Runtime-only (compose environment, never build RUNs).
+	compose: environment: GRADLE_USER_HOME: roUserHomeDir
 	// bayt.cache.full — same gradle-daemon-cold-start argument as
 	// assemble. integrationTest's outs are JUnit XMLs recording "it
 	// passed once with these inputs"; skipping means we trust that

@@ -59,6 +59,6 @@ _g4: gradle & {
 
 _g4: targets: deps: {
 	env: GRADLE_RO_DEP_CACHE: "/opt/gradle-ro-cache"
-	cmd: "resolve": dockerfile: mounts: [{type: "cache", target: "/root/.gradle", scope: "project"}]
+	cmd: "resolve": dockerfile: mounts: [{type: "cache", target: "/root/.gradle", scope: "global"}]
 	dockerfile: from: ref: ":setup"
 }
