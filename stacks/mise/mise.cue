@@ -16,34 +16,48 @@
 //   }
 package mise
 
-// Cache mount over mise's download store — the checksummed tarballs, not the
-// extracted tools. installs/ is layer content (never mounted), re-extracted
-// and re-verified against mise.lock every RUN, so a poisoned mount can't fake
-// "installed". `scope: "project"` (shared across a project's sibling targets),
-// NOT "global": mise unpacks the tarball into a fixed path in this dir with no
-// temp+rename, so concurrent installs across projects collide ("File exists").
-// Cross-project dedup needs a warmup or a locked mount — TODO, not this.
+// mise's download dir stays per-project: mise unpacks tarballs IN PLACE here
+// (no temp+rename), so a shared dir collides on concurrent extraction ("File
+// exists"). installs/ is layer content (never mounted), re-extracted and
+// re-verified against mise.lock every RUN, so a poisoned mount can't fake
+// "installed".
 _downloadsMount: {type: "cache", target: "/root/.local/share/mise/downloads", scope: "project"}
 
-// install — `mise install`. One cmd, identical on host and in-container:
-// installs land in mise's default data dir either way; the container only
-// adds the download mount (+ MISE_ALWAYS_KEEP_DOWNLOAD so the mount actually
-// retains tarballs — mise deletes them post-extract by default). Empty
-// `activate` so it runs without a `mise x --` wrap (mise's CLI is on PATH
-// via lazybox/leap, not its shim).
+// Global tarball store — checksummed tarballs only, shared across every project
+// so a tool (java ~180MB) is fetched once, not per project. Safe on
+// sharing=shared (scope: global) because WE write it with an atomic rename
+// (temp + mv); mise's own in-place unpack is what keeps downloads per-project.
+_tarballStore: {type: "cache", target: "/mise-tarball-store", scope: "global"}
+
+// install — `mise install`. The host runs it plainly; the container RUN dedups
+// tool downloads across projects via _installScript's two-phase.
+// MISE_ALWAYS_KEEP_DOWNLOAD keeps the tarball for the publish step.
 install: {
 	activate: ""
 	env: MISE_ALWAYS_KEEP_DOWNLOAD: "1"
 	cmd: "builtin": {
 		priority: -1
-		do:       *"mise install" | string
-		dockerfile: mounts: [_downloadsMount]
-		// Concrete (not disjunction-default) — list disjunctions inside
-		// the cmd map break MapToList's `if v != null`. Override via cmd
-		// nullification: `Mise.install & {cmd: "builtin": null} & {...}`.
+		// Host task: plain `mise install` (portable, no container store).
+		do: *"mise install" | string
+		// Container RUN: the seed/install/publish two-phase — only here do the
+		// mounts and /root paths exist. `dockerfile.do` overrides the base `do`
+		// in the Dockerfile, so the host never runs this shell/linux script.
+		dockerfile: {
+			do:     *_installScript | string
+			shell:  "sh"
+			mounts: [_downloadsMount, _tarballStore]
+		}
 		srcs: globs: installFiles.globs
 	}
 }
+
+// Container two-phase: seed the per-project download dir from the global store
+// (mise then skips the fetch); `mise install || exit` (unpack stays per-project
+// — mise moves it to installs/, leaving only tarballs here — and a real install
+// error fails the RUN); publish the new tarballs back, best-effort via atomic
+// mktemp+mv (trailing `:`) so a torn dedup write can't fail a good install.
+// cp -r (not the non-POSIX -n): overwrites are content-identical.
+_installScript: #"d=/root/.local/share/mise/downloads; s=/mise-tarball-store; mkdir -p "$d" "$s"; cp -r "$s"/. "$d"/ 2>/dev/null || true; mise install || exit; cd "$d" && for f in */*/*; do [ -f "$f" ] || continue; o="$s/$f"; [ -e "$o" ] && continue; mkdir -p "$(dirname "$o")"; t="$(mktemp "$(dirname "$o")/.pXXXXXX")" && cp "$f" "$t" && mv -f "$t" "$o"; done; :"#
 
 // installFiles — canonical list of mise's manifest files. Exposed
 // as a constant so a workspace-root project that stages these
