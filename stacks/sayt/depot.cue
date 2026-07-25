@@ -15,7 +15,7 @@ depot: D={
 		depot: true
 		bake: {
 			cache: {type: "registry", registry: "registry.depot.dev/\(D.projectId)", scope: D.scope}
-			images: {pull: true, registry: "\(D.orgId).registry.depot.dev"}
+			images: {pull: true, registry: "\(D.orgId).registry.depot.dev/\(D.projectId)"}
 		}
 	}
 }
