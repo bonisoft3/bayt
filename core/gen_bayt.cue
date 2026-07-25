@@ -85,10 +85,11 @@ _expandCopy: {
 		// same-project deps)" — derived, not hand-listed. Used by the
 		// emitters (compose, taskfile bayt namespace) to wire
 		// cross-project includes / requires automatically.
-		crossProjectDirs: (_uniqStrings & {in: [
-			for n, t in G.project.targets if t != null
-			for d in _transitiveCrossDeps[n] {d.dir}
-		]}).out
+		crossProjectDirs: (_uniqStrings & {in: list.Concat([
+			[for n, t in G.project.targets if t != null
+			for d in _transitiveCrossDeps[n] {d.dir}],
+			_copyFedDirs,
+		])}).out
 
 		// Gradle-stack targets pass `--init-script .bayt/init.gradle.kts`
 		// (stacks/gradle _initFlag). Emitters gate the file and its COPY
@@ -415,6 +416,20 @@ _expandCopy: {
 			"\(n)_srcs": (_computeTransitiveCross & {name: "\(n)_srcs"}).out
 		}
 	}
+
+	// _copyFedDirs — cross-project dirs pulled in via typed copy.from.ref, so
+	// the producer's compose is federated and its service: context resolves.
+	// Kept OUT of _targetCrossDeps by design: that list renders COPY edges, and
+	// a copy-ref there would duplicate the COPY the user already wrote.
+	_copyFedDirs: [
+		for n, t in G.project.targets if t != null
+		if t.dockerfile != _|_
+		for c in list.Concat([t.dockerfile.copy, (_expandCopy & {in: t.dockerfile.defaultCopy}).out])
+		if c.from != null if c.from.ref != _|_
+		if strings.Contains(c.from.ref, ":") if !strings.HasPrefix(c.from.ref, ":")
+		let _m = G.depManifests[c.from.ref]
+		for _d in list.Concat([[_m.dir], [for x in _m.transitiveCrossDeps {x.dir}]]) {_d},
+	]
 
 	// Repo-root-relative compose-fragment path for a dep at (dir, name).
 	// Synthetic names map to their parent fragment — the `_srcs`/`_outs`

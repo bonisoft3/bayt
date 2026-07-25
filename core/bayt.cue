@@ -561,6 +561,9 @@ noop: #cmd & {
 	command?:    null | [...string] | string
 	entrypoint?: null | [...string] | string
 	environment:  [string]: string
+	// On bake-reachable targets use `{path, required: false}`: depot bake stats
+	// env_file paths at load, so a runtime file absent from the build context
+	// fails the bake ("env file not found").
 	env_file?: string | [...(string | {path: string, required?: bool})]
 	ports:        [...string]
 	volumes:      [...string]

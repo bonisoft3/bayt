@@ -372,25 +372,19 @@ def pass2 [bayt_cue: string, dep_manifests: record] {
 	$r.stdout | from json
 }
 
-# cross-dep-strings returns the unique cross-project refs from a targets
-# record — collected from both `t.deps` and `t.dockerfile.from.ref`.
-# Bazel-style: same-project refs start with `:`, cross-project refs
-# have a non-empty project prefix — we keep the latter. From-refs flow
-# through the same federation pipeline as deps so a consumer chaining
-# `dockerfile: from: ref: "X:Y"` doesn't also need to declare `deps: ["X:Y"]`.
+# cross-dep-strings — unique cross-project refs from a targets record: deps,
+# dockerfile.from.ref, and dockerfile.copy[].from.ref (+ defaultCopy). Feeds
+# manifest loading and cycle detection; same-project (":"-prefixed) refs drop.
 def cross-dep-strings [targets: record] {
-	let dep_refs = ($targets
-		| values
-		| each {|t| ($t.deps? | default []) | where {|d| not ($d | str starts-with ":")}}
-		| flatten)
-	let from_refs = ($targets
-		| values
-		| each {|t|
-			let r = ($t.dockerfile?.from?.ref? | default "")
-			if ($r | is-not-empty) and not ($r | str starts-with ":") { [$r] } else { [] }
-		}
-		| flatten)
-	$dep_refs | append $from_refs | uniq
+	$targets | values | each {|t|
+		let copies = (($t.dockerfile?.copy? | default [])
+			| append ($t.dockerfile?.defaultCopy? | default {} | values | where {|c| $c != null}))
+		[
+			...($t.deps? | default [])
+			($t.dockerfile?.from?.ref? | default "")
+			...($copies | each {|c| $c.from?.ref? | default "" })
+		]
+	} | flatten | where {|r| ($r | is-not-empty) and not ($r | str starts-with ":")} | uniq
 }
 
 # load-dep-manifests loads .bayt/bayt.<target>.json for each cross-project
