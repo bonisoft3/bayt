@@ -207,29 +207,23 @@ import (
 		}
 	}
 
-	// _mount renders one `--mount=...` directive. Cache-mount id and
-	// sharing are synthesised from the (project, name) pair: per-target
-	// locked by default, per-project shared for `scope: "project"`
-	// mounts (tool-managed stores); the #mount schema's disjunction
-	// already disallows user-supplied id on cache mounts.
+	// _mount renders one `--mount=...` directive. For cache mounts the emitter
+	// owns id + sharing, keyed by scope (see #mount); other mounts pass `id`.
 	_mount: {
 		m:       #dockerfile.#mount
 		project: string
 		name:    string
 		out:     string
 		let _t  = m.type
-		let _tg = [if m.target != _|_                {",target=\(m.target)"}, ""][0]
-		let _sc = [if m.source != _|_                {",source=\(m.source)"}, ""][0]
-		let _rq = [if m.required                     {",required=true"},      ""][0]
-		// id: synthesised for cache, user-provided for everything else.
+		let _tg = [if m.target != _|_ {",target=\(m.target)"}, ""][0]
+		let _sc = [if m.source != _|_ {",source=\(m.source)"}, ""][0]
+		let _rq = [if m.required {",required=true"}, ""][0]
+		let _lockedId  = ",id=\(project)-\(name):\(m.target),sharing=locked"
+		let _projectId = ",id=\(project):\(m.target),sharing=shared"
+		let _globalId  = ",id=\(m.target),sharing=shared"
 		let _id = [
-			if m.type == "cache" && m.scope != _|_ {
-				",id=\(project):\(m.target),sharing=shared"
-			},
-			if m.type == "cache" {
-				",id=\(project)-\(name):\(m.target),sharing=locked"
-			},
-			if m.type != "cache" && m.id != _|_ {",id=\(m.id)"},
+			if m.type == "cache" {{target: _lockedId, project: _projectId, global: _globalId}[m.scope]},
+			if m.id != _|_ {",id=\(m.id)"},
 			"",
 		][0]
 		out: "--mount=type=\(_t)\(_tg)\(_sc)\(_id)\(_rq)"

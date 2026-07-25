@@ -9,11 +9,12 @@
 // stay plain exec-form. The host keeps go's default shared modcache.
 package go
 
-// Cache mounts at go's default root-user cache paths. Inside a stage
-// the paths are cache mounts; on the host the same command hits the
-// developer's regular caches — one command line serves both sides.
-_modCacheMount:   {type: "cache", target: "/root/go/pkg/mod", scope: "project"}
-_buildCacheMount: {type: "cache", target: "/root/.cache/go-build", scope: "project"}
+// Cache mounts at go's default cache paths — mounts inside a stage, the dev's
+// real caches on the host (one command serves both). `scope: "global"`, shared
+// like a dev machine's single GOMODCACHE/GOCACHE: safe because go verifies
+// entries (go.sum, build-cache action-ID hashes).
+_modCacheMount:   {type: "cache", target: "/root/go/pkg/mod", scope: "global"}
+_buildCacheMount: {type: "cache", target: "/root/.cache/go-build", scope: "global"}
 
 // The materialized module closure's project-local home.
 depsDir: ".gomodcache"

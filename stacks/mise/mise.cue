@@ -16,13 +16,13 @@
 //   }
 package mise
 
-// Cache mount over mise's download store only — the checksummed tarballs,
-// NOT the extracted tools. `installs/` (a sibling, not mounted) is rebuilt
-// in the layer on every RUN, so a stale/poisoned mount can't fake "already
-// installed": `installs/` is empty at RUN start, mise re-extracts, and
-// re-verifies each kept tarball against mise.lock (a corrupt one → refetch).
-// This is what makes the store safe to share; the extracted tree stays
-// deterministic and in-layer.
+// Cache mount over mise's download store — the checksummed tarballs, not the
+// extracted tools. installs/ is layer content (never mounted), re-extracted
+// and re-verified against mise.lock every RUN, so a poisoned mount can't fake
+// "installed". `scope: "project"` (shared across a project's sibling targets),
+// NOT "global": mise unpacks the tarball into a fixed path in this dir with no
+// temp+rename, so concurrent installs across projects collide ("File exists").
+// Cross-project dedup needs a warmup or a locked mount — TODO, not this.
 _downloadsMount: {type: "cache", target: "/root/.local/share/mise/downloads", scope: "project"}
 
 // install — `mise install`. One cmd, identical on host and in-container:

@@ -10,8 +10,10 @@ import "list"
 // Toolchain concept library.
 // =============================================================================
 
-// Cache mount for pnpm's download store.
-storeMount: {type: "cache", target: "/root/.local/share/pnpm/store", scope: "project"}
+// Cache mount for pnpm's content-addressable store. `scope: "global"`:
+// shared across projects (pnpm's own model — CAS + exclusive-create writes
+// make concurrent access safe).
+storeMount: {type: "cache", target: "/root/.local/share/pnpm/store", scope: "global"}
 
 // installFlags — exported so consumer overrides of the install `do`
 // (e.g. adding `--filter <pkg>...`) can't drift the flag set:

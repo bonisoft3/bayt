@@ -230,34 +230,6 @@ noop: #cmd & {
 	// the project name explicitly.
 	_project: string
 
-	// #mount — BuildKit mount spec, discriminated by `type`. Nested
-	// here because it's dockerfile-domain (BuildKit syntax) and
-	// consumed only by emitters that touch dockerfile output: this
-	// block's `mounts` and the per-cmd `#cmd.dockerfile.mounts`
-	// decoration.
-	//
-	// The disjunction enforces per-type field shapes:
-	//   - Cache mounts can't carry `id` or `sharing` — the emitter
-	//     synthesises both. Default: per-target id + locked. Every
-	//     other free-form mode has subtle problems:
-	//       - `sharing=shared` lets concurrent RUNs touch the cache
-	//         while buildkit is still using it for layer reuse,
-	//         silently rebuilding layers on subsequent runs.
-	//       - `sharing=private` hands every RUN a fresh empty cache;
-	//         no reuse at all.
-	//       - `sharing=locked` with the default id (the mount target
-	//         path) serialises every parallel RUN that mounts the
-	//         same path on one global lock, killing cold-build
-	//         parallelism.
-	//     Trade-off: each (project, target) keeps its own cache slot.
-	//     `scope: "project"` opts a mount into a per-project id with
-	//     sharing=shared, so sibling targets (test ∥ integrate) share
-	//     one store without lock serialisation. Reserve it for
-	//     tool-managed stores whose own locking makes concurrent
-	//     multi-process access a documented guarantee (pnpm store,
-	//     go modcache, gradle user home) — isolation is the safety
-	//     mechanism for everything else.
-	//   - Secret/ssh mounts accept `id` (the secret/ssh-key name).
 	// #add — one `add` entry.
 	//   local:  {src, dest}         — build-context path; tar archives
 	//                                 auto-extract (unpack: false keeps
@@ -281,10 +253,19 @@ noop: #cmd & {
 		unpack?: bool
 	})
 
+	// #mount — a BuildKit RUN mount, discriminated by `type`, consumed by the
+	// dockerfile emitter (this block's `mounts` + #cmd.dockerfile.mounts). For
+	// cache mounts the emitter owns `id`+`sharing` (users can't set them),
+	// keyed by `scope`: "target" (default) = per-(project,target), locked
+	// (isolation); "project" = per-project, shared (sibling targets);
+	// "global" = the bare target path, shared (every project). Use a shared
+	// scope only for tool stores whose own content verification makes
+	// concurrent access safe (mise, go, pnpm, gradle). Secret/ssh mounts take
+	// `id` (the secret / key name).
 	#mount: {
 		type:   "cache"
 		target: string
-		scope?: "project"
+		scope: *"target" | "project" | "global"
 		required: *false | bool
 	} | {
 		type:     "secret"
