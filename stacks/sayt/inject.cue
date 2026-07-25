@@ -131,6 +131,7 @@ inject: {
 		// depot path. Build secrets (not ENV) so the token never lands in a layer.
 		depot_token:               environment: "DEPOT_TOKEN"
 		depot_project_id:          environment: "DEPOT_PROJECT_ID"
+		depot_org_id:              environment: "DEPOT_ORG_ID"
 		// depot_disable_otel — integrate.nu sets DEPOT_DISABLE_OTEL=1; injected
 		// here so the inner `depot bake` doesn't abort on the OTEL schema clash
 		// from the trace-context vars depot's builder puts in RUN steps.
@@ -158,6 +159,7 @@ inject: {
 			{id: "sayt_no_cache_to",     var: contents: "SAYT_NO_CACHE_TO"},
 			{id: "depot_token",          var: contents: "DEPOT_TOKEN"},
 			{id: "depot_project_id",     var: contents: "DEPOT_PROJECT_ID"},
+			{id: "depot_org_id",         var: contents: "DEPOT_ORG_ID"},
 			{id: "depot_disable_otel",   var: contents: "DEPOT_DISABLE_OTEL"},
 			// Keep the instance as contents and install it in a guarded pre-step.
 			// The static secret list keeps this RUN cache-compatible with every
