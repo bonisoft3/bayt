@@ -114,7 +114,8 @@ _v2_vs: files: {[!~"^(build|test)$"]: _|_}
 // #bakeGen
 // ============================================================================
 
-// --- B1: release with a bake block emits a non-empty HCL string.
+// --- B1: release with a bake block emits the HCL whose matrix embeds the
+// federated target name.
 _bk1: #project & {
 	name: "bk1"
 	dir:  "bk1"
@@ -127,7 +128,7 @@ _bk1: #project & {
 	}
 }
 _bk1_bk: (#bakeGen & {project: _bk1, depManifests: {}})
-_bk1_bk: files: release: string
+_bk1_bk: hcl: =~"matrix = \\{ t = \\[\"bk1-release\"\\] \\}"
 
 // --- B2: a bake block without `image` is compose-x-bake-only, so
 // #bakeGen emits no HCL for it (gated on `t.bake.image != _|_`).
@@ -146,8 +147,8 @@ _bk2: #project & {
 	}
 }
 _bk2_bk: (#bakeGen & {project: _bk2, depManifests: {}})
-// No image → no HCL file emitted (closed-field check on files).
-_bk2_bk: files: {[_]: _|_}
+// No image → no HCL emitted.
+_bk2_bk: hcl?: _|_
 
 // Public aggregator forces evaluation of the hidden bindings.
 Tests: skaffold_vscode_bake: {

@@ -727,8 +727,10 @@ noop: #cmd & {
 //   docker — build via .bayt/<n>.Dockerfile.
 //   custom — arbitrary buildCommand string. Use for tools skaffold
 //            doesn't speak natively (jib via gradle, ko, …).
-//   bake   — sugar for `custom`. The emitter expands {file, target}
-//            into `docker buildx bake -f <file> <target>`.
+//   bake   — sugar for `custom`. gen_skaffold expands {target} into the
+//            `docker compose config | docker buildx bake -f .bayt/bake.hcl`
+//            buildCommand; `target` is the federated compose name, a bare
+//            positional the HCL matrix names.
 #skaffoldArtifact: {
 	// image — registry ref the artifact builds. Optional so a stack can
 	// seed activation + dockerfile defaults without forcing every
@@ -749,7 +751,7 @@ noop: #cmd & {
 	}
 	docker?: {dockerfile: string}
 	custom?: {buildCommand: string}
-	bake?:   {file: string, target: string}
+	bake?:   {target: string}
 }
 
 #vscode: {

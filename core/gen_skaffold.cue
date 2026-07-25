@@ -45,8 +45,11 @@ import (
 				activation: P.p.activation
 			}
 			let _a = P.p.build.artifact
+			// bake sugar → the bare-positional bake invocation; `target` is
+			// the federated compose name. See gen_bake.cue for the form and
+			// why it stays positional.
 			let _bakeBuildCommand = [
-				if _a.bake != _|_ {"docker buildx bake -f \(_a.bake.file) \(_a.bake.target)"},
+				if _a.bake != _|_ {"docker compose config | docker buildx bake --allow=fs.read=../.. -f- -f .bayt/bake.hcl \(_a.bake.target)"},
 				"",
 			][0]
 			build: {

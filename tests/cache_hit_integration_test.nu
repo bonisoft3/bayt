@@ -39,7 +39,8 @@ FROM __BB__ AS ctxs
 WORKDIR /monorepo
 COPY --parents __PROJ__/app.txt ./
 ARG SOURCE_DATE_EPOCH
-RUN touch -hd @${SOURCE_DATE_EPOCH:-0} /tmp/ref && find /monorepo -newer /tmp/ref -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && rm /tmp/ref
+ARG BAYT_CLAMP=1
+RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then find /monorepo -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} +; fi
 FROM scratch AS __PROJ___srcs
 COPY --from=ctxs /monorepo /monorepo
 '##

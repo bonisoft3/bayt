@@ -45,6 +45,15 @@ import (
 	"strings"
 )
 
+// #buildkitSyntax — the external Dockerfile frontend pin. Generated
+// Dockerfiles use `COPY --parents` with no committed `# syntax=` line,
+// so BuildKit/depot need the BUILDKIT_SYNTAX build-arg to select a
+// frontend that understands `--parents`. Emitted as a build arg on
+// every buildable compose service (below) so it rides the compose /
+// depot flatten — no `--set` at any bake call site. Matches the
+// sayt/depot action default (which overrides with the same value).
+#buildkitSyntax: "docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"
+
 #dockerComposeGen: G={
 	project: #project
 	depManifests:   {[string]: _}
@@ -911,27 +920,44 @@ import (
 		out: [for d in D.t.chainedDeps if d.name != "bayt" if (_depHasSrcs & {"d": d}).out {d}]
 	}
 
-	// _clampFlatten — the shared synthetic-image skeleton. A busybox
-	// `_ctxs` stage runs `bodyLines` to assemble /monorepo, clamps every
-	// mtime to SOURCE_DATE_EPOCH (buildkit leaves implicitly-created dirs
-	// at build time, so the digest would otherwise float; busybox `find`
-	// lacks `-newermt`, hence the reference-file dance), then flattens into
-	// `FROM scratch AS stage`. The clamp+flatten is what gives synthetics a
-	// stable digest for service-graph dedup — an inline normalise can't
-	// (the underlying COPY layers still float). See
-	// docs/bayt-synthetic-digest-investigation.md.
+	// _clampFlatten — the shared synthetic-image skeleton. A busybox `_ctxs`
+	// stage runs `bodyLines` to assemble /monorepo, normalises the host-COPY'd
+	// subtree's mtimes to SOURCE_DATE_EPOCH, then flattens into
+	// `FROM scratch AS stage` so the synthetic has a stable digest for
+	// service-graph dedup (an inline normalise can't — the COPY layers still
+	// float). See docs/bayt-synthetic-digest-investigation.md.
+	//
+	// `find` is scoped to `workdir`: chained-dep content arrives via
+	// `COPY --from=<dep> /monorepo /monorepo` already at EPOCH and preserved, so
+	// only the host-COPY'd subtree floats. Ancestor dirs above workdir float too
+	// (buildkit stamps implicitly-created dirs at build time) but sit outside the
+	// scoped walk, so they are clamped explicitly.
+	// `BAYT_CLAMP=0` skips the clamp to measure its cost (the digest then floats).
 	_clampFlatten: F={
 		ctxsStage: string
 		stage:     string
 		workdir:   string
 		bodyLines: [...string]
 		out:       string
+
+		// Strict ancestor dirs of workdir: "/monorepo/guis/web" →
+		// ["/monorepo", "/monorepo/guis"]; empty when workdir is /monorepo.
+		_wdSegs: strings.Split(F.workdir, "/")
+		_ancestors: [for i, _ in _wdSegs if i >= 2 {strings.Join(list.Slice(_wdSegs, 0, i), "/")}]
+
+		_epoch: "@${SOURCE_DATE_EPOCH:-0}"
+		_clamp: strings.Join(list.Concat([
+			["find \(F.workdir) -exec touch -hd \(_epoch) {} +"],
+			[if len(_ancestors) > 0 {"touch -hd \(_epoch) \(strings.Join(_ancestors, " "))"}],
+		]), " && ")
+
 		out: strings.Join(list.Concat([
 			["FROM \(lock.images.busybox) AS \(F.ctxsStage)", "WORKDIR \(F.workdir)"],
 			F.bodyLines,
 			[
 				"ARG SOURCE_DATE_EPOCH",
-				"RUN touch -hd @${SOURCE_DATE_EPOCH:-0} /tmp/ref && find /monorepo -newer /tmp/ref -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && rm /tmp/ref",
+				"ARG BAYT_CLAMP=1",
+				"RUN if [ \"${BAYT_CLAMP:-1}\" != 0 ]; then \(_clamp); fi",
 				"FROM scratch AS \(F.stage)",
 				"COPY --from=\(F.ctxsStage) /monorepo /monorepo",
 			],
@@ -1113,6 +1139,8 @@ import (
 				context:    ".."
 				dockerfile: ".bayt/Dockerfile.\(n)"
 				target:     n
+
+				args: BUILDKIT_SYNTAX: #buildkitSyntax
 
 				// Dep services become additional build contexts so the
 				// Dockerfile can `COPY --from=<svc>`. Same-project deps
@@ -1447,6 +1475,7 @@ import (
 				context: ".."
 				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
+				args: BUILDKIT_SYNTAX: #buildkitSyntax
 				if len(_depCtxEntries) > 0 {
 					additional_contexts: {
 						for e in _depCtxEntries {
@@ -1476,6 +1505,7 @@ import (
 				context: ".."
 				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
+				args: BUILDKIT_SYNTAX: #buildkitSyntax
 				additional_contexts: {
 					(_parent): "service:\(_parent)"
 				}
@@ -1499,6 +1529,7 @@ import (
 				context:    ".."
 				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
+				args: BUILDKIT_SYNTAX: #buildkitSyntax
 				if len(_chain) > 0 {
 					additional_contexts: {
 						for e in _chain {

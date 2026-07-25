@@ -234,8 +234,11 @@ def write-bundle [bundle: record, base: string, --depot] {
 	}
 
 	# --- bake HCL
-	for entry in ($bundle.bake.files | transpose name body) {
-		atomic-write $"($prefix).bayt/bake.($entry.name).hcl" (_hash-header $entry.body)
+	# One bake HCL per project; its matrix names every federated target so
+	# a bake positional selects which one builds. Emitted only when a
+	# release target wants it.
+	if ($bundle.bake.hcl? | is-not-empty) {
+		atomic-write $"($prefix).bayt/bake.hcl" (_hash-header $bundle.bake.hcl)
 	}
 
 	# --- gradle init script (gradle-stack projects only)
@@ -289,8 +292,10 @@ def write-bundle [bundle: record, base: string, --depot] {
 #     their outputs, so every image the run phase pulls must be named in the
 #     group; build-only intermediates stay implicit (built, cache-only). That's
 #     what lets the build job go checkout-free:
-#       depot bake <git-ref> -f <proj>/.bayt/depot.yaml -f <proj>/.bayt/depot.hcl \
-#         --set "*.args.BUILDKIT_SYNTAX=…" depot-build
+#       depot bake <git-ref> -f <proj>/.bayt/depot.yaml -f <proj>/.bayt/depot.hcl depot-build
+#     BUILDKIT_SYNTAX rides depot.yaml's per-service build.args (see
+#     gen_compose #buildkitSyntax); the depot action still passes a
+#     matching `--set` override, harmless.
 # `--no-interpolate` requires docker; the docker-CLI dep is why this is behind
 # --depot.
 def emit-depot-yaml [proj_dir: string, ws: string] {

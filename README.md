@@ -473,6 +473,7 @@ plugins/bayt/
     ├── test-bayt.nu         (positive + negative suite runner)
     ├── cache_hit_integration_test.nu
     ├── diamond_dedup_integration_test.nu
+    ├── scoped_clamp_integration_test.nu
     └── _negative/           (intentional-cycle test; separate CUE package)
 ```
 
