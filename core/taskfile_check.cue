@@ -248,7 +248,6 @@ _t10_tf: (#taskfileGen & {project: _t10, depManifests: {
 		project:    "libx"
 		dir:        "libs/x"
 		outs: {globs: ["out/**"], exclude: []}
-		class: "build"
 	}
 	"workspaceroot:setup": {
 		visibility: "public"
@@ -256,7 +255,6 @@ _t10_tf: (#taskfileGen & {project: _t10, depManifests: {
 		project:    "workspaceroot"
 		dir:        ""
 		outs: {globs: [], exclude: []}
-		class: "build"
 	}
 }})
 _t10_tf: bayt_root: tasks: cross_libs_x_build: {

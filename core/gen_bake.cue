@@ -21,9 +21,11 @@ import (
 
 	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
 
-	// Release targets that declare a real image binding. Plain `bake: {}`
-	// (compose-x-bake-only cache wiring) has no image and is skipped — it
-	// wants no skaffold buildCommand.
+	// Release targets: `bake.image` names the registry ref, so the HCL is the
+	// build recipe skaffold / goreleaser / depot bake with (whether they push
+	// is the PUSH_IMAGE env var, not a generate-time decision). Plain `bake: {}`
+	// (compose-x-bake-only cache wiring) has no image and is skipped — it wants
+	// no skaffold buildCommand.
 	_emit: {for n, t in G._m.files if t.bake != _|_ if t.bake.image != _|_ {(n): t}}
 
 	// Federated target names (<project.name>-<n>), sorted for a stable

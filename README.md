@@ -91,7 +91,8 @@ Every `#target` is described by a small, fixed set of fields. Declare them once,
 | `outs.exclude`   | Glob patterns pruned from outs.                                     | —                   |
 | `deps`           | Other targets to build first. Strings (same-project: `:target`, cross-project: `project:target`). | `deps`              |
 | `visibility`     | `"internal"` (default) or `"public"`. Public targets are consumable cross-project. | `visibility` |
-| `class`          | `"build"` (default) or `"runtime"`. Dep edges touching a runtime target carry only its declared `outs` (the interface), not the whole workdir; empty-outs edges are ordering-only. `launch`/`release` verbs set it. | — |
+| `bake.image`     | Registry ref of a release image; its presence emits the bake build recipe. Push vs load is the `$PUSH_IMAGE` env at bake time. The `release` verb takes it. | — |
+| `compose.up` / `compose.manual` | Runtime role: `up` is a load-by-name entry (launch, integrate); `manual` keeps a harness off the bare-`up` stack at `scale: 0` (reached by targeting it). | — |
 | `cmd`            | The action to run. Shorthand `do: "cmd"` or the full rulemap.       | `cmd` / `exec`      |
 | `env`            | Environment variables passed to cmd.                                | `env` (via `--action_env`) |
 | `activate`       | Toolchain prefix (usually `mise x --`). Defaults from `#project`.   | `toolchains`        |
@@ -364,13 +365,13 @@ Emitted under `.bayt/`:
 
 The `.bayt/` directory is generated but committed. A single `sayt generate` (or `bayt generate --all`) rebuilds the whole tree atomically.
 
-A bare `docker compose up` starts exactly the runtime stack: class-runtime
-targets with a `compose:` block (launch, release-* service siblings). All
-other services — build-graph stages, the `_srcs`/`_outs`/`bayt` synthetics,
-and by-name harnesses like integrate — are emitted with `scale: 0`: they stay
-in the model so `service:` build contexts resolve, but no container is
-created. The root's short-name aliases are profile-gated under their own
-names, so `docker compose up integrate` still works (naming a service
+A bare `docker compose up` starts exactly the runtime stack: the non-`manual`
+targets with a `compose:` block (launch, release-* service siblings).
+Build-graph stages, the `_srcs`/`_outs`/`bayt` synthetics, and `compose.manual`
+harnesses (integrate) are emitted with `scale: 0` — in the model so `service:`
+build contexts resolve, but no container. The root's short-name aliases are
+profile-gated under their own names, so `docker compose up integrate` still
+works — it targets the alias (`scale: 1`) and runs the harness (naming a service
 auto-activates its profiles) without the alias joining a bare up. Combine
 with `--no-build` (or `BAYT_PULL_POLICY=missing` under `images: pull`) for a
 runtime-only up that never touches the build graph. Anything that flattens

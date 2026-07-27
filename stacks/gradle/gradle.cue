@@ -267,7 +267,7 @@ JibRelease: {
 // GradleRelease — generic gradle artifact producer. Used either as
 // the entire release (non-image releases: JAR published, distTar
 // shipped) or as the upstream artifact-production stage feeding into
-// a JibRelease-shaped image (tracker's `release-artifact`).
+// a JibRelease-shaped image (a `release-artifact` target).
 //
 // `_target` picks the gradle task. Defaults to `distTar` (the
 // application plugin's distribution tarball — neutral choice for

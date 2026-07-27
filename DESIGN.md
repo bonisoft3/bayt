@@ -402,6 +402,26 @@ Per-format translation:
 | **vscode** | `dependsOn: [<dep-label>]`, `dependsOrder: sequence`. | vscode runs in order. |
 | **bake** | `contexts: { <dep-name>: "target:<dep-name>" }` — bake-native cross-target wiring. | Bake native. |
 
+### Runtime bring-up: `bake.image` / `compose.up` / `compose.manual`
+
+A target's build/runtime role is set by flags on the config they govern:
+
+- **`bake.image`** — a release image: its presence emits the `bake.hcl` build
+  recipe (push vs load is the `$PUSH_IMAGE` env var, not a static flag).
+- **`compose.up`** — a load-by-name closure point (launch, integrate).
+- **`compose.manual`** — a harness kept off the bare-`up` stack, emitted at
+  `scale: 0` and reached by targeting its root alias (`docker compose up <n>`).
+
+`docker compose up` starts every non-`manual` service with a compose block (the
+app + its always-on infra); everything else — build/setup stages and `manual`
+harnesses — sits at `scale: 0`, present so `service:` build contexts resolve but
+running no container. Keeping harnesses at `scale: 0` (rather than behind a
+profile) is what lets `depends_on`/context edges onto them resolve with no
+`--profile`; the verified gotchas are in DEVELOPING.md.
+
+The `:outs` interface is opt-in per dep edge (`deps: [":foo:outs"]`), not
+inferred from a target's role.
+
 ### Bazel-style refs
 
 Deps use the same string-ref vocabulary across same- and cross-project:

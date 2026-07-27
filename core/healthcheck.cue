@@ -25,7 +25,7 @@
 //
 //   ... & bayt.healthcheck.postgres & {
 //     healthcheck: {
-//       db:           "${POSTGRES_DB:-iris}"
+//       db:           "${POSTGRES_DB:-appdb}"
 //       start_period: "10m"
 //     }
 //   }
@@ -109,7 +109,7 @@ healthcheck: {
 	// postgres — pg_isready, in the postgres upstream image. Defaults
 	// give postgres extra cold-start grace (5m) for first-boot wal2json
 	// + initdb migrations. Inputs accept compose-spec shell-var defaults
-	// like "${POSTGRES_DB:-iris}" — passed through verbatim.
+	// like "${POSTGRES_DB:-appdb}" — passed through verbatim.
 	postgres: T={
 		healthcheck: {
 			db:    *"postgres"  | string

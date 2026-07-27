@@ -120,7 +120,7 @@ def atomic-write [target: string, content: string] {
 }
 
 # write-bundle writes all output files for a pre-loaded render bundle.
-# base — workspace-root-relative project dir (e.g. "services/tracker" or ".")
+# base — workspace-root-relative project dir (e.g. "path/to/project" or ".")
 # Rewrite `bayt: docker-image://…` to a compose-YAML-relative path when
 # BAYT_RUNTIME_DIR is set (monorepo-dev mode). Post-write rewrite
 # predates the runtimeIn channel gen_taskfile uses; migrate into
@@ -300,7 +300,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 # --depot.
 def emit-depot-yaml [proj_dir: string, ws: string] {
 	let dir = if $proj_dir == "." or $proj_dir == "" { $ws } else { $"($ws)/($proj_dir)" }
-	let r = (do { cd $dir; ^docker compose config --no-interpolate } | complete)
+	let r = (do { cd $dir; ^docker compose --profile '*' config --no-interpolate } | complete)
 	if $r.exit_code != 0 {
 		print -e $"bayt: depot.yaml skipped for ($proj_dir) — `docker compose config` exited ($r.exit_code) \(deps not generated? run with --recursive\)"
 		print -e ($r.stderr | lines | last 3 | str join "\n")

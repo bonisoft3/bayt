@@ -58,7 +58,7 @@ _d2: #project & {
 _d2_dc: (#dockerComposeGen & {project: _d2, depManifests: {}})
 _d2_dc: compose: files: build: services: "d2-build": build: additional_contexts: "d2-setup": "service:d2-setup"
 // Per-target files are fragments — services only, no include. Only
-// up targets get closure files (D18); other loads go through
+// compose.up targets get closure files (D18); other loads go through
 // the federation root.
 _d2_dc: compose: files: build: {[!="services"]: _|_}
 _d2_dc: compose: files: setup: {[!="services"]: _|_}
@@ -343,10 +343,11 @@ _d12_no_copy: strings.Contains(_d12_dc.dockerfiles.consumer, "d12-producer_outs"
 // Consumer service carries no dangling additional_contexts entry.
 _d12_dc: compose: files: consumer: services: "d12-consumer": build: {["additional_contexts"]: {["d12-producer_outs"]: _|_}}
 
-// --- D13: runtime-class consumer. Plain dep edges INTO a runtime
-// target carry the dep's declared interface (the `:outs` shape from
-// the dep's `_outs` synth), never its workdir tree; empty-outs deps
-// contribute nothing — no COPY and no additional_contexts entry.
+// --- D13: plain dep edges bulk-COPY the dep's workdir — every dep,
+// regardless of what either end ships. The `:outs` interface shape is
+// opt-in via an explicit `:x:outs` ref (D17), never inferred. Also the
+// scale-gate feeder for D16/D18: launch runs (compose.up), build/setup
+// are build stages.
 _d13: #project & {
 	name: "d13"
 	dir:  "d13"
@@ -362,56 +363,29 @@ _d13: #project & {
 			dockerfile: nubox
 		}
 		"launch": {
-			class: "runtime"
 			deps: [":build", ":setup"]
 			cmd: "builtin": do: "./dist/app"
 			dockerfile: busybox
 			compose: up: true
 		}
+		// A plain runtime service: a compose block, neither up nor manual —
+		// the shape of the release-* infra siblings. Must run on bare `up`
+		// (no scale field). D16 pins it.
+		"serve": {
+			cmd: "builtin": do: "./serve"
+			dockerfile: busybox
+			compose: {}
+		}
 	}
 }
 _d13_dc: (#dockerComposeGen & {project: _d13, depManifests: {}})
 _d13_body: _d13_dc.dockerfiles.launch
-// build's interface flows outs-shaped from the clamped _outs synth…
-_d13_outs_copy: strings.Contains(_d13_body, "COPY --from=d13-build_outs --parents /monorepo/d13/dist/app /") & true
-// …never as a bulk workdir COPY of the build stage.
-_d13_no_bulk: strings.Contains(_d13_body, "COPY --from=d13-build --link") & false
-// The empty-outs setup dep contributes nothing to the launch STAGE
-// (the appended launch_bayt synthetic legitimately chains
-// d13-setup_bayt — the trailing space keeps this assertion scoped
-// to the plain-dep form).
-_d13_no_setup: strings.Contains(_d13_body, "COPY --from=d13-setup ") & false
-// Context points at the _outs synth; neither the bulk service nor the
-// empty-outs dep appears.
-_d13_dc: compose: files: launch: services: "d13-launch": build: additional_contexts: "d13-build_outs": "service:d13-build_outs"
-_d13_dc: compose: files: launch: services: "d13-launch": build: {["additional_contexts"]: {["d13-build"]: _|_, ["d13-setup"]: _|_}}
-
-// --- D14: runtime-class dep. A build-class consumer depping a no-outs
-// launch bulk-copies nothing (a launch's output is its image, not
-// files) but keeps the additional_contexts edge so the bake graph
-// produces the image before a run phase pulls it.
-_d14: #project & {
-	name: "d14"
-	dir:  "d14"
-	targets: {
-		"launch": {
-			class: "runtime"
-			cmd: "builtin": do: "serve"
-			dockerfile: nubox
-			compose: {}
-		}
-		"integrate": {
-			deps: [":launch"]
-			srcs: globs: ["tests/**"]
-			cmd: "builtin": do: "run-tests"
-			dockerfile: busybox
-		}
-	}
-}
-_d14_dc: (#dockerComposeGen & {project: _d14, depManifests: {}})
-_d14_body: _d14_dc.dockerfiles.integrate
-_d14_no_copy: strings.Contains(_d14_body, "COPY --from=d14-launch ") & false
-_d14_dc: compose: files: integrate: services: "d14-integrate": build: additional_contexts: "d14-launch": "service:d14-launch"
+// Both deps bulk-COPY their workdir; neither renders in the `:outs` shape.
+_d13_build_bulk: strings.Contains(_d13_body, "COPY --from=d13-build --link") & true
+_d13_setup_bulk: strings.Contains(_d13_body, "COPY --from=d13-setup --link") & true
+_d13_no_outs:    strings.Contains(_d13_body, "d13-build_outs") & false
+// Contexts point at the deps themselves, not an `_outs` synth.
+_d13_dc: compose: files: launch: services: "d13-launch": build: additional_contexts: {"d13-build": "service:d13-build", "d13-setup": "service:d13-setup"}
 
 // --- D15: dockerfile.add — pinned ADD stanzas. Remote emits
 // `ADD --checksum=…` (with `--unpack` only when set); local emits a
@@ -438,28 +412,32 @@ _d15_remote: strings.Contains(_d15_body, "ADD --checksum=sha256:2e8040ceae7815ab
 _d15_unpack: strings.Contains(_d15_body, "ADD --checksum=sha256:95e3a3a2adeacd1b8dd704743c71eec8343dde472d3efe71101a62570c47cbbd --unpack=true https://example.com/data.tar.gz /data/") & true
 _d15_local:  strings.Contains(_d15_body, "ADD vendor/tools.tar.gz /opt/tools/") & true
 
-// --- D16: bare-`up` runtime selection. Only class-runtime targets
-// with a compose block (the app stack: launch, release-* siblings)
-// run bare; build-graph stages and synthetics (_srcs/_outs/bayt)
-// carry `scale: 0` — in the model (so `service:` contexts resolve,
-// which profiles would break) but no container. Reuses _d13: launch
-// is class runtime with `compose: {}`, build/setup are build-class.
+// --- D16: bare-`up` selection. A target runs iff it declares a compose
+// block AND isn't manual (launch, the release-* siblings); build-graph
+// stages and synthetics (_srcs/_outs/bayt) carry `scale: 0` — in the model
+// (so `service:` contexts resolve, which profiles would break) but no
+// container. Reuses _d13: launch has `compose.up`, serve is a plain runtime
+// service (compose block, no up/manual), build/setup are stages.
 _d16_build_scale: _d13_dc.compose.files.build.services."d13-build".scale & 0
 _d16_setup_scale: _d13_dc.compose.files.setup.services."d13-setup".scale & 0
 _d16_srcs_scale:  _d13_dc.compose.files.build.services."d13-build_srcs".scale & 0
 _d16_outs_scale:  _d13_dc.compose.files.build.services."d13-build_outs".scale & 0
 _d16_bayt_scale:  _d13_dc.compose.files.build.services."d13-build_bayt".scale & 0
-// The runtime stack stays at compose's default replica count so a
-// bare `up` starts it.
+// A compose-block target that is neither `up` nor `manual` runs at compose's
+// default replica count (no scale field) — the release-* infra shape. Both
+// launch (compose.up) and serve (bare compose block) qualify.
 _d13_dc: compose: files: launch: services: "d13-launch": {["scale"]: _|_}
-// A compose-block target that is NOT class runtime (integrate: a
-// by-name harness) is zeroed too — bare `up` must not run tests.
-// Its root alias re-arms it: scale 1 + the auto-activating profile,
-// so `docker compose up harness` works unchanged (the qualified
-// base stays down; only the alias runs).
+_d13_dc: compose: files: serve: services: "d13-serve": {["scale"]: _|_}
+// A `manual` compose target (integrate: a by-name harness) is scale: 0 AND
+// carries no profile on the base — present in a profile-less `config` (so
+// `service:` contexts resolve) but off the bare-`up` stack. The profile
+// lives only on the root alias, at scale 1, so `docker compose up harness`
+// still runs it. The unprofiled-base assertion is load-bearing: profiling
+// the base would drop it from `config`, dangling every context edge.
 _d16_harness_scale: _d17_dc.compose.files.harness.services."d17-harness".scale & 0
+_d17_dc: compose: files: harness: services: "d17-harness": {["profiles"]: _|_}
 _d16_harness_alias: _d17_dc.compose.root.services.harness.scale & 1
-_d16_harness_prof:  _d17_dc.compose.root.services.harness.profiles & ["harness"]
+_d16_harness_aprof: _d17_dc.compose.root.services.harness.profiles & ["harness"]
 
 // --- D17: closure files exist ONLY for `compose.up` targets —
 // others and synthetics get none (the harness is up: its closure is
@@ -480,25 +458,28 @@ _d17: #project & {
 			cmd:  "builtin": do: "make"
 			dockerfile: busybox
 		}
-		// By-name harness: compose block, default (build) class, entry —
-		// D16 asserts its scale gating and alias re-arm; D18 its closure.
+		// By-name harness: `manual` closure entry — D16 asserts its
+		// profile gating and alias re-arm; D18 its closure.
 		"harness": {
 			deps: [":producer"]
 			srcs: globs: ["tests/**"]
 			cmd: "builtin": do: "run-tests"
 			dockerfile: busybox
-			compose: up: true
+			compose: {up: true, manual: true}
 		}
 	}
 	compose: includes: ["compose.overlay.yaml"]
 }
 _d17_dc: (#dockerComposeGen & {project: _d17, depManifests: {}})
+// An explicit `:producer:outs` ref renders the glob COPY from the _outs
+// synth (the plain-ref bulk COPY is D13).
+_d17_outs: strings.Contains(_d17_dc.dockerfiles.consumer, "COPY --from=d17-producer_outs --parents /monorepo/d17/dist/lib /") & true
 _d17_dc: compose: files: {["consumer.closure"]: _|_}
 _d17_dc: compose: files: {["producer_srcs.closure"]: _|_}
 _d17_dc: compose: files: {["producer_outs.closure"]: _|_}
 _d17_dc: compose: files: {["_bayt.closure"]: _|_}
 
-// --- D18: up closures. `compose.up: true` targets get
+// --- D18: up closures. `compose.up` targets get
 // compose.<n>.closure.yaml — a FLAT include of the manifest's
 // upClosure (own + transitive fragments; the recursion happened
 // at generate time in gen_bayt) plus #project.compose.includes, with an
@@ -583,11 +564,9 @@ Tests: docker_compose: {
 	d12:               _d12_dc
 	d12_no_copy:       _d12_no_copy
 	d13:               _d13_dc
-	d13_outs_copy:     _d13_outs_copy
-	d13_no_bulk:       _d13_no_bulk
-	d13_no_setup:      _d13_no_setup
-	d14:               _d14_dc
-	d14_no_copy:       _d14_no_copy
+	d13_build_bulk:    _d13_build_bulk
+	d13_setup_bulk:    _d13_setup_bulk
+	d13_no_outs:       _d13_no_outs
 	d15:               _d15_dc
 	d15_remote:        _d15_remote
 	d15_unpack:        _d15_unpack
@@ -599,8 +578,9 @@ Tests: docker_compose: {
 	d16_bayt_scale:    _d16_bayt_scale
 	d16_harness_scale: _d16_harness_scale
 	d16_harness_alias: _d16_harness_alias
-	d16_harness_prof:  _d16_harness_prof
+	d16_harness_aprof: _d16_harness_aprof
 	d17:               _d17_dc
+	d17_outs:          _d17_outs
 	d18_launch_inc:    _d18_launch_inc
 	d18_launch_alias:  _d18_launch_alias
 	d18_harness_inc:   _d18_harness_inc

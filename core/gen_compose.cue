@@ -132,41 +132,21 @@ import (
 		])
 	}
 
-	// Helper: how the dep edge (consumer t, dep entry d) renders. Both
-	// _depCopies (Dockerfile path) and _depEntries (additional_contexts
-	// path) MUST dispatch through here — divergent gating dangles a
-	// context or strands a COPY without its --from. Semantics live on
-	// #target.class; guarded by D12–D14.
+	// Helper: whether dep entry `d` copies, and the context service to copy
+	// from. The Dockerfile-COPY path (_depCopies) and the additional_contexts
+	// path (_depEntries) MUST share this — a divergent gate strands a COPY
+	// without its --from, or vice versa. Guarded by D12/D13 (D17 for the
+	// `:outs` opt-in).
 	//
-	//   outsShaped — plain ref on a runtime-class edge: the `:outs` shape.
-	//   copy       — emit a COPY. Synth refs and outs-shaped edges need
-	//                non-empty outs.globs (the synth service isn't
-	//                emitted otherwise).
-	//   ctx        — emit a context entry. copy, plus the no-COPY
-	//                image-production ordering edge onto a runtime dep.
-	//   ctxSvc     — context target: the `_outs` synth when the edge
-	//                copies outs-shaped, the dep itself otherwise.
+	// A plain ref bulk-COPYs the dep's workdir. To take just the declared
+	// interface, ref the `:outs` synth explicitly (`:foo:outs`) — it arrives
+	// here as a `_outs` synth dep, and a synth copies only when it carries
+	// outs (the synth service isn't emitted for an empty-outs dep).
 	_depEdge: E={
-		t: _
 		d: _
 		let _isSynth = strings.HasSuffix(E.d.name, "_srcs") || strings.HasSuffix(E.d.name, "_outs") || strings.HasSuffix(E.d.name, "_bayt")
-		let _tClass = [if E.t.class != _|_ {E.t.class}, "build"][0]
-		let _dClass = [if E.d.class != _|_ {E.d.class}, "build"][0]
-		let _hasOuts = len(E.d.outs.globs) > 0
-		outsShaped: bool
-		outsShaped: !_isSynth && (_tClass == "runtime" || _dClass == "runtime")
-		copy: bool
-		copy: [
-			if _isSynth || outsShaped {_hasOuts},
-			true,
-		][0]
-		ctx: bool
-		ctx: copy || (outsShaped && _dClass == "runtime")
-		ctxSvc: string
-		ctxSvc: [
-			if outsShaped && _hasOuts {"\(E.d.project)-\(E.d.name)_outs"},
-			"\(E.d.project)-\(E.d.name)",
-		][0]
+		copy: [if _isSynth {len(E.d.outs.globs) > 0}, true][0]
+		ctxSvc: "\(E.d.project)-\(E.d.name)"
 	}
 
 	// Helper: dep keys ("<project>-<name>") that the FROM-chained
@@ -479,11 +459,8 @@ import (
 			//
 			//   `:foo` (plain target ref) — BULK COPY of the dep's project
 			//     workdir (/monorepo/<dep.dir>). Mental model: "give me what
-			//     this build produced." Cross-project consumers needing
-			//     narrow filtering opt into `:foo:outs` or `:foo:srcs`.
-			//     On runtime-class edges (G._depEdge.outsShaped) the ref
-			//     renders in the `:foo:outs` shape instead — a launch/
-			//     release image exchanges interfaces, never workdir trees.
+			//     this build produced." Consumers needing just the declared
+			//     interface opt into `:foo:outs` (or `:foo:srcs`).
 			//
 			//   `:foo:srcs` / `:foo:outs` (synth) — per-glob filter using
 			//     the synth's outs.globs/exclude. The synth itself is a
@@ -500,9 +477,6 @@ import (
 				if strings.HasSuffix(d.name, "_bayt") {
 					"COPY --from=\(d.project)-\(d.name) --link /monorepo /monorepo"
 				},
-				if (G._depEdge & {"t": t, "d": d}).outsShaped {
-					"COPY --from=\(d.project)-\(d.name)_outs\(_excludeJ) --parents \(_globPaths) /"
-				},
 				if !_isSynth && d.name != "bayt" {
 					"COPY --from=\(d.project)-\(d.name) --link \(_bulkDest) \(_bulkDest)"
 				},
@@ -513,7 +487,7 @@ import (
 			d: _
 			out: bool
 			out: !list.Contains(_inheritedDepKeys, "\(d.project)-\(d.name)") &&
-				(G._depEdge & {"t": t, "d": d}).copy
+				(G._depEdge & {"d": d}).copy
 		}
 		_depCopies: [
 			if t.dockerfile.from != null
@@ -940,8 +914,8 @@ import (
 		bodyLines: [...string]
 		out:       string
 
-		// Strict ancestor dirs of workdir: "/monorepo/guis/web" →
-		// ["/monorepo", "/monorepo/guis"]; empty when workdir is /monorepo.
+		// Strict ancestor dirs of workdir: "/monorepo/a/b" →
+		// ["/monorepo", "/monorepo/a"]; empty when workdir is /monorepo.
 		_wdSegs: strings.Split(F.workdir, "/")
 		_ancestors: [for i, _ in _wdSegs if i >= 2 {strings.Join(list.Slice(_wdSegs, 0, i), "/")}]
 
@@ -1162,9 +1136,9 @@ import (
 				let _inheritedKeys = (G._inheritedDepKeys & {"t": t}).out
 				let _depEntries = [
 					for d in (G._targetDeps & {"t": t}).out
-					let _edge = (G._depEdge & {"t": t, "d": d})
+					let _edge = (G._depEdge & {"d": d})
 					if !list.Contains(_inheritedKeys, "\(d.project)-\(d.name)")
-					if _edge.ctx {
+					if _edge.copy {
 						_edge.ctxSvc
 					},
 				]
@@ -1332,18 +1306,18 @@ import (
 				secrets: [for k, _ in t.dockerfile.secrets {k}]
 			}
 
-			// Bare `up` starts only class-runtime targets with a compose
-			// block; everything else is scale: 0 — in the model (so
-			// `service:` additional_contexts resolve; profiles would drop
-			// the service and dangle every ref) but no container. By-name
-			// `up integrate` re-arms via the root alias. User
-			// compose.scale wins over the gate (the template pattern —
-			// see #compose.scale). Guarded by D16.
-			let _tClass = [if t.class != _|_ {t.class}, "build"][0]
-			if t.compose != _|_ && t.compose.scale != _|_ {
+			// A container runs on bare `up` iff it declares a compose block
+			// and isn't manual. build/setup stages, synthetics, and manual
+			// harnesses are scale: 0 — present so `service:` additional_contexts
+			// resolve, but no container. A manual harness stays reachable by
+			// targeting its root alias (`docker compose up <n>`). User
+			// compose.scale wins. Guarded by D16.
+			let _userScale = t.compose != _|_ && t.compose.scale != _|_
+			let _manual = [if t.compose != _|_ {t.compose.manual}, false][0]
+			if _userScale {
 				scale: t.compose.scale
 			}
-			if (t.compose == _|_ || _tClass != "runtime") && (t.compose == _|_ || t.compose.scale == _|_) {
+			if !_userScale && (t.compose == _|_ || _manual) {
 				scale: 0
 			}
 
@@ -1624,7 +1598,7 @@ import (
 					t2.upClosure
 				},
 			], 1)}).out
-			for n, t in _emit if t.up {
+			for n, t in _emit if t.compose != _|_ if t.compose.up {
 				let _svc = (_svcName & {pn: t.project, tn: n}).out
 				let _paths = [
 					if len(G.project.compose.includes) > 0 {_unionClosure},

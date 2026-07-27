@@ -26,8 +26,7 @@
 //      complete bayt.#project shapes that wire the 10 verbs to a
 //      specific toolchain stack — useful for projects that follow
 //      the standard mapping. Projects with atypical mappings
-//      compose the verb fragments + concept fragments directly
-//      (see services/tracker-tx).
+//      compose the verb fragments + concept fragments directly.
 //
 // Usage — atypical project (composes concepts directly):
 //
@@ -115,9 +114,12 @@ test: {
 
 // launch — dev-loop container. HMR-enabled where the toolchain
 // supports it (compose develop.watch).
+//
+// deps default `:build` (the whole tree): a FROM-chaining launch inherits
+// it and emits no COPY; a fresh-base launch that runs the app from the
+// source tree needs it in full, so it must not narrow to `:build:outs`.
 launch: {
 	deps: *[":build"] | [...string]
-	class: "runtime"
 	compose: up: true
 	dockerfile: {}
 	// bayt-dev profile auto-fires on `skaffold dev`. Projects opt
@@ -129,8 +131,8 @@ launch: {
 	//
 	// tagPolicy.gitCommit.variant: AbbrevCommitSha sidesteps
 	// skaffold's default Tags variant, which uses `git describe
-	// --tags` and on this monorepo returns the full prefixed tag
-	// (services/tracker/v…). Skaffold then normalizes `/` to `_` and
+	// --tags` and on a monorepo with prefixed tags (`<dir>/vX`) returns
+	// a slash-containing tag. Skaffold then normalizes `/` to `_` and
 	// warns about the substitution. AbbrevCommitSha (7-char commit
 	// hash) is deterministic, monorepo-tag-agnostic, and fine for
 	// dev-loop image tags.
@@ -155,7 +157,7 @@ launch: {
 integrate: {
 	deps: *[":build"] | [...string]
 	taskfile: {}
-	compose: up: true
+	compose: {up: true, manual: true}
 }
 
 // release — shippable image. Bake produces the registry-bound image;
@@ -173,11 +175,12 @@ integrate: {
 //                use `skaffold run` opt out via `bayt-run: null`.
 //
 // Projects share build artifact configs between the two via a hidden
-// `_releaseBuild:` field on the target; see services/tracker for the
-// pattern.
+// `_releaseBuild:` field on the target.
 release: {
+	// deps default `:build`: a FROM-chaining release inherits it (no COPY);
+	// a release on a fresh packaging base that COPYs from build must narrow
+	// to `:build:outs`, else it bulk-ships the source tree into the image.
 	deps: *[":build"] | [...string]
-	class: "runtime"
 	dockerfile: {}
 	// Each profile is `*(struct) | null` so projects can opt out via
 	// `skaffold: profiles: "<name>": null`. Without the disjunction
@@ -199,6 +202,8 @@ release: {
 			build: tagPolicy: gitCommit: variant: "AbbrevCommitSha"
 		} | null
 	}
+	// Empty here; a project sets `bake: image: "<registry ref>"` to opt this
+	// release into the bake.hcl build recipe (gen_bake).
 	bake: {}
 }
 
@@ -287,9 +292,10 @@ ci: inject & {
 		// --print does). The compose entry point is the integrate closure
 		// file, NOT the user root: the closure is the exact fragment set the
 		// layer carries (federation and hand roots need not exist in-layer),
-		// and its inline `bayt` alias (reserved; see gen_compose's
-		// closure emitter) is ungated at scale 1 — no --profile flag,
-		// no zero-replica silent no-op. The printed file
+		// and its inline `bayt` alias (reserved; see gen_compose's closure
+		// emitter) is ungated at scale 1. Every compose invocation passes
+		// `--profile '*'` to materialize the fully-evaluated config (all
+		// profiles) — the canonical flatten call. The printed file
 		// defines the full build closure, a superset of depot.hcl's group
 		// (gen_compose mirrors depends_on into additional_contexts), so
 		// $tgt always resolves. No --allow:
@@ -303,14 +309,14 @@ ci: inject & {
 			fi
 			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
 			[ -f .bayt/depot.hcl ] && tgt="-f .bayt/depot.hcl depot-build" || tgt="bayt"
-			docker compose -f .bayt/compose.integrate.closure.yaml config | docker buildx bake --allow=fs.read=/monorepo -f - --print bayt | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $tgt
-			exec docker compose -f .bayt/compose.integrate.closure.yaml up bayt --abort-on-container-failure --exit-code-from bayt --remove-orphans
+			docker compose --profile '*' -f .bayt/compose.integrate.closure.yaml config | docker buildx bake --allow=fs.read=/monorepo -f - --print bayt | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} $tgt
+			exec docker compose --profile '*' -f .bayt/compose.integrate.closure.yaml up bayt --abort-on-container-failure --exit-code-from bayt --remove-orphans
 			"""#
 		let _do_run = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
-			BAYT_PULL_POLICY=missing exec docker compose -f .bayt/compose.integrate.closure.yaml up bayt --no-build --abort-on-container-failure --exit-code-from bayt --remove-orphans
+			BAYT_PULL_POLICY=missing exec docker compose --profile '*' -f .bayt/compose.integrate.closure.yaml up bayt --no-build --abort-on-container-failure --exit-code-from bayt --remove-orphans
 			"""#
 		// Trailing "" is the catch-all: non-`_run` combinations emit no RUN.
 		let _do = [
@@ -348,7 +354,7 @@ dindbox: {
 //
 // Use the umbrella matching your toolchain combo for the standard
 // 5-line project setup. Compose verb + concept fragments directly
-// (see services/tracker-tx) when the standard mapping doesn't fit.
+// when the standard mapping doesn't fit.
 // =============================================================================
 
 // sayt.gradle — pure-gradle project using mise as the toolchain
@@ -426,9 +432,9 @@ gradle: bayt.#project & {
 		//
 		// preamble (socat install + docker --help warmup) lives at the
 		// project level — dind is project-specific (only services that
-		// hit the docker socket from inside the test). For tracker the
-		// install routes through `setup`'s preamble and reaches
-		// integrate via the FROM-chain; no preamble default here.
+		// hit the docker socket from inside the test). Where a project's
+		// `setup` preamble installs it, integrate reaches it via the
+		// FROM-chain; no preamble default here.
 		"integrate": *(integrate & Mise.exec & Gradle.integrationTest & {
 			dockerfile: from: ref: ":build"
 		}) | null

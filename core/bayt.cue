@@ -532,15 +532,18 @@ noop: #cmd & {
 		ignore?: [...string]
 	}
 
-	service?: string
+	// up / manual — bayt control flags (consumed by the emitter, never
+	// emitted onto the service). Declaring either creates the compose
+	// block, so the target joins the runtime graph.
+	//   up — a load-by-name point: something `docker compose up`s it by
+	//     name. Set on launch and integrate.
+	//   manual — a harness kept off the bare-`up` stack; reached by targeting
+	//     its root alias (`docker compose up <n>`).
+	// See DEVELOPING.md. Emission in gen_compose (scale gate / closure).
+	up:     *false | bool
+	manual: *false | bool
 
-	// up — this target is a load entry point: something `docker compose
-	// up`s it by name, standalone or inside a layer. Emits
-	// compose.<n>.closure.yaml (see gen_compose). The sayt stack sets
-	// it on launch and integrate; leave it off for services only
-	// reached through depends_on — each closure file must earn a
-	// consumer. Control flag, not compose-spec passthrough.
-	up: *false | bool
+	service?: string
 
 	build?: {
 		target?:             string
@@ -594,7 +597,7 @@ noop: #cmd & {
 	cap_add?:      [...string]
 	healthcheck?: {...}
 	// User scale wins over the bare-up runtime gate (gen_compose's
-	// _service). scale: 0 turns a runtime-class service into a
+	// _service). scale: 0 turns a running service into a
 	// template: image + config in the model, no container — an
 	// overlay or alias instantiates it via extends + scale: 1.
 	scale?: int
@@ -676,7 +679,7 @@ noop: #cmd & {
 	//   when a real consumer needs it; the typo-loud trade is the
 	//   same as #shell.
 	// kubeContext — Go regexp matched against the active kube-context
-	//   name (e.g. "kind-iris" or "gke_.*-prod-.*"). CUE doesn't
+	//   name (e.g. "kind-dev" or "gke_.*-prod-.*"). CUE doesn't
 	//   compile regexps so we just constrain the shape: non-empty.
 	// env — "VAR=value" or "VAR=<regex>" per skaffold's spec; one
 	//   single rule per entry. Constrained to that shape.
@@ -702,7 +705,7 @@ noop: #cmd & {
 		// tagPolicy controls the image tag skaffold computes. When
 		// unset, skaffold defaults to `gitCommit: {variant: Tags}`,
 		// which uses `git describe --tags`. On a monorepo with
-		// prefixed tags (services/tracker/v…) that yields a tag
+		// prefixed tags (`<dir>/vX`) that yields a tag
 		// containing slashes that skaffold then normalizes,
 		// generating a noisy WARN. Profiles that care should pick a
 		// tag policy explicitly. Common picks:
@@ -759,14 +762,11 @@ noop: #cmd & {
 }
 
 #bake: {
-	// Registry image; becomes `variable "IMAGE" { default = ... }` so the
-	// skaffold custom-command contract can override via $IMAGE env var.
+	// Registry image ref. Its presence marks a release image: gen_bake emits
+	// the bake.hcl build recipe skaffold / goreleaser / depot bake with. The
+	// $IMAGE tag and the registry-vs-load flip ($PUSH_IMAGE) are HCL env vars,
+	// so this ref is a gate, not a value baked into the HCL.
 	image?: string
-	// Toggle push-to-registry vs load-to-daemon. Becomes `variable
-	// "PUSH_IMAGE" { default = ... }`; emitter writes the conditional
-	// `output = PUSH_IMAGE == "true" ? ["type=registry"] : ["type=docker"]`.
-	// Skaffold / CI override via env. Default false.
-	push: *false | bool
 	platforms: *[] | [...string]
 	tags:      [...string]
 	args: [string]: string
@@ -923,9 +923,8 @@ noop: #cmd & {
 	//
 	// outs — files this target exposes to consumers: the declared
 	// interface. Same shape as srcs. Consumers COPY only outs on `:outs`
-	// view refs and on runtime-class edges (see `class` below); plain
-	// build-class dep refs bulk-COPY the whole workdir regardless. For
-	// same-project chain via `dockerfile.from`,
+	// view refs (`:foo:outs`); a plain dep ref bulk-COPYs the whole
+	// workdir. For same-project chain via `dockerfile.from`,
 	// the entire stage filesystem flows in (outs irrelevant). For
 	// out-of-tree side effects (toolchain installs at /root/.local/...),
 	// use `dockerfile.from` to inherit the producer stage.
@@ -959,17 +958,6 @@ noop: #cmd & {
 	// Note: same-project consumers can always reach internal targets;
 	// visibility only governs cross-project access.
 	visibility: *"internal" | "public"
-
-	// class — how this target's dep edges render in Dockerfiles.
-	//   "build" (default) — cmds run against dep content: a plain dep
-	//     ref bulk-COPYs the dep's workdir tree into the stage.
-	//   "runtime" (launch/release) — the target ships an image; dep
-	//     edges carry interfaces, not workdirs. Deps INTO it render in
-	//     the `:outs` shape (empty-outs deps contribute nothing); deps
-	//     ONTO it bulk-copy nothing but keep the additional_contexts
-	//     edge for image-production ordering. Content at pinned
-	//     non-/monorepo destinations stays on `dockerfile.copy`.
-	class: *"build" | "runtime"
 
 	// Toolchain activator. Default comes from the enclosing #project.activate;
 	// per-target override rare. Emitters read project.activate directly.

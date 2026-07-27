@@ -115,11 +115,6 @@ _expandCopy: {
 				globs:   G.depManifests[ref].outs.globs
 				exclude: G.depManifests[ref].outs.exclude
 			}
-			// Absent in manifests from an older bayt → build-class.
-			class: [
-				if G.depManifests[ref].class != _|_ {G.depManifests[ref].class},
-				"build",
-			][0]
 		}
 	}
 
@@ -271,20 +266,6 @@ _expandCopy: {
 		}
 	}
 
-	// Class lookup by resolved same-project name. Synthetic views are
-	// packaging stages, never runtime-class — class dispatch only
-	// applies to plain target refs.
-	_sameProjectClassByName: {
-		for n, t in G.project.targets if t != null {
-			(n): t.class
-			if t.dockerfile != _|_ {
-				"\(n)_srcs": "build"
-				"\(n)_outs": "build"
-				"\(n)_bayt": "build"
-			}
-		}
-	}
-
 	// Same-project chainedDeps entry from a resolved name. Mirrors
 	// _buildCrossEntry's shape so consumers treat same-project and
 	// cross-project entries uniformly.
@@ -295,7 +276,6 @@ _expandCopy: {
 			project: G.project.name
 			dir:     G.project.dir
 			outs:    _sameProjectOutsByName[N.name]
-			class:   _sameProjectClassByName[N.name]
 		}
 	}
 
@@ -529,7 +509,6 @@ _expandCopy: {
 				state:      t.state
 				env:        t.env
 				visibility: t.visibility
-				class:      t.class
 				// Passthrough emission entries ride the manifest so a
 				// content edit re-keys the target's fingerprint like any
 				// other declaration change.
@@ -560,9 +539,9 @@ _expandCopy: {
 				// all dep projects' taskfiles + manifests inside the stage.
 				transitiveCrossDeps: _transitiveCrossDeps[n]
 
-				// Up flag + flat fragment closure — gen_compose emits
-				// compose.<n>.closure.yaml for up targets from these.
-				up:             [if t.compose != _|_ {t.compose.up}, false][0]
+				// The flat fragment closure gen_compose emits for `up`
+				// targets. up/manual themselves ride the manifest's compose
+				// block (emitted above).
 				upClosure: _upClosure[n]
 
 				// Merkle-chain metadata. One entry per dep in original order:
@@ -718,7 +697,6 @@ _expandCopy: {
 					srcs: {globs: [], exclude: []}
 					outs: {globs: _srcsGlobs, exclude: _srcsExclude}
 					env: {}
-					class: "build"
 					// Synthetic inherits parent visibility. Cross-project
 					// consumers of an internal target's _srcs fail the
 					// public-visibility unification at _buildCrossEntry.
@@ -749,7 +727,6 @@ _expandCopy: {
 									name:    tn
 									dir:     G.project.dir
 									outs:    _sameProjectOutsByName[tn]
-									class:   "build"
 								}
 							}],
 					])
@@ -771,7 +748,6 @@ _expandCopy: {
 					srcs: {globs: [], exclude: []}
 					outs: t.outs
 					env: {}
-					class: "build"
 					visibility:          t.visibility
 					deps:                []
 					transitiveDeps:      []
@@ -794,7 +770,6 @@ _expandCopy: {
 				srcs: {globs: [], exclude: []}
 				outs: {globs: (_baytScaffold & {"n": n, "t": t}).out, exclude: []}
 				env: {}
-				class: "build"
 				visibility:          t.visibility
 				deps:                []
 				transitiveDeps:      []

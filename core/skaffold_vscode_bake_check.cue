@@ -114,7 +114,7 @@ _v2_vs: files: {[!~"^(build|test)$"]: _|_}
 // #bakeGen
 // ============================================================================
 
-// --- B1: release with a bake block emits the HCL whose matrix embeds the
+// --- B1: a `bake.image` release emits the HCL whose matrix embeds the
 // federated target name.
 _bk1: #project & {
 	name: "bk1"
@@ -131,7 +131,7 @@ _bk1_bk: (#bakeGen & {project: _bk1, depManifests: {}})
 _bk1_bk: hcl: =~"matrix = \\{ t = \\[\"bk1-release\"\\] \\}"
 
 // --- B2: a bake block without `image` is compose-x-bake-only, so
-// #bakeGen emits no HCL for it (gated on `t.bake.image != _|_`).
+// #bakeGen emits no HCL for it (gated on `t.bake.image`).
 _bk2: #project & {
 	name: "bk2"
 	dir:  "bk2"
