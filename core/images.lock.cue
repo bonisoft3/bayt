@@ -55,4 +55,7 @@ lock: images: {
 	// declarative environment file. Replaces mockserver, whose x86-only
 	// JVM image ran under qemu on Apple Silicon and never bound its port.
 	mockoon: "mockoon/cli:9.3.0@sha256:71b47e0ff0c4db496e63fc36a710ce971084e2e31f7504deb5cdf15555af598f"
+	// node:22-slim — glibc runtime base for Next.js standalone servers
+	// (`node server.js`). Multiplatform digest (linux/amd64 + arm64).
+	node: "node:22-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3"
 }
