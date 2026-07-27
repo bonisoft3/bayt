@@ -1089,14 +1089,6 @@ noop: #cmd & {
 	// siblings. Optional — non-release projects leave this unset.
 	bake?: #bake
 
-	// Emit `.bayt/{depot.yaml,depot.hcl}` — the flattened, git-context-
-	// bakeable definition + runtime-closure group for a host `depot bake` build
-	// phase. `bayt generate` emits them whenever this is set (so a project's
-	// canonical regen keeps them fresh); the docker CLI is required only for
-	// projects that opt in. Default off: non-depot projects take no docker
-	// dependency at generation time.
-	depot: *false | bool
-
 	// compose.includes — project-root-relative compose files (any name;
 	// user-authored) appended to every up closure: the escape hatch
 	// for services defined OUTSIDE the bayt graph that fragments

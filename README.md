@@ -77,7 +77,7 @@ This emits the per-target files under `.bayt/` — `.bayt/bayt.<verb>.json` (the
 
 Now `task build:build` runs `./gradlew assemble` only when sources changed. `task test:test` runs only when build or test sources changed. Touching any upstream file cascades through the chain automatically. If you run the same target twice with no changes, nothing happens.
 
-Adding a second service takes five more lines of CUE. Cross-project dependencies are first-class — `services/tracker` depending on `libraries/xproto` gets xproto's build stamp folded into tracker's fingerprint, so tracker rebuilds when xproto's srcs change.
+Adding a second service takes five more lines of CUE. Cross-project dependencies are first-class — `services/api` depending on `libraries/proto` gets proto's build stamp folded into api's fingerprint, so api rebuilds when proto's srcs change.
 
 ## The fields
 
@@ -193,18 +193,18 @@ The go and gradle stacks ship an opt-in non-verb `deps` target that bakes the de
 Using the umbrella collapses a typical service to a handful of lines:
 
 ```cue
-_tracker: sayt.gradle & {
-    dir: "services/tracker"
+_api: sayt.gradle & {
+    dir: "services/api"
     targets: {
         // Cross-project deps: producer must mark visibility "public".
         // Same-project deps reachable via `dockerfile.from.ref` (here
         // sayt.gradle defaults build → FROM `:setup`) don't need to be
         // restated in `deps:` — chainedDeps walks both sources.
         "build": deps: [
-            "libraries_xproto:build",
+            "libraries_proto:build",
             "plugins_jvm:build",
         ]
-        "release": skaffold: image: "gcr.io/proj/tracker"
+        "release": skaffold: image: "gcr.io/proj/api"
     }
 }
 ```
@@ -212,9 +212,9 @@ _tracker: sayt.gradle & {
 A consumed library declares `visibility: "public"` on the verbs it exposes:
 
 ```cue
-_xproto: sayt.gradle & {
-    dir: "libraries/xproto"
-    targets: "build": visibility: "public"   // tracker can deps: ["libraries_xproto:build"]
+_proto: sayt.gradle & {
+    dir: "libraries/proto"
+    targets: "build": visibility: "public"   // api can deps: ["libraries_proto:build"]
 }
 ```
 
@@ -267,26 +267,25 @@ decoration.
 
 ## depot.dev builds
 
-Set `depot: true` on a `#project` to emit two extra files: `.bayt/depot.yaml`
-(a flat compose view a host-side `depot bake -f` can consume) and
-`.bayt/depot.hcl` (a `depot-build` bake group covering the project's runtime
-closure). CI's build phase uses these to build and push the runtime images on
-depot's remote builders with no dind daemon — see sayt's `sayt/depot` action
-for the CI wiring.
+Every project with an `integrate` target emits `.bayt/depot.hcl`: a bake `group`
+naming the images an integration run needs. CI can build and push exactly that
+set on depot's remote builders with no dind daemon — see sayt's `sayt/depot`
+action for the wiring. It's derived from the model, so generating it needs no
+docker.
 
 ## Merkle-chain invalidation, in one diagram
 
 ```
-Edit a source in libraries/xproto
+Edit a source in libraries/proto
         │
         ▼
-xproto.build.hash changes              (own srcs fingerprint flips)
+proto.build.hash changes              (own srcs fingerprint flips)
         │
-        ▼                              (consumer fingerprints xproto's stamp)
-services/tracker/build.hash changes
+        ▼                              (consumer fingerprints proto's stamp)
+services/api/build.hash changes
         │
         ▼
-services/tracker/test.hash changes     (test fingerprints build's stamp)
+services/api/test.hash changes     (test fingerprints build's stamp)
 ```
 
 Each task's stamp = `hash(platform-key + srcs + each direct-dep stamp file)`. Because go-task runs deps before evaluating the parent's `status:`, each dep's stamp on disk reflects its latest state by the time the parent reads it. Invalidation propagates one hop at a time through the real file system — no recursive walk, no dependency-graph library, just stamp files on disk acting as content-addressed identities for each subtree.
@@ -360,7 +359,7 @@ Emitted under `.bayt/`:
 | `.bayt/compose.<n>.closure.yaml` | up targets only (`compose.up: true` — launch/integrate): flat include of the target's fragment closure + the reserved `bayt` alias, loadable with no user root or federation (`docker compose -f … up bayt`) |
 | `.bayt/skaffold.<n>.yaml`   | per-target skaffold config                                       |
 | `.bayt/bake.<n>.hcl`        | per-target bake HCL                                              |
-| `.bayt/depot.yaml`, `.bayt/depot.hcl` | depot.dev bake files (runtime-closure group) — only with `#project.depot` |
+| `.bayt/depot.hcl`           | runtime-closure bake `group` (`integrate` + transitive `depends_on`) — every project with an `integrate` target |
 | `.bayt/vscode.<n>.json`     | per-target vscode task entries (build/test only). User merges into `.vscode/tasks.json`; `sayt lint` warns on drift. |
 
 The `.bayt/` directory is generated but committed. A single `sayt generate` (or `bayt generate --all`) rebuilds the whole tree atomically.
@@ -445,7 +444,7 @@ plugins/bayt/
 │   ├── gen_vscode.cue
 │   ├── gen_bake.cue
 │   ├── generate.nu          (reads `render` output, writes files atomically;
-│   │                         emits depot.yaml/depot.hcl; runs cache gc at end)
+│   │                         runs cache gc at end)
 │   ├── mapaslist.cue        (#MapAsList helper for compose-friendly defaults)
 │   ├── listutils.cue
 │   └── *_check.cue          (vet-as-test stress patterns)

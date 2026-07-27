@@ -63,17 +63,37 @@ The load-bearing facts behind the scale-gate design, all reproduced with
    flatten, passed at every `config`/bake materialization so profiled aliases are
    present. Under `scale: 0` the load-bearing base is already present, so it's
    belt-and-suspenders — kept as the standard call, not relied on.
+4. **`required: false` does not tolerate a missing include.** compose errors
+   `open …: no such file or directory` either way (repro: a two-line file whose
+   only include is optional and absent). So every file compose loads must
+   reference only files that exist *where it is loaded*. This is why an
+   in-layer entry is a closure — a flat, exact list of the fragments that layer
+   carries — and not a project's federation root, which indexes all of a
+   project's targets while a layer only carries the ones it deps on.
+5. **Nested includes re-parse.** compose-go's `ApplyInclude` walks a subtree
+   once per path reaching it, with no dedup, so cost climbs with federation
+   size. Flattening the integrate closure instead of the user root is 1.5x
+   faster on a 2-cross-root project and 8x on a 7-cross-root one, for the same
+   result — point `config` at the flat file wherever a call site has the choice.
 
 ## Where computation lives: CUE vs nushell
 
 The split is deliberate — CUE is the pure, deterministic generator; nushell
 (`generate.nu`, `cache.nu`, …) is the impure runtime (file I/O, hashing, docker).
-But it's also a **performance** boundary: CUE eval is the dominant `generate`
-cost and CUE is a poor fit for iterative graph traversal, while nushell is fast
-at it and already loaded. So the transitive graph walks (e.g. `upClosure`, and a
-future runtime-`depends_on` closure) are candidates to **move from CUE to
-nushell** — the manifests it needs are already in hand, no docker required. Before
-adding another closure comprehension in CUE, measure.
+Keep new work in CUE: it is the safer half, and only measured cost should move
+something out.
+
+It is also a performance boundary, and the measurements say the boundary is
+rarely the problem. CUE pass-2 eval is 96–99% of a project's generate time, and
+`#dockerComposeGen` is ~70% of that; package load is free. A graph walk is a
+small share: `upClosure` costs ~570 ms on a deep cross-project chain (~11% of
+that project) and nothing measurable on a wide, shallow one, while the
+`depot-build` walk added ~2%. The same walk in nushell runs in ~5 ms, so moving
+one is a real but narrow win — worth it only where a chain is deep.
+
+When attributing cost, ablate. CUE evaluates the whole render eagerly, so
+`cue export -e <sub-expression>` does **not** prune and every sub-expression
+times the same. `BAYT_TIMING=1` breaks generate into scan / per-level phases.
 
 ## When you touch the runtime emission
 
@@ -81,6 +101,9 @@ adding another closure comprehension in CUE, measure.
   gotchas above, then validate with **`sayt integrate`** on a real project (the
   dindbox cascade), not just `test-bayt` — compose behavior is invisible to the
   CUE suite.
+- Pick that project for **cross-project deps**. A single-project graph exercises
+  none of the in-layer fragment resolution, so it passes changes that break
+  every federated project.
 
 ## Test layout
 

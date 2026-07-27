@@ -5,12 +5,8 @@ use core/generate.nu
 # --runtime <path>: workspace-rooted path to bayt's source tree.
 # Generated compose embeds a relative path to bayt-runtime instead of
 # the default `${BAYT_RUNTIME:-docker-image://…}`.
-# Projects opt into .bayt/{depot.yaml,depot.hcl} emission via `#project.depot:
-# true` in bayt.cue — a normal `generate` keeps them fresh (docker required only
-# for those projects). --depot forces emission for EVERY generated project,
-# regardless of opt-in (mostly for one-off inspection).
-def "main generate" [--recursive (-r), --all, --runtime: string = "", --depot] {
-	generate --recursive=$recursive --all=$all --runtime $runtime --depot=$depot
+def "main generate" [--recursive (-r), --all, --runtime: string = ""] {
+	generate --recursive=$recursive --all=$all --runtime $runtime
 }
 
 # Signature mirrors runtime/cache.nu's `main run` because nu spread args

@@ -20,8 +20,18 @@ _c3_both_do: (ci & {name: "c3", project: "p", dir: "d"}).cmd.builtin.do
 _c3_closure_flatten: strings.Contains(_c3_both_do, "docker compose --profile '*' -f .bayt/compose.integrate.closure.yaml config") & true
 _c3_closure_up: strings.Contains(_c3_both_do, "docker compose --profile '*' -f .bayt/compose.integrate.closure.yaml up bayt") & true
 
-// --- C2: dev mode must NOT get --no-build — without .bayt/depot.hcl
-// only `integrate` is a named bake target and compose builds the deps
-// at up time.
+// --- C2: dev mode must NOT get --no-build — only `bayt` is a named bake
+// target, so compose builds the deps at up time.
 _c2_both_do: (ci & {name: "c2", project: "p", dir: "d"}).cmd.builtin.do
 _c2_builds: strings.Contains(_c2_both_do, "--no-build") & false
+
+// --- C4: the in-layer bake targets `bayt` unconditionally — no bake HCL,
+// and no `[ -f … ]` fallback choosing between two targets. depot-build names
+// federated services, which exist only in a user-root flatten; this pipeline
+// flattens the closure file, whose print is the single `bayt` alias, so
+// naming the group here fails to resolve. bake.hcl is doubly wrong: its
+// `target "release"` binds `tags = [IMAGE]`, stripping every matrix member's
+// compose-supplied tag.
+_c4_both_do: (ci & {name: "c4", project: "p", dir: "d"}).cmd.builtin.do
+_c4_alias:  strings.Contains(_c4_both_do, "--print bayt | $bake") & true
+_c4_no_hcl: strings.Contains(_c4_both_do, ".hcl") & false

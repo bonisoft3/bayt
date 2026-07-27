@@ -72,8 +72,8 @@ def print-timing [label: string, start: datetime] {
 # scan-projects runs ONE parallel `cue export` per bayt.cue and returns
 # [{path, name, dir_rel, targets}] — the single CUE read behind the
 # project index (name → dir), the topo schedule, and regen's pass 1.
-# Per-invocation cue/mise overhead (~0.5s) dominates generation, so an
-# extra per-project invocation anywhere costs seconds overall.
+# One read, not one per consumer: `cue export` costs ~40 ms here but the
+# pass-2 render costs seconds, so keep work out of pass 2, not out of here.
 def scan-projects [workspace_root: string] {
 	# Enumerate bayt.cue files via `git ls-files`. Drop bayt's own
 	# package + stacks files: they share the bayt.cue name but
@@ -157,7 +157,7 @@ def _hash-header       [c: string]: nothing -> string { "# generated from bayt.c
 def _slash-header      [c: string]: nothing -> string { "// generated from bayt.cue — do not edit\n" + $c }
 def _json-header  [d: any]: nothing -> any { {_generated_from: "bayt.cue (do not edit)"} | merge $d }
 
-def write-bundle [bundle: record, base: string, --depot] {
+def write-bundle [bundle: record, base: string] {
 	let ws = (pwd | str trim)
 	let prefix = if $base == "." or $base == "" { "" } else { $"($base)/" }
 
@@ -267,73 +267,14 @@ def write-bundle [bundle: record, base: string, --depot] {
 ')
 	}
 
-	# --- depot.{yaml,hcl}: emitted when the project opts in via
-	# `#project.depot: true` (so its canonical regen keeps them fresh), or for
-	# every project when the --depot flag forces it. Emitted after the compose
-	# files they flatten.
-	if $depot or ($bundle.manifest.projectManifest.depot? | default false) {
-		emit-depot-yaml $base $ws
+	# --- depot.hcl: the runtime-closure `depot-build` group (gen_bake).
+	# Unconditional — it is pure CUE, so emitting it costs no docker and
+	# needs no opt-in.
+	if ($bundle.bake.depotHcl? | is-not-empty) {
+		atomic-write $"($prefix).bayt/depot.hcl" (_slash-header $bundle.bake.depotHcl)
 	}
 
 	print $"bayt: wrote files for project ($bundle.manifest.projectManifest.name)"
-}
-
-# emit-depot-yaml writes two git-context-bakeable files for the depot build phase:
-#   <proj>/.bayt/depot.yaml — the integration graph flattened by
-#     `docker compose config --no-interpolate` (federation resolved, cross-project
-#     services inlined) with late-bound ${VARS} (CACHE_SCOPE, BAYT_IMAGE_TAG,
-#     BAYT_COMPOSE_OUTPUT) left literal for the bake caller to set. compose
-#     absolutizes contexts and uses `service:` refs, so rewrite contexts to
-#     repo-root-relative and `service:X` → `target:X` (depot bake stats a
-#     `service:X` context as a path).
-#   <proj>/.bayt/depot.hcl — the runtime closure (`integrate` + transitive
-#     depends_on) as a bake `group`, so the build phase bakes it by name with no
-#     local file read. bake builds `target:`-context deps implicitly but drops
-#     their outputs, so every image the run phase pulls must be named in the
-#     group; build-only intermediates stay implicit (built, cache-only). That's
-#     what lets the build job go checkout-free:
-#       depot bake <git-ref> -f <proj>/.bayt/depot.yaml -f <proj>/.bayt/depot.hcl depot-build
-#     BUILDKIT_SYNTAX rides depot.yaml's per-service build.args (see
-#     gen_compose #buildkitSyntax); the depot action still passes a
-#     matching `--set` override, harmless.
-# `--no-interpolate` requires docker; the docker-CLI dep is why this is behind
-# --depot.
-def emit-depot-yaml [proj_dir: string, ws: string] {
-	let dir = if $proj_dir == "." or $proj_dir == "" { $ws } else { $"($ws)/($proj_dir)" }
-	let r = (do { cd $dir; ^docker compose --profile '*' config --no-interpolate } | complete)
-	if $r.exit_code != 0 {
-		print -e $"bayt: depot.yaml skipped for ($proj_dir) — `docker compose config` exited ($r.exit_code) \(deps not generated? run with --recursive\)"
-		print -e ($r.stderr | lines | last 3 | str join "\n")
-		return
-	}
-	let flat = ($r.stdout
-		| str replace --all $"($ws)/" ""
-		| str replace --all $ws "."
-		| str replace --all "service:" "target:")
-	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header $flat)
-
-	# depot.hcl — the runtime-closure group (rationale in the header above).
-	# Skipped for projects with no `integrate` service.
-	let services = ($flat | from yaml | get --optional services | default {})
-	if "integrate" in ($services | columns) {
-		mut seen = ["integrate"]
-		mut queue = ["integrate"]
-		while ($queue | is-not-empty) {
-			let deps = ($services | get --optional ($queue | first) | default {} | get --optional depends_on | default {} | columns)
-			$queue = ($queue | skip 1)
-			for d in $deps {
-				if $d not-in $seen {
-					$seen = ($seen | append $d)
-					$queue = ($queue | append $d)
-				}
-			}
-		}
-		# A dep without a build section is pull-only — not a bake target, so
-		# naming it in the group would fail resolution.
-		let names = ($seen | where {|n| "build" in ($services | get $n | columns) } | sort)
-		let group = ("group \"depot-build\" {\n  targets = [" + ($names | each {|n| $'"($n)"'} | str join ", ") + "]\n}\n")
-		atomic-write $"($dir)/.bayt/depot.hcl" (_slash-header $group)
-	}
 }
 
 # pass1 extracts the project.targets map from a bayt.cue.
@@ -543,14 +484,14 @@ def topo-schedule [roots: list<string>, scan: table, index: record] {
 # two-segment cross-project dep so transitive `:srcs` walking lands the
 # upstream source closures without consumers enumerating them. Missing
 # `:srcs` manifests (upstream target had no srcs) silently skip.
-def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_root: string, targets?: any, --depot] {
+def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_root: string, targets?: any] {
 	let targets = if $targets == null { pass1 $bayt_cue } else { $targets }
 	let cdeps = (cross-dep-strings $targets)
 	let auto_srcs = (srcs-variants $cdeps)
 	let all_deps = ($cdeps | append $auto_srcs | uniq)
 	let dep_manifests = (load-dep-manifests $all_deps $index $workspace_root $auto_srcs)
 	let bundle = (pass2 $bayt_cue $dep_manifests)
-	write-bundle $bundle $dir_rel --depot=$depot
+	write-bundle $bundle $dir_rel
 }
 
 # run-schedule regenerates every project in a topo-schedule, parallel
@@ -559,7 +500,7 @@ def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_r
 # consumer reads its deps' .bayt manifests — which write-bundle rm -rfs
 # transiently — so only projects with no dep path between them may run
 # concurrently.
-def run-schedule [schedule: record, scan: table, index: record, workspace_root: string, --depot] {
+def run-schedule [schedule: record, scan: table, index: record, workspace_root: string] {
 	# [{dir, lvl}] — a table, not a record ("." is not a safe record key).
 	mut lvl_by_dir = []
 	for d in $schedule.order {
@@ -573,7 +514,7 @@ def run-schedule [schedule: record, scan: table, index: record, workspace_root: 
 		let t = (date now)
 		$batch | par-each { |dir_rel|
 			let row = ($scan | where dir_rel == $dir_rel | first)
-			regen-project $row.path $dir_rel $index $workspace_root $row.targets --depot=$depot
+			regen-project $row.path $dir_rel $index $workspace_root $row.targets
 		} | ignore
 		print-timing $"level ($l) [($batch | str join ' ')]" $t
 	}
@@ -582,12 +523,12 @@ def run-schedule [schedule: record, scan: table, index: record, workspace_root: 
 # Entry point.
 const cache_nu = (path self | path dirname | path dirname | path join "runtime" "cache.nu")
 
-export def main [--recursive (-r), --all, --runtime: string = "", --depot] {
+export def main [--recursive (-r), --all, --runtime: string = ""] {
 	let effective = if ($runtime | is-empty) { ($env.BAYT_RUNTIME_DIR? | default "") } else { $runtime }
-	with-env { BAYT_RUNTIME_DIR: $effective } { _main --recursive=$recursive --all=$all --depot=$depot }
+	with-env { BAYT_RUNTIME_DIR: $effective } { _main --recursive=$recursive --all=$all }
 }
 
-def _main [--recursive (-r), --all, --depot] {
+def _main [--recursive (-r), --all] {
 	if not $all and not ("bayt.cue" | path exists) {
 		return
 	}
@@ -602,7 +543,7 @@ def _main [--recursive (-r), --all, --depot] {
 		# Every project in the workspace; works from any cwd inside it.
 		cd $workspace_root
 		let schedule = (topo-schedule ($scan | get dir_rel | uniq) $scan $index)
-		run-schedule $schedule $scan $index $workspace_root --depot=$depot
+		run-schedule $schedule $scan $index $workspace_root
 	} else if $recursive {
 		let project_abs = (pwd)
 		let project_rel = ($project_abs | path relative-to $workspace_root)
@@ -612,7 +553,7 @@ def _main [--recursive (-r), --all, --depot] {
 		cd $workspace_root
 
 		let schedule = (topo-schedule [$project_rel] $scan $index)
-		run-schedule $schedule $scan $index $workspace_root --depot=$depot
+		run-schedule $schedule $scan $index $workspace_root
 	} else {
 		# Single-project mode: cd to workspace_root so write-bundle's
 		# relative paths (used by --runtime injection) are computed
@@ -626,15 +567,15 @@ def _main [--recursive (-r), --all, --depot] {
 		# scan's `git ls-files`); regen-project's pass 1 covers it.
 		let row = ($scan | where dir_rel == $project_rel | get --optional 0)
 		let tgts = if $row == null { null } else { $row.targets }
-		regen-project $bayt_cue $project_rel $index $workspace_root $tgts --depot=$depot
+		regen-project $bayt_cue $project_rel $index $workspace_root $tgts
 	}
 
-	# Run cache GC at end of generation. Cheap (no-op when under
-	# budget), folds eviction into a natural rate-limit: regen
-	# happens after bayt.cue edits, exactly when projects most likely
-	# have accumulated cache cruft from the prior shape. Opt-out via
-	# BAYT_CACHE_NO_GC=true for CI / disk-pressured envs. Errors
-	# propagate — silently swallowed GC means the cache fills until
-	# it eats the disk.
+	# Run cache GC at end of generation: regen happens after bayt.cue
+	# edits, exactly when projects most likely have accumulated cache
+	# cruft from the prior shape. NOT cheap — it `du`s every cache entry
+	# to decide, seconds on a full cache, even when under budget. Opt-out
+	# via BAYT_CACHE_NO_GC=true for CI / disk-pressured envs. Errors
+	# propagate — silently swallowed GC means the cache fills until it
+	# eats the disk.
 	run-nu $cache_nu gc
 }

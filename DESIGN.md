@@ -4,7 +4,7 @@
 
 **Tech stack:** CUE (schema + DAG + emission), nushell (impure runtime: file reads, hashing, side effects), Docker BuildKit (container caching), buchgr/bazel-remote or ORAS (cross-machine content-addressable cache), Taskfile (local runner), Skaffold (k8s orchestration).
 
-> **Status:** the schema, all six emitters (manifest / Taskfile / Dockerfile+compose / skaffold / vscode / bake), the runtime (`fingerprint.nu`, `cache.nu`, `generate-bayt.nu`), and four onboarded projects (services/tracker, services/tracker-tx, services/boxer, guis/web) are in tree and exercised by the test suites. Sections marked "design sketch" or appearing under [Open questions](#open-questions) are the remaining unimplemented bits.
+> **Status:** the schema, all six emitters (manifest / Taskfile / Dockerfile+compose / skaffold / vscode / bake), the runtime (`fingerprint.nu`, `cache.nu`, `generate-bayt.nu`), and four onboarded projects (services/api, services/api-tx, services/worker, guis/app) are in tree and exercised by the test suites. Sections marked "design sketch" or appearing under [Open questions](#open-questions) are the remaining unimplemented bits.
 
 ---
 
@@ -16,7 +16,7 @@ Bayt collapses this into one typed declaration per target. The target describes 
 
 The generator is pure CUE. The runtime (`cache.nu`, `pin-bases.nu`, file globbing, hashing) is nushell — everything with side effects lives there. Three cache tiers (L0 hash stamps, L1/L2 bazel-remote, BuildKit layers) compose orthogonally. Base images follow package.json-style split: version intent (tags) in `bayt.cue`, version lock (digests) in `bases.lock.cue`, refreshed by an impure `pin-bases.nu`. Lazybox provides a portable nushell substrate — not a fat toolchain — so the same commands run in containers, on CI, and on native Windows.
 
-Dogfood line counts targeting minimal boilerplate: tracker ≈25 lines, web ≈12, sayt ≈3 non-boilerplate. All composition is via CUE unification and the rulemap pattern from `plugins/sayt/config.cue`. No string-keyed indirection, no `inherits:` (order-dependence), no cycle traps (per `plugins/sayt/docker.cue`'s index-based dedupe).
+Dogfood line counts targeting minimal boilerplate: api ≈25 lines, web ≈12, sayt ≈3 non-boilerplate. All composition is via CUE unification and the rulemap pattern from `plugins/sayt/config.cue`. No string-keyed indirection, no `inherits:` (order-dependence), no cycle traps (per `plugins/sayt/docker.cue`'s index-based dedupe).
 
 ---
 
@@ -223,7 +223,7 @@ cmd: "builtin": {
 Each generator picks the right variant:
 
 - Taskfile — emits all three variants under `cmds:` with `platforms:` guards (go-task native).
-- vscode — emits the top-level `command` plus `windows: { command: ... }` override (matches `services/tracker/.vscode/tasks.json` pattern).
+- vscode — emits the top-level `command` plus `windows: { command: ... }` override (matches `services/api/.vscode/tasks.json` pattern).
 - Dockerfile — build is always Linux in a container; Windows branch is dropped.
 - compose / skaffold / bake — Linux only; Windows branch dropped.
 
@@ -336,7 +336,7 @@ Generation rules:
 
 ```cue
 #skaffoldBlock: close({
-    image:    string             // e.g. "gcr.io/trash-362115/services.tracker"
+    image:    string             // e.g. "gcr.io/example-proj/services.api"
     platform: *"linux/amd64" | string
     context:  *"../../" | string // monorepo root relative to project.dir
     sync?:    close({
@@ -422,6 +422,16 @@ profile) is what lets `depends_on`/context edges onto them resolve with no
 The `:outs` interface is opt-in per dep edge (`deps: [":foo:outs"]`), not
 inferred from a target's role.
 
+Which of those images a CI build phase must actually push is a third question,
+answered by `.bayt/depot.hcl`: a bake `group` naming `integrate` plus its
+transitive `compose.depends_on`, derived in CUE from the model. bake builds a
+`target:`-context dep but drops its output, so anything a later phase pulls has
+to be named. It is a `group` and nothing else, in its own file, because
+`bake.hcl` binds `tags = [IMAGE]` onto every release-matrix member by name and
+bake HCL cannot express "leave unset" — an empty list overrides and `null` is
+rejected — so a caller wanting only the selection would otherwise lose those
+targets' tags and outputs.
+
 ### Bazel-style refs
 
 Deps use the same string-ref vocabulary across same- and cross-project:
@@ -430,8 +440,8 @@ Deps use the same string-ref vocabulary across same- and cross-project:
 "build": {
     deps: [
         ":setup",                      // same-project
-        "libraries_xproto:build",      // cross-project
-        "libraries_xproto:build:srcs", // cross-project synthetic view
+        "libraries_proto:build",      // cross-project
+        "libraries_proto:build:srcs", // cross-project synthetic view
     ]
 }
 ```
@@ -682,7 +692,7 @@ Wolfi is rolling. Leap has a 12-18 month lifecycle per release, making "latest" 
 Bayt emits per-target files into a hidden `.bayt/` directory. User-visible files (`Taskfile.yml`, `compose.yaml`, `skaffold.yaml`) use each format's native include mechanism to pull them in. `.bayt/` is committed but not hand-edited; `lint` enforces this.
 
 ```
-services/tracker/
+services/api/
 ├── bayt.cue                         # hand-written, the only source of truth
 ├── bases.lock.cue                   # generated by pin-bases.nu
 ├── .bayt/                           # generated, committed, never edited
@@ -1008,7 +1018,7 @@ composes:   (bayt.#emitComposes   & {project: #sayt}).out
 skaffolds:  (bayt.#emitSkaffolds  & {project: #sayt}).out
 ```
 
-### `guis/web/bayt.cue` — ~12 lines
+### `guis/app/bayt.cue` — ~12 lines
 
 Web adds a k8s image name and an expose for `launch`.
 
@@ -1017,12 +1027,12 @@ package web
 import pnpm "github.com/bonisoft3/bayt/stacks/pnpm"
 
 #web: pnpm.#pnpmProject & {
-    dir:  "guis/web"
+    dir:  "guis/app"
     name: "web"
 
     targets: {
         "release": {
-            skaffold:   image:  "gcr.io/trash-362115/guis.web"
+            skaffold:   image:  "gcr.io/example-proj/guis.app"
             dockerfile: expose: [8080]
         }
         "launch":    dockerfile: expose: [3000]
@@ -1031,34 +1041,34 @@ import pnpm "github.com/bonisoft3/bayt/stacks/pnpm"
 }
 ```
 
-### `services/tracker/bayt.cue` — ~25 lines
+### `services/api/bayt.cue` — ~25 lines
 
-Tracker adds cross-project deps (xproto generation, libstoml config) and secret-mounted integration.
+The api project adds cross-project deps (proto generation, shared config) and secret-mounted integration.
 
 ```cue
-package tracker
+package api
 import (
     gradle "github.com/bonisoft3/bayt/stacks/gradle"
-    xproto "bonisoft.org/libraries/xproto"
-    pbt    "bonisoft.org/libraries/pbtables"
-    logs   "bonisoft.org/libraries/logs"
-    ltoml  "bonisoft.org/libraries/libstoml"
-    mn     "bonisoft.org/libraries/micronaut"
-    jvm    "bonisoft.org/plugins/jvm"
+    proto "bonisoft.org/libraries/proto"
+    tbl    "bonisoft.org/libraries/tables"
+    log    "bonisoft.org/libraries/logging"
+    cfg    "bonisoft.org/libraries/config"
+    fw     "bonisoft.org/libraries/framework"
+    tc     "bonisoft.org/plugins/toolchain"
 )
 
-#tracker: gradle.#gradleProject & {
-    dir:  "services/tracker"
-    name: "tracker"
+#api: gradle.#gradleProject & {
+    dir:  "services/api"
+    name: "api"
 
     targets: {
         "build": deps: [
-            xproto.#x.targets.generate,
-            pbt.#p.targets.generate,
-            ltoml.#l.targets.build,
-            logs.#l.targets.build,
-            mn.#m.targets.build,
-            jvm.#j.targets.build,
+            proto.#x.targets.generate,
+            tbl.#p.targets.generate,
+            cfg.#l.targets.build,
+            log.#l.targets.build,
+            fw.#m.targets.build,
+            tc.#j.targets.build,
         ]
 
         "integrate": {
@@ -1070,7 +1080,7 @@ import (
         }
 
         "release": {
-            skaffold: image: "gcr.io/trash-362115/services.tracker"
+            skaffold: image: "gcr.io/example-proj/services.api"
             // Swap to scratch base + java entrypoint for jib.
             dockerfile: stage: "scratch"
         }
@@ -1084,8 +1094,8 @@ Each service emits ~8 files from one hand-written bayt.cue:
 
 | Project | Before (hand-maintained) | After (bayt.cue + .bayt/) |
 |---|---|---|
-| services/tracker | 5 files, ~320 lines | 1 file (25 lines) + 8 generated |
-| guis/web | 5 files, ~240 lines | 1 file (12 lines) + 8 generated |
+| services/api | 5 files, ~320 lines | 1 file (25 lines) + 8 generated |
+| guis/app | 5 files, ~240 lines | 1 file (12 lines) + 8 generated |
 | plugins/sayt | 4 files, ~180 lines | 1 file (3 lines) + 8 generated |
 
 ## Open questions
@@ -1123,4 +1133,4 @@ CUE's error messages on unification conflicts are dense. Mitigations on the tabl
 - **Non-artifact targets.** Stacks emit canonical reports where they exist (gradle's JUnit XML at `build/test-results/test/**/*.xml`, etc.). Targets with empty outs cache normally — the merkle-chain tracks "did we already run this on this input?" via the stamp file alone.
 - **Secrets flow.** `dockerfile.secrets: ["host.env"]` on a target generates `--mount=type=secret,id=host.env,required=true` on the RUN line. The compose service declares the secret as `file: ${BAYT_HOST_ENV_FILE}`; integrate.nu's dind-vrun creates the temp file at runtime.
 - **Content-addressable store choice.** Three backends (local-FS / buchgr/bazel-remote / ORAS) selected by env. cache.nu stays agnostic.
-- **Migration path.** Five projects on bayt today (services/{tracker,tracker-tx,boxer}, guis/web, plus the cross-project lib/plugin chain). Per-project incremental adoption proven; no big-bang cutover needed.
+- **Migration path.** Five projects on bayt today (services/{api,api-tx,boxer}, guis/app, plus the cross-project lib/plugin chain). Per-project incremental adoption proven; no big-bang cutover needed.
