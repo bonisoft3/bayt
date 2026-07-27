@@ -432,6 +432,12 @@ bake HCL cannot express "leave unset" — an empty list overrides and `null` is
 rejected — so a caller wanting only the selection would otherwise lose those
 targets' tags and outputs.
 
+Its partner `.bayt/depot.yaml` is that graph pre-flattened at generate time,
+keeping the compose walk out of CI. It is compose, not a stored bake definition,
+because tag/cache/output are late-bound and `buildx bake --print` resolves
+variables as it prints — a stored bake file would carry `:latest`, an unscoped
+cache namespace and a local load. Compose keeps `${…}` literal until CI bakes.
+
 ### Bazel-style refs
 
 Deps use the same string-ref vocabulary across same- and cross-project:

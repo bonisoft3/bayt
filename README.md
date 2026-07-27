@@ -267,11 +267,13 @@ decoration.
 
 ## depot.dev builds
 
-Every project with an `integrate` target emits `.bayt/depot.hcl`: a bake `group`
-naming the images an integration run needs. CI can build and push exactly that
-set on depot's remote builders with no dind daemon — see sayt's `sayt/depot`
-action for the wiring. It's derived from the model, so generating it needs no
-docker.
+Set `depot: true` on a `#project` to emit `.bayt/depot.yaml` (the compose graph
+pre-flattened, with tag/cache/output vars left late-bound) and `.bayt/depot.hcl`
+(a bake `group` naming the images an integration run needs, derived from the
+model). CI bakes the pair to build and push exactly that set on depot's remote
+builders with no dind daemon — see sayt's `sayt/depot` action for the wiring.
+Pre-flattening keeps the compose walk out of CI; the docker CLI it needs is why
+this is opt-in.
 
 ## Merkle-chain invalidation, in one diagram
 
@@ -359,7 +361,7 @@ Emitted under `.bayt/`:
 | `.bayt/compose.<n>.closure.yaml` | up targets only (`compose.up: true` — launch/integrate): flat include of the target's fragment closure + the reserved `bayt` alias, loadable with no user root or federation (`docker compose -f … up bayt`) |
 | `.bayt/skaffold.<n>.yaml`   | per-target skaffold config                                       |
 | `.bayt/bake.<n>.hcl`        | per-target bake HCL                                              |
-| `.bayt/depot.hcl`           | runtime-closure bake `group` (`integrate` + transitive `depends_on`) — every project with an `integrate` target |
+| `.bayt/depot.yaml`, `.bayt/depot.hcl` | depot.dev bake pair: pre-flattened compose + runtime-closure `group` — only with `#project.depot` |
 | `.bayt/vscode.<n>.json`     | per-target vscode task entries (build/test only). User merges into `.vscode/tasks.json`; `sayt lint` warns on drift. |
 
 The `.bayt/` directory is generated but committed. A single `sayt generate` (or `bayt generate --all`) rebuilds the whole tree atomically.

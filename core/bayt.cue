@@ -1089,6 +1089,11 @@ noop: #cmd & {
 	// siblings. Optional — non-release projects leave this unset.
 	bake?: #bake
 
+	// Emit `.bayt/{depot.yaml,depot.hcl}`, the pair a host `depot bake` build
+	// phase consumes. Only depot.yaml needs docker (a `compose config`
+	// flatten), so default off keeps generation docker-free elsewhere.
+	depot: *false | bool
+
 	// compose.includes — project-root-relative compose files (any name;
 	// user-authored) appended to every up closure: the escape hatch
 	// for services defined OUTSIDE the bayt graph that fragments

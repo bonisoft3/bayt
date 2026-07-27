@@ -157,7 +157,7 @@ def _hash-header       [c: string]: nothing -> string { "# generated from bayt.c
 def _slash-header      [c: string]: nothing -> string { "// generated from bayt.cue — do not edit\n" + $c }
 def _json-header  [d: any]: nothing -> any { {_generated_from: "bayt.cue (do not edit)"} | merge $d }
 
-def write-bundle [bundle: record, base: string] {
+def write-bundle [bundle: record, base: string, --depot] {
 	let ws = (pwd | str trim)
 	let prefix = if $base == "." or $base == "" { "" } else { $"($base)/" }
 
@@ -267,14 +267,36 @@ def write-bundle [bundle: record, base: string] {
 ')
 	}
 
-	# --- depot.hcl: the runtime-closure `depot-build` group (gen_bake).
-	# Unconditional — it is pure CUE, so emitting it costs no docker and
-	# needs no opt-in.
-	if ($bundle.bake.depotHcl? | is-not-empty) {
-		atomic-write $"($prefix).bayt/depot.hcl" (_slash-header $bundle.bake.depotHcl)
+	# --- depot.{yaml,hcl}: after the compose files depot.yaml flattens.
+	if $depot or ($bundle.manifest.projectManifest.depot? | default false) {
+		emit-depot-yaml $base $ws
+		if ($bundle.bake.depotHcl? | is-not-empty) {
+			atomic-write $"($prefix).bayt/depot.hcl" (_slash-header $bundle.bake.depotHcl)
+		}
 	}
 
 	print $"bayt: wrote files for project ($bundle.manifest.projectManifest.name)"
+}
+
+# emit-depot-yaml writes <proj>/.bayt/depot.yaml: the integration graph
+# flattened by `docker compose config --no-interpolate`, so ${VARS} stay literal
+# for bake to resolve in CI (DESIGN.md on why compose, not bake). compose
+# absolutizes contexts and emits `service:` refs, so rewrite to
+# repo-root-relative and `service:X` -> `target:X` — depot bake stats a
+# `service:` context as a path. Needs docker; hence the opt-in.
+def emit-depot-yaml [proj_dir: string, ws: string] {
+	let dir = if $proj_dir == "." or $proj_dir == "" { $ws } else { $"($ws)/($proj_dir)" }
+	let r = (do { cd $dir; ^docker compose --profile '*' config --no-interpolate } | complete)
+	if $r.exit_code != 0 {
+		print -e $"bayt: depot.yaml skipped for ($proj_dir) — `docker compose config` exited ($r.exit_code) \(deps not generated? run with --recursive\)"
+		print -e ($r.stderr | lines | last 3 | str join "\n")
+		return
+	}
+	let flat = ($r.stdout
+		| str replace --all $"($ws)/" ""
+		| str replace --all $ws "."
+		| str replace --all "service:" "target:")
+	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header $flat)
 }
 
 # pass1 extracts the project.targets map from a bayt.cue.
@@ -484,14 +506,14 @@ def topo-schedule [roots: list<string>, scan: table, index: record] {
 # two-segment cross-project dep so transitive `:srcs` walking lands the
 # upstream source closures without consumers enumerating them. Missing
 # `:srcs` manifests (upstream target had no srcs) silently skip.
-def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_root: string, targets?: any] {
+def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_root: string, targets?: any, --depot] {
 	let targets = if $targets == null { pass1 $bayt_cue } else { $targets }
 	let cdeps = (cross-dep-strings $targets)
 	let auto_srcs = (srcs-variants $cdeps)
 	let all_deps = ($cdeps | append $auto_srcs | uniq)
 	let dep_manifests = (load-dep-manifests $all_deps $index $workspace_root $auto_srcs)
 	let bundle = (pass2 $bayt_cue $dep_manifests)
-	write-bundle $bundle $dir_rel
+	write-bundle $bundle $dir_rel --depot=$depot
 }
 
 # run-schedule regenerates every project in a topo-schedule, parallel
@@ -500,7 +522,7 @@ def regen-project [bayt_cue: string, dir_rel: string, index: record, workspace_r
 # consumer reads its deps' .bayt manifests — which write-bundle rm -rfs
 # transiently — so only projects with no dep path between them may run
 # concurrently.
-def run-schedule [schedule: record, scan: table, index: record, workspace_root: string] {
+def run-schedule [schedule: record, scan: table, index: record, workspace_root: string, --depot] {
 	# [{dir, lvl}] — a table, not a record ("." is not a safe record key).
 	mut lvl_by_dir = []
 	for d in $schedule.order {
@@ -514,7 +536,7 @@ def run-schedule [schedule: record, scan: table, index: record, workspace_root: 
 		let t = (date now)
 		$batch | par-each { |dir_rel|
 			let row = ($scan | where dir_rel == $dir_rel | first)
-			regen-project $row.path $dir_rel $index $workspace_root $row.targets
+			regen-project $row.path $dir_rel $index $workspace_root $row.targets --depot=$depot
 		} | ignore
 		print-timing $"level ($l) [($batch | str join ' ')]" $t
 	}
@@ -523,12 +545,12 @@ def run-schedule [schedule: record, scan: table, index: record, workspace_root: 
 # Entry point.
 const cache_nu = (path self | path dirname | path dirname | path join "runtime" "cache.nu")
 
-export def main [--recursive (-r), --all, --runtime: string = ""] {
+export def main [--recursive (-r), --all, --runtime: string = "", --depot] {
 	let effective = if ($runtime | is-empty) { ($env.BAYT_RUNTIME_DIR? | default "") } else { $runtime }
-	with-env { BAYT_RUNTIME_DIR: $effective } { _main --recursive=$recursive --all=$all }
+	with-env { BAYT_RUNTIME_DIR: $effective } { _main --recursive=$recursive --all=$all --depot=$depot }
 }
 
-def _main [--recursive (-r), --all] {
+def _main [--recursive (-r), --all, --depot] {
 	if not $all and not ("bayt.cue" | path exists) {
 		return
 	}
@@ -543,7 +565,7 @@ def _main [--recursive (-r), --all] {
 		# Every project in the workspace; works from any cwd inside it.
 		cd $workspace_root
 		let schedule = (topo-schedule ($scan | get dir_rel | uniq) $scan $index)
-		run-schedule $schedule $scan $index $workspace_root
+		run-schedule $schedule $scan $index $workspace_root --depot=$depot
 	} else if $recursive {
 		let project_abs = (pwd)
 		let project_rel = ($project_abs | path relative-to $workspace_root)
@@ -553,7 +575,7 @@ def _main [--recursive (-r), --all] {
 		cd $workspace_root
 
 		let schedule = (topo-schedule [$project_rel] $scan $index)
-		run-schedule $schedule $scan $index $workspace_root
+		run-schedule $schedule $scan $index $workspace_root --depot=$depot
 	} else {
 		# Single-project mode: cd to workspace_root so write-bundle's
 		# relative paths (used by --runtime injection) are computed
@@ -567,7 +589,7 @@ def _main [--recursive (-r), --all] {
 		# scan's `git ls-files`); regen-project's pass 1 covers it.
 		let row = ($scan | where dir_rel == $project_rel | get --optional 0)
 		let tgts = if $row == null { null } else { $row.targets }
-		regen-project $bayt_cue $project_rel $index $workspace_root $tgts
+		regen-project $bayt_cue $project_rel $index $workspace_root $tgts --depot=$depot
 	}
 
 	# Run cache GC at end of generation: regen happens after bayt.cue

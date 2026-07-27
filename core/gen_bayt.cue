@@ -70,6 +70,8 @@ _expandCopy: {
 		name:     G.project.name
 		dir:      G.project.dir
 		activate: G.project.activate
+		// Mirrors #project.depot; generate.nu gates the depot pair on it.
+		depot: G.project.depot
 		// Targets the project actually emits — null entries (a project
 		// opting out of an inherited target via `"<target>": null`) are
 		// filtered here so downstream consumers only see live targets.
