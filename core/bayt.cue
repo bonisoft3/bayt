@@ -189,8 +189,10 @@ noop: #cmd & {
 //   `proj:target`           cross-project workdir COPY from the build stage
 //   `:target:srcs`          same-project, scratch image holding srcs only
 //   `:target:outs`          same-project, scratch image holding outs only
-//   `proj:target:srcs|outs` cross-project, same view discrimination
-//   `:bayt` / `proj:bayt`   per-project scaffolding stage (the .bayt/ tree)
+//   `:target:bayt`          same-project, scratch image holding scaffolding
+//   `proj:target:<view>`    cross-project, same view discrimination
+//
+// One `_suffix` case per synthetic view (D21).
 //
 // Returns `name`, the qualified compose service. `_kind` (workdir/srcs/
 // outs/bayt) is an internal discriminator used only to compute `name`.
@@ -211,15 +213,15 @@ noop: #cmd & {
 		"",
 	][0]
 	_kind: [
-		if _target == "bayt" {"bayt"},
 		if _suffix == "srcs" {"srcs"},
 		if _suffix == "outs" {"outs"},
+		if _suffix == "bayt" {"bayt"},
 		"workdir",
 	][0]
 	name: [
-		if _kind == "bayt" {"\(_proj)-bayt"},
 		if _kind == "srcs" {"\(_proj)-\(_target)_srcs"},
 		if _kind == "outs" {"\(_proj)-\(_target)_outs"},
+		if _kind == "bayt" {"\(_proj)-\(_target)_bayt"},
 		"\(_proj)-\(_target)",
 	][0]
 }
@@ -345,12 +347,12 @@ noop: #cmd & {
 		name: string & !~"^scratch$"
 	}) | close({
 		// FROM is inheritance-only: the whole upstream stage filesystem
-		// flows in. The `:srcs` / `:outs` views are scratch packaging
-		// stages that you'd never want as a FROM base, so reject the
-		// suffix at the schema level. `dockerfile.copy[].from.ref`
-		// accepts all suffixes (curated COPYs are exactly the use case
-		// for the narrow views).
-		ref: string & !~":(srcs|outs)$"
+		// flows in. Every synthetic view is a scratch packaging stage
+		// that you'd never want as a FROM base, so reject the suffix at
+		// the schema level. `dockerfile.copy[].from.ref` accepts all
+		// suffixes (curated COPYs are exactly the use case for the
+		// narrow views).
+		ref: string & !~":(srcs|outs|bayt)$"
 		// Qualified alias: `<project>-<target>` rather than just
 		// `<target>`. BuildKit silently collapses `FROM X AS Y` when
 		// X==Y (the downstream stage steals the upstream's name), so

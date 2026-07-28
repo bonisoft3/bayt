@@ -68,6 +68,7 @@ def main [] {
 	let sayt = ["./stacks/sayt/"]
 	let neg  = ["./tests/_negative/"]
 	let neg_add = ["./tests/_negative_add/"]
+	let neg_view = ["./tests/_negative_from_view/"]
 
 	mut failed = 0
 	print "positive suites"
@@ -76,6 +77,7 @@ def main [] {
 	print "negative suites"
 	$failed = $failed + (eval-fail "A→B→A cycle must fail" $neg)
 	$failed = $failed + (export-fail "remote add without checksum must fail" $neg_add)
+	$failed = $failed + (eval-fail "synthetic view as FROM base must fail" $neg_view)
 
 	if $failed > 0 {
 		print $"($failed) failure\(s\)"

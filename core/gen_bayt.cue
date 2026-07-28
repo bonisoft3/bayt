@@ -277,6 +277,32 @@ _expandCopy: {
 		}
 	}
 
+	// Leaf synthetic stub — the `outs` and `bayt` views: a scratch view of
+	// the parent with no chain of its own.
+	_leafSynth: L={
+		n:    string
+		t:    _
+		view: "outs" | "bayt"
+		files: {globs: [...string], exclude: [...string]}
+		out: {
+			name:     "\(L.n)_\(L.view)"
+			project:  G.project.name
+			dir:      G.project.dir
+			activate: ""
+			srcs: {globs: [], exclude: []}
+			outs: L.files
+			env: {}
+			visibility:          L.t.visibility
+			deps:                []
+			transitiveDeps:      []
+			transitiveCrossDeps: []
+			chainedDeps:         []
+			cmds:                []
+			cache: {full: false, similar: false}
+			upClosure: _upClosure[L.n]
+		}
+	}
+
 	// Same-project dep names per target — refs with the leading `:`
 	// stripped and view suffix folded into the synthetic name (so
 	// `:foo:srcs` → `foo_srcs`). Plain refs `:foo` produce `foo`, the
@@ -352,6 +378,8 @@ _expandCopy: {
 	// Plain names go via "<project>:<name>"; synthetic suffix names map
 	// back to the 3-segment ref form so they match load-dep-manifests'
 	// keying ("foo_srcs" → "<project>:foo:srcs").
+	//
+	// One case per synthetic view (E8).
 	_manifestRef: D={
 		d: _
 		out: [
@@ -360,6 +388,9 @@ _expandCopy: {
 			},
 			if strings.HasSuffix(D.d.name, "_outs") {
 				"\(D.d.project):\(strings.TrimSuffix(D.d.name, "_outs")):outs"
+			},
+			if strings.HasSuffix(D.d.name, "_bayt") {
+				"\(D.d.project):\(strings.TrimSuffix(D.d.name, "_bayt")):bayt"
 			},
 			"\(D.d.project):\(D.d.name)",
 		][0]
@@ -660,7 +691,7 @@ _expandCopy: {
 		// Synthetic-stage manifests — minimum shape needed for downstream
 		// emitters (gen_compose._depCopies, gen_bayt._buildCrossEntry) to
 		// resolve cross-project refs to `:foo:srcs` / `:foo:outs` /
-		// `:bayt` / `<proj>:bayt`. Consumers read {visibility, name,
+		// `:foo:bayt`. Consumers read {visibility, name,
 		// project, dir, outs.{globs, exclude}, transitiveCrossDeps,
 		// chainedDeps} from these stubs.
 		//
@@ -669,10 +700,11 @@ _expandCopy: {
 		// A target without a dockerfile has no compose service for
 		// consumers to reference; no synthetic, no manifest.
 		//
-		// `<n>_srcs`/`<n>_outs` nest under the parent as
-		// `files.<n>.synthetics.{srcs,outs}`; load-dep-manifests reads a cross
-		// ref `proj:foo:srcs` from `bayt.foo.json` `.synthetics.srcs`. `bayt`
-		// is top-level → `bayt.bayt.json`.
+		// All three nest under the parent as
+		// `files.<n>.synthetics.{srcs,outs,bayt}`; load-dep-manifests reads a
+		// cross ref `proj:foo:<view>` from `bayt.foo.json` `.synthetics.<view>`.
+		// Each carries the parent's upClosure — a synthetic's compose graph
+		// is a subset of it.
 		for n, t in G.project.targets if t != null
 			if t.dockerfile != _|_ {
 			// outs = the full transitive source closure the `_srcs` image
@@ -731,52 +763,16 @@ _expandCopy: {
 					chainedDeps: []
 					cmds:        []
 					cache: {full: false, similar: false}
-					// A synthetic's compose graph is a subset of its
-					// parent's — cross consumers pulling this stub's
-					// closure get the parent fragment set.
 					upClosure: _upClosure[n]
 				}
 			}
-			if len(t.outs.globs) > 0 {
-				(n): synthetics: outs: {
-					name:    "\(n)_outs"
-					project: G.project.name
-					dir:     G.project.dir
-					activate: ""
-					srcs: {globs: [], exclude: []}
-					outs: t.outs
-					env: {}
-					visibility:          t.visibility
-					deps:                []
-					transitiveDeps:      []
-					transitiveCrossDeps: []
-					chainedDeps:         []
-					cmds:                []
-					cache: {full: false, similar: false}
-					upClosure: _upClosure[n]
-				}
-			}
-			// Scaffolding view — `:foo:bayt`. The `<n>_bayt` stage is
-			// self-contained (it chains its deps' `_bayt` synths
-			// internally), so consumers need only the direct COPY and
-			// the stub carries no dep lists.
-			(n): synthetics: bayt: {
-				name:    "\(n)_bayt"
-				project: G.project.name
-				dir:     G.project.dir
-				activate: ""
-				srcs: {globs: [], exclude: []}
-				outs: {globs: (_baytScaffold & {"n": n, "t": t}).out, exclude: []}
-				env: {}
-				visibility:          t.visibility
-				deps:                []
-				transitiveDeps:      []
-				transitiveCrossDeps: []
-				chainedDeps:         []
-				cmds:                []
-				cache: {full: false, similar: false}
-				upClosure: _upClosure[n]
-			}
+			// Declared for every dockerfile target, `outs: globs: []`
+			// included (D20). gen_compose's `_outsEmit` gates the stage
+			// and service on a non-empty interface.
+			(n): synthetics: outs: (_leafSynth & {"n": n, "t": t, view: "outs", files: t.outs}).out
+			// Scaffolding view — `:foo:bayt`. The `<n>_bayt` stage chains
+			// its deps' `_bayt` synths internally.
+			(n): synthetics: bayt: (_leafSynth & {"n": n, "t": t, view: "bayt", files: {globs: (_baytScaffold & {"n": n, "t": t}).out, exclude: []}}).out
 		}
 
 	}

@@ -30,8 +30,13 @@ gen_compose.cue (D12/D13/D17).
 
 Don't plain-`deps` a target whose output is an *image*, not workdir files (a
 launch/release on a `FROM busybox`-style base): the bulk `COPY --from=<it>
-/monorepo/<dir> …` fails — that runtime image has no `/monorepo/<dir>`. Take its
-artifact via `:outs`, or order against it with `compose.depends_on`.
+/monorepo/<dir> …` fails when that runtime image has no `/monorepo/<dir>`,
+and when it does have one, copies it for nothing. Dep its `:outs` view
+instead — emitted for every dockerfile target, `outs: globs: []` included,
+and an empty one federates the producer into the consumer's closure without
+a COPY or an `additional_contexts` entry (D20 pins both halves).
+`compose.depends_on` also gives the edge without a copy, but it *starts* the
+producer (gotcha 2 below) — take it only when the consumer needs it running.
 
 ## The runtime bring-up model
 

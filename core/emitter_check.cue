@@ -150,6 +150,58 @@ _e7_m: (#manifestGen & {project: _e7, depManifests: {}})
 _e7_m: projectManifest: targets: ["build"]
 _e7_m: files: {[!="build"]: _|_}
 
+// --- E8: every synthetic view reaches its dep manifest through the
+// 3-segment ref, so _manifestRef must map each one back. A missing case
+// builds a key nothing loaded, and an absent key can evaluate to top
+// rather than `_|_` — the call sites' `!= _|_` guards then pass and a
+// non-concrete value reaches the closure list, surfacing as an
+// `invalid interpolation` on _fragPath that names neither ref nor view.
+_e8: #project & {
+	name: "e8"
+	dir:  "e8"
+	targets: {
+		"integrate": {
+			deps: ["up:launch:bayt", "up:launch:outs"]
+			srcs: globs: ["tests/**"]
+			cmd:  "builtin": do: "true"
+			dockerfile: busybox
+			compose: {up: true, manual: true}
+		}
+	}
+}
+// Each stub carries a fragment only it can contribute, so a view that
+// resolved through the wrong key shows up in the closure below rather
+// than being masked by its sibling.
+_e8_dm: {
+	project:             "up"
+	dir:                 "up"
+	visibility:          "public"
+	transitiveCrossDeps: []
+}
+_e8_m: (#manifestGen & {project: _e8, depManifests: {
+	"up:launch:bayt": _e8_dm & {
+		name: "launch_bayt"
+		outs: {globs: [".bayt/compose.launch.yaml"], exclude: []}
+		upClosure: ["up/.bayt/compose.launch.yaml", "up/.bayt/compose.viabayt.yaml"]
+	}
+	// Image-only producer — empty interface (D20).
+	"up:launch:outs": _e8_dm & {
+		name: "launch_outs"
+		outs: {globs: [], exclude: []}
+		upClosure: ["up/.bayt/compose.launch.yaml", "up/.bayt/compose.viaouts.yaml"]
+	}
+}})
+// The `outs` view is declared even though integrate has no outs: a ref
+// whose view is absent fails generate, leaving image-only producers
+// unreferenceable. D12 pins the compose side — declared, still no service.
+_e8_m: files: integrate: synthetics: outs: {name: "integrate_outs", outs: globs: []}
+_e8_m: files: integrate: upClosure: [
+	"e8/.bayt/compose.integrate.yaml",
+	"up/.bayt/compose.launch.yaml",
+	"up/.bayt/compose.viabayt.yaml",
+	"up/.bayt/compose.viaouts.yaml",
+]
+
 // Public aggregator forces evaluation of the hidden _e* bindings.
 Tests: emitter: {
 	e1: _e1_m
@@ -159,4 +211,5 @@ Tests: emitter: {
 	e5: _e5_m
 	e6: _e6_m
 	e7: _e7_m
+	e8: _e8_m
 }

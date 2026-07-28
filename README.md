@@ -151,7 +151,7 @@ Every target with a Dockerfile auto-emits three sibling synthetics consumers can
 | Synthetic | Content |
 |---|---|
 | `:foo:srcs` | scratch image holding the target's `srcs.globs` — the input source closure |
-| `:foo:outs` | scratch image holding the target's `outs.globs` — the artifact view |
+| `:foo:outs` | scratch image holding the target's `outs.globs` — the artifact view. Declared even when `outs` is empty, where it emits no image: that is how a consumer deps an image-only target (launch/release), federating its compose fragments without copying its tree |
 | `:foo:bayt` | scratch image holding the target's scaffolding fileset (fragment, Dockerfile, taskfile, manifest, the go-task roots, up closure) plus its deps' chained scaffolding — nothing from sibling targets, so a sibling's definition churn never invalidates a consumer layer |
 
 `:srcs` is the typical source-closure dep for dindbox-cascade flows — the outer `ci` stage stays COPY-only while the inner bake reconstructs the chain. Transitive walking is implicit: a dep `:integrate:srcs` rolls in the upstream `:build:srcs` and each project's `:setup:srcs` (toolchain config files like `.mise.toml`, `mise.lock`, wrapper.properties), so consumers don't enumerate each upstream. The synthetic's manifest exposes the same-project chain as cross-project entries on its `transitiveCrossDeps`, letting internal upstreams ride along the public dep's surface.

@@ -420,7 +420,12 @@ profile) is what lets `depends_on`/context edges onto them resolve with no
 `--profile`; the verified gotchas are in DEVELOPING.md.
 
 The `:outs` interface is opt-in per dep edge (`deps: [":foo:outs"]`), not
-inferred from a target's role.
+inferred from a target's role. A target in this group ships an image rather
+than workdir files, so its interface is empty — and an empty `:outs` is still
+a ref: it federates the producer's fragments into the consumer's closure and
+orders the two, copying nothing. That is how a consumer says "I need this
+service in my closure, not its files"; a plain `deps:` on the same producer
+bulk-COPYs a runtime image instead.
 
 Which of those images a CI build phase must actually push is a third question,
 answered by `.bayt/depot.hcl`: a bake `group` naming `integrate` plus its
@@ -461,7 +466,7 @@ Every target with a dockerfile auto-emits three sibling synthetics that consumer
 | Synthetic | Content | Use case |
 |---|---|---|
 | `:foo:srcs` | A scratch image holding the target's `srcs.globs` (the input source closure). | Source-closure deps for dindbox cascades — the outer ci stage stays COPY-only while the inner bake reconstructs the dep's build chain. |
-| `:foo:outs` | A scratch image holding the target's `outs.globs` (the output artifact view). | Cross-project consumers that need only artifacts, not sources. |
+| `:foo:outs` | A scratch image holding the target's `outs.globs` (the output artifact view). Declared for every dockerfile target; empty `outs` emits no image. | Cross-project consumers that need only artifacts, not sources — empty, an image-only producer (above). |
 | `:foo:bayt` | A scratch image holding the target's scaffolding fileset (fragment, Dockerfile, taskfile, manifest, go-task roots, up closure) plus its deps' chained scaffolding. | Containerized task-runner and compose invocation inside dindbox layers, scoped to the up target's closure. |
 
 The generator emits each as its own compose service + Dockerfile fragment. From the consumer side they're addressed identically to regular targets — bayt's machinery picks the right COPY shape.

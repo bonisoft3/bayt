@@ -312,12 +312,12 @@ _d11_outs_to: _d11_dc.compose.files.build.services."d11-build_outs".build."x-bak
 _d11_outs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs,mode=max,image-manifest=true,oci-mediatypes=true"]
 
 
-// --- D12: a `:x:outs` dep on a target with empty outs.globs is inert
-// everywhere: _outsEmit never emits the `<x>_outs` service, so an
-// ungated COPY or `service:<x>_outs` context would dangle (compose/bake
-// error). Same-project refs are also pre-filtered by _allEmit in
-// _targetDeps; for cross-project entries (transitiveCrossDeps, not
-// pre-filtered) the _depEdge gate is the only guard.
+// --- D12: a `:x:outs` dep on a target with empty outs.globs copies
+// nothing: _outsEmit never emits the `<x>_outs` service, so an ungated
+// COPY or `service:<x>_outs` context would dangle (compose/bake error).
+// Same-project refs are also pre-filtered by _allEmit in _targetDeps;
+// for cross-project entries (transitiveCrossDeps, not pre-filtered) the
+// _depEdge gate is the only guard.
 _d12: #project & {
 	name: "d12"
 	dir:  "d12"
@@ -532,6 +532,81 @@ _d19_body: _d19_dc.dockerfiles.launch
 _d19_has_tool:  strings.Contains(_d19_body, "/usr/local/bin/tool") & true
 _d19_has_model: strings.Contains(_d19_body, "/model.bin") & true
 
+// --- D20: the image-only cross-project edge. A producer that ships an
+// image (launch/release: `outs: globs: []`) is deppable through its empty
+// `:outs` view, and that edge federates and orders without copying: the
+// producer's fragments reach the consumer's closure — so `up --no-build`
+// resolves its service — while nothing COPYs a runtime image that has no
+// /monorepo/<dir> to give. The plain-ref alternative is D13's bulk COPY.
+_d20: #project & {
+	name: "d20"
+	dir:  "d20"
+	targets: {
+		"integrate": {
+			deps: ["img:launch:outs"]
+			srcs: globs: ["tests/**"]
+			cmd:  "builtin": do: "true"
+			dockerfile: busybox
+			compose: {up: true, manual: true}
+		}
+	}
+}
+_d20_dc: (#dockerComposeGen & {project: _d20, depManifests: {
+	"img:launch:outs": {
+		name:       "launch_outs"
+		project:    "img"
+		dir:        "img"
+		visibility: "public"
+		outs: {globs: [], exclude: []}
+		transitiveCrossDeps: []
+		upClosure: ["img/.bayt/compose.launch.yaml", "img/.bayt/compose.build.yaml"]
+	}
+}})
+_d20_body: _d20_dc.dockerfiles.integrate
+// Neither the unemitted `_outs` synth nor the runtime image is copied.
+// The trailing space is load-bearing: the consumer's own `_bayt` synth
+// does chain the producer's `img-launch_bayt`, which is scaffolding.
+_d20_no_outs_copy: strings.Contains(_d20_body, "img-launch_outs") & false
+_d20_no_bulk_copy: strings.Contains(_d20_body, "COPY --from=img-launch ") & false
+_d20_dc: compose: files: integrate: services: "d20-integrate": build: {["additional_contexts"]: {["img-launch_outs"]: _|_}}
+// The federation half: the producer's own closure, verbatim from its
+// manifest, joins the consumer's include list.
+_d20_inc: _d20_dc.compose.files."integrate.closure".include
+_d20_inc: [
+	{path: "../../d20/.bayt/compose.integrate.yaml", required: false},
+	{path: "../../img/.bayt/compose.launch.yaml", required: false},
+	{path: "../../img/.bayt/compose.build.yaml", required: false},
+]
+
+// --- D21: a `:x:bayt` copy ref names the scaffolding synth, not the
+// build stage. #qualifyRef discriminates on the view suffix; a suffix it
+// has no case for falls through to the workdir name, so the COPY reads
+// the build stage and the wrongness is silent — nothing dangles, the
+// image just isn't the one asked for. The FROM-ref side is closed the
+// other way: the schema rejects every view suffix
+// (tests/_negative_from_view).
+_d21: #project & {
+	name: "d21"
+	dir:  "d21"
+	targets: {
+		"setup": {
+			cmd: "builtin": do: "true"
+			dockerfile: nubox
+		}
+		"consumer": {
+			cmd: "builtin": do: "true"
+			dockerfile: busybox & {
+				copy: [{from: {ref: ":setup:bayt"}, srcs: ["/monorepo/d21/.bayt"], dst: "/scaffold"}]
+			}
+		}
+	}
+}
+_d21_dc:   (#dockerComposeGen & {project: _d21, depManifests: {}})
+_d21_body: _d21_dc.dockerfiles.consumer
+_d21_copy: strings.Contains(_d21_body, "COPY --from=d21-setup_bayt /monorepo/d21/.bayt /scaffold") & true
+// The context that COPY needs is wired to the synth service, not d21-setup.
+_d21_dc: compose: files: consumer: services: "d21-consumer": build: additional_contexts: "d21-setup_bayt": "service:d21-setup_bayt"
+
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
 	d19_tool:  _d19_has_tool
@@ -584,4 +659,8 @@ Tests: docker_compose: {
 	d18_launch_inc:    _d18_launch_inc
 	d18_launch_alias:  _d18_launch_alias
 	d18_harness_inc:   _d18_harness_inc
+	d20:               _d20_dc
+	d20_no_outs_copy:  _d20_no_outs_copy
+	d20_no_bulk_copy:  _d20_no_bulk_copy
+	d20_inc:           _d20_inc
 }
