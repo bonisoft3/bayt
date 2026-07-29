@@ -283,10 +283,8 @@ _expandCopy: {
 		n:    string
 		t:    _
 		view: "outs" | "bayt"
-		// Untyped: a type here re-unifies the caller's fileset, and a
-		// glob list that is a disjunction with a default has no concrete
-		// form to re-unify against (E9). The comprehensions below resolve
-		// it, so the assertion lands on the resolved value.
+		// Untyped: the stub resolves the caller's fileset rather than
+		// re-typing it (E9).
 		files: _
 		out: {
 			name:     "\(L.n)_\(L.view)"
