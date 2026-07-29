@@ -283,14 +283,21 @@ _expandCopy: {
 		n:    string
 		t:    _
 		view: "outs" | "bayt"
-		files: {globs: [...string], exclude: [...string]}
+		// Untyped: a type here re-unifies the caller's fileset, and a
+		// glob list that is a disjunction with a default has no concrete
+		// form to re-unify against (E9). The comprehensions below resolve
+		// it, so the assertion lands on the resolved value.
+		files: _
 		out: {
 			name:     "\(L.n)_\(L.view)"
 			project:  G.project.name
 			dir:      G.project.dir
 			activate: ""
 			srcs: {globs: [], exclude: []}
-			outs: L.files
+			outs: {
+				globs:   [...string] & [for g in L.files.globs {g}]
+				exclude: [...string] & [for e in L.files.exclude {e}]
+			}
 			env: {}
 			visibility:          L.t.visibility
 			deps:                []

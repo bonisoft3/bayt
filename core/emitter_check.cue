@@ -202,6 +202,37 @@ _e8_m: files: integrate: upClosure: [
 	"up/.bayt/compose.viaouts.yaml",
 ]
 
+// --- E9: a glob list expressed as a disjunction with a default still
+// reaches the synthetic views intact. `#fileset.globs` carries its own
+// `*[]` default, so unifying the two leaves no valid default and the
+// disjunction is empty — every disjunct fails a length check against
+// `[]`, and `bayt generate` dies at scan naming only the CUE path. The
+// stub must therefore resolve the fileset, never re-type it.
+_e9: S={
+	in?: [...string]
+	// Optional input absent → its disjunct is bottom → the fallback wins.
+	_globs: *S.in | ["config.json"]
+	out: #project & {
+		name: "e9"
+		dir:  "e9"
+		targets: "build": {
+			srcs: globs: S._globs
+			outs: globs: S._globs
+			cmd: "builtin": do: "true"
+			dockerfile: busybox
+		}
+	}
+}
+_e9_set_m:  (#manifestGen & {project: (_e9 & {in: ["dist/app", "dist/lib"]}).out, depManifests: {}})
+_e9_fall_m: (#manifestGen & {project: (_e9 & {}).out, depManifests: {}})
+// Asserted via len + index, never by unifying the expected list in:
+// supplying a concrete list would itself resolve the disjunction and the
+// guard would pass against the broken emitter.
+_e9_set_len:   len(_e9_set_m.files.build.synthetics.outs.outs.globs) & 2
+_e9_set_head:  _e9_set_m.files.build.synthetics.outs.outs.globs[0] & "dist/app"
+_e9_fall_len:  len(_e9_fall_m.files.build.synthetics.outs.outs.globs) & 1
+_e9_fall_head: _e9_fall_m.files.build.synthetics.outs.outs.globs[0] & "config.json"
+
 // Public aggregator forces evaluation of the hidden _e* bindings.
 Tests: emitter: {
 	e1: _e1_m
@@ -212,4 +243,8 @@ Tests: emitter: {
 	e6: _e6_m
 	e7: _e7_m
 	e8: _e8_m
+	e9_set_len:   _e9_set_len
+	e9_set_head:  _e9_set_head
+	e9_fall_len:  _e9_fall_len
+	e9_fall_head: _e9_fall_head
 }
