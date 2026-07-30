@@ -261,6 +261,11 @@ lint: {
 //      against its loaded depends_on chain.
 ci: inject & {
 	activate: ""
+	// Sources reach this stage only through a `:srcs` dep: the per-run values
+	// (image tag, cache scope, docker host) arrive as secrets, which buildkit
+	// keeps out of cache keys. Without one, the RUN layer's key holds no source
+	// content, so a warm cache replays it and reports success without running.
+	deps: list.MatchN(>=1, =~":srcs$")
 	cmd: "builtin": {
 		shell: "sh"
 		// Pin the frontend via the `# syntax=` headline, not BUILDKIT_SYNTAX. On depot, that var
