@@ -59,6 +59,7 @@ package sayt
 
 import (
 	"list"
+	"strings"
 
 	"github.com/bonisoft3/bayt/core:bayt"
 	// Capitalized aliases for the toolchain-stack imports so the
@@ -259,13 +260,36 @@ lint: {
 //      COMPOSE_BAKE=true strips them.
 //   2. `compose up integrate` (no --build) runs the loaded integrate
 //      against its loaded depends_on chain.
-ci: inject & {
+ci: C={
+	inject
 	activate: ""
 	// Sources reach this stage only through a `:srcs` dep: the per-run values
 	// (image tag, cache scope, docker host) arrive as secrets, which buildkit
 	// keeps out of cache keys. Without one, the RUN layer's key holds no source
 	// content, so a warm cache replays it and reports success without running.
-	deps: list.MatchN(>=1, =~":srcs$")
+	// Anchored on the view segment, so a plain ref to a target whose name merely
+	// ends in `srcs` doesn't satisfy it.
+	deps: list.MatchN(>=1, =~"^[^:]*:[^:]+:srcs$")
+	// Per suite: scaffolding whose sources are absent reopens that hole one
+	// suite at a time. Membership normalizes the project segment the way
+	// #qualifyRef does, so `:X:srcs` and `<project>:X:srcs` count as one ref;
+	// the key is the sibling to add, spelled like the dep that wants it.
+	_pairedSrcs: {
+		let _ref = {
+			for d in deps {
+				let _p = strings.Split(d, ":")
+				(d): {
+					view: [if len(_p) >= 3 {_p[2]}, ""][0]
+					qual: "\([if _p[0] == "" {C.project}, _p[0]][0]):\(_p[1])"
+					sib:  "\(_p[0]):\(_p[1]):srcs"
+				}
+			}
+		}
+		let _have = [for d in deps if _ref[d].view == "srcs" {_ref[d].qual}]
+		for d in deps if _ref[d].view == "bayt" {
+			(_ref[d].sib): list.Contains(_have, _ref[d].qual) & true
+		}
+	}
 	cmd: "builtin": {
 		shell: "sh"
 		// Pin the frontend via the `# syntax=` headline, not BUILDKIT_SYNTAX. On depot, that var

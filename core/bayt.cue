@@ -1156,5 +1156,9 @@ noop: #cmd & {
 			}
 		}
 	}) | null
+	// Nulling a target is how a consumer opts out, so never author one inside a
+	// defaulted disjunction: whichever side the default sits on, a target that
+	// fails a check here drops to the null disjunct and reads as deliberately
+	// absent rather than failing generation.
 }
 

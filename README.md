@@ -156,6 +156,8 @@ Every target with a Dockerfile auto-emits three sibling synthetics consumers can
 
 `:srcs` is the typical source-closure dep for dindbox-cascade flows — the outer `ci` stage stays COPY-only while the inner bake reconstructs the chain. Transitive walking is implicit: a dep `:integrate:srcs` rolls in the upstream `:build:srcs` and each project's `:setup:srcs` (toolchain config files like `.mise.toml`, `mise.lock`, wrapper.properties), so consumers don't enumerate each upstream. The synthetic's manifest exposes the same-project chain as cross-project entries on its `transitiveCrossDeps`, letting internal upstreams ride along the public dep's surface.
 
+For `sayt.ci` / `sayt.ciRun` these deps are required, not conventional — a source-free RUN layer cache-hits and reports a suite it never ran. Generation fails on a deps list with no `:srcs` view, and on any `:X:bayt` whose `:X:srcs` sibling is missing.
+
 ### `dockerfile.from`: chain or fresh image
 
 Each emitted Dockerfile stage's FROM is the producer's choice. Bazel-style refs: `:target` (same project) or `project:target` (cross):

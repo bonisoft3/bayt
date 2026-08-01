@@ -69,15 +69,19 @@ def main [] {
 	let neg  = ["./tests/_negative/"]
 	let neg_add = ["./tests/_negative_add/"]
 	let neg_view = ["./tests/_negative_from_view/"]
+	let neg_ci_srcs = ["./tests/_negative_ci_srcs/"]
+	let pos_ci_srcs = ["./tests/_positive_ci_srcs/"]
 
 	mut failed = 0
 	print "positive suites"
 	$failed = $failed + (eval-pass "core bayt" $core)
 	$failed = $failed + (eval-pass "stacks/sayt" $sayt)
+	$failed = $failed + (eval-pass "ci `:X:bayt` with `:X:srcs` must pass" $pos_ci_srcs)
 	print "negative suites"
 	$failed = $failed + (eval-fail "A→B→A cycle must fail" $neg)
 	$failed = $failed + (export-fail "remote add without checksum must fail" $neg_add)
 	$failed = $failed + (eval-fail "synthetic view as FROM base must fail" $neg_view)
+	$failed = $failed + (eval-fail "ci `:X:bayt` without `:X:srcs` must fail" $neg_ci_srcs)
 
 	if $failed > 0 {
 		print $"($failed) failure\(s\)"
