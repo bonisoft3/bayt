@@ -158,20 +158,30 @@ def local-entry [key: string]: nothing -> path {
 }
 
 # Copy every file under <outs_dir>/** into the corresponding cwd path,
-# creating parent dirs as needed. No-op if <outs_dir> is missing —
-# entries with empty outs lists are a valid hit. Used by the local-FS
-# restore paths (exact and warm).
-def restore-outs-from [outs_dir: path] {
-	if not ($outs_dir | path exists) { return }
+# creating parent dirs as needed. Missing <outs_dir> is a valid hit —
+# that is what an empty outs list stores. Used by the local-FS restore
+# paths (exact and warm). False means the workspace was left without a
+# partial restore in it; the caller treats that as a miss.
+def restore-outs-from [outs_dir: path]: nothing -> bool {
+	if not ($outs_dir | path exists) { return true }
 	let cwd = (pwd)
 	# Canonicalize so symlink-resolved glob results stay relative to base.
 	let base = ($outs_dir | path expand)
 	# Same `path type == "file"` filter as expand-globs — `--no-dir`
 	# alone misses symlinks-to-directories.
-	for src in (glob ($base | path join "**/*") --no-dir | where { |p| ($p | path type) == "file" }) {
-		let dst = ($cwd | path join ($src | path relative-to $base))
-		mkdir ($dst | path dirname)
-		cp $src $dst
+	let srcs = (glob ($base | path join "**/*") --no-dir | where { |p| ($p | path type) == "file" })
+	try {
+		for src in $srcs {
+			let dst = ($cwd | path join ($src | path relative-to $base))
+			mkdir ($dst | path dirname)
+			cp $src $dst
+		}
+		true
+	} catch { |e|
+		# Same recovery as bazel-get's publish loop, for the same reason.
+		for src in $srcs { rm -rf ($cwd | path join ($src | path relative-to $base)) }
+		print -e $"BAYT_CACHE warn: restore aborted mid-copy, outs cleared: ($e.msg)"
+		false
 	}
 }
 
@@ -209,7 +219,6 @@ def local-get [key: string]: nothing -> bool {
 		return false
 	}
 	restore-outs-from ($entry | path join "outs")
-	true
 }
 
 # Store an entry locally. Atomic via tempdir + rename. Skip on
@@ -307,19 +316,20 @@ def local-similar [current: record]: nothing -> any {
 # ============================================================================
 # buchgr/bazel-remote HTTP cache backend (pure nushell, no curl/tar)
 #
-# Stores each entry's outs as a tab-separated archive on /ac/<hash>:
-#   <relative-path>\t<base64-content>\n
-# Lives on the AC (Action Cache) endpoint rather than CAS because
-# bazel-remote's AC accepts arbitrary bytes when started with
-# `--disable_http_ac_validation`; without that flag, AC POSTs of
-# non-protobuf bytes are rejected. CAS would require us to compute
-# bazel-conformant SHA-256 digests for every blob — much more work
-# for the same on-the-wire result.
+# Split storage; see DESIGN.md's cache section for the rationale.
+#   /cas/<sha256>  one blob per payload file, addressed by its content
+#   /ac/<key>      the entry: JSON [{path, size, sha256, exec}]
 #
-# Bring bazel-remote up with:
+# The entry is not a REAPI ActionResult, so bazel-remote must run with
+# `--disable_http_ac_validation`. The CAS half needs no such flag:
+# bazel-remote validates uploads against the digest in the URL and rejects
+# a mismatch, so a corrupted blob can never be stored under a good name.
+#
 #   bazel-remote --dir <path> --max_size <gb> --disable_http_ac_validation
-# Eviction is bazel-remote's job (--max_size); cache.nu's gc
-# subcommand is local-FS only and won't touch this backend.
+#
+# Eviction is bazel-remote's job (--max_size); cache.nu's gc subcommand is
+# local-FS only and won't touch this backend. An entry whose blobs were
+# evicted degrades to a miss.
 # ============================================================================
 
 def bazel-url []: nothing -> string { $env.BAYT_CACHE_URL? | default "" }
@@ -329,35 +339,150 @@ def bazel-headers []: nothing -> record {
 	if ($token | is-empty) { {} } else { { Authorization: $"Bearer ($token)" } }
 }
 
+# Entry address. Folds a format tag into the key so a client speaking a
+# different entry format lands on its own slot and misses, rather than
+# fetching a body it cannot parse. Re-hashed to stay 64 hex chars, which is
+# what bazel-remote's URL parsing accepts.
+def bazel-ac-key [key: string]: nothing -> string {
+	$"bayt-ac-v2:($key)" | hash sha256
+}
+
+# Owner's exec bit. Tracked per file rather than the full mode because
+# that is the only bit that changes how a restored artifact behaves —
+# the same choice REAPI's OutputFile.is_executable makes.
+def is-exec [f: path]: nothing -> bool {
+	(ls -l $f | first | get mode | str substring 0..<3 | str contains "x")
+}
+
+def bazel-blob-present [digest: string]: nothing -> bool {
+	try {
+		http head --headers (bazel-headers) $"(bazel-url)/cas/($digest)" | ignore
+		true
+	} catch { false }
+}
+
 def bazel-get [key: string]: nothing -> bool {
-	let archive = try { http get --headers (bazel-headers) --raw $"(bazel-url)/ac/($key)" } catch { return false }
-	if ($archive | is-empty) { return false }
+	let body = try { http get --headers (bazel-headers) --raw $"(bazel-url)/ac/(bazel-ac-key $key)" } catch { return false }
+	if ($body | is-empty) { return false }
+	let rows = try { $body | decode utf-8 | from json } catch { return false }
+	# nushell describes uniform records as `table<…>` and only the empty
+	# list as `list<any>`; an entry is legitimately either.
+	let shape = ($rows | describe)
+	if not (($shape | str starts-with "table") or ($shape | str starts-with "list")) { return false }
+	# Paths come off the wire and are joined onto cwd, so one escaping the
+	# workspace would write outside it.
+	if ($rows | any { |r| ($r.path? | default "" | is-empty) or ($r.path | str starts-with "/") or ($r.path | str contains "..") }) {
+		return false
+	}
+
 	let cwd = (pwd)
-	$archive | decode utf-8 | lines | where { |l| ($l | is-not-empty) } | each { |line|
-		let parts = ($line | split row "\t")
-		if ($parts | length) >= 2 {
-			let dst = ($cwd | path join ($parts | get 0))
+	# Fetch only what the workspace lacks. A warm worktree after an
+	# unrelated edit differs in a handful of outs, so this is the
+	# difference between refetching a payload and refetching nothing.
+	let missing = ($rows | where { |r|
+		let dst = ($cwd | path join $r.path)
+		if ($dst | path type) != "file" { true } else { (open --raw $dst | hash sha256) != $r.sha256 }
+	})
+
+	# Stage, then publish: nothing enters the workspace until every blob has
+	# arrived.
+	let stage = (mktemp -d)
+	let ok = try {
+		$missing | par-each { |r|
+			let tmp = ($stage | path join $r.path)
+			mkdir ($tmp | path dirname)
+			try {
+				http get --headers (bazel-headers) --raw $"(bazel-url)/cas/($r.sha256)" | save --raw -f $tmp
+			} catch { |e|
+				error make { msg: $"cas fetch ($r.sha256) for ($r.path): ($e.msg)" }
+			}
+			# bazel-remote rejects a blob whose stored size disagrees, but it
+			# fronts S3/GCS and proxies to other caches, and a short read from
+			# the chain behind it arrives as a valid response.
+			if ((ls $tmp | first | get size | into int) != $r.size) {
+				error make { msg: $"cas blob ($r.sha256) for ($r.path): size mismatch" }
+			}
+			if (($env.BAYT_CACHE_VERIFY? | default "") == "full") and ((open --raw $tmp | hash sha256) != $r.sha256) {
+				error make { msg: $"cas blob ($r.sha256) for ($r.path): content mismatch" }
+			}
+		} | ignore
+		true
+	} catch { |e|
+		print -e $"BAYT_CACHE warn: restore aborted, workspace untouched: ($e.msg)"
+		false
+	}
+	if not $ok { rm -rf $stage; return false }
+
+	# A landed `mv` cannot be undone, so recovery clears every declared out
+	# rather than reconciling a partial mix. It assumes the cmd regenerates
+	# an out that is absent — true of gradle, go and turbo; a tool that
+	# trusts its own incremental state without checking output presence
+	# would leave the hole, and the store that follows would publish it.
+	let published = try {
+		for r in $missing {
+			let dst = ($cwd | path join $r.path)
 			mkdir ($dst | path dirname)
-			$parts | get 1 | decode base64 | save --raw -f $dst
+			# POSIX `mv file dir` lands the file inside the directory and
+			# raises nothing.
+			if ($dst | path exists) and (($dst | path type) != "file") { rm -rf $dst }
+			mv --force ($stage | path join $r.path) $dst
 		}
-	} | ignore
+		true
+	} catch { |e|
+		for r in $rows { rm -rf ($cwd | path join $r.path) }
+		print -e $"BAYT_CACHE warn: restore aborted mid-publish, outs cleared: ($e.msg)"
+		false
+	}
+	rm -rf $stage
+	if not $published { return false }
+
+	# Mode is not covered by the content digest, so a file skipped by the
+	# digest check can carry a stale bit in either direction — and `save`
+	# truncates in place, leaving a fetched file the mode it already had.
+	if $nu.os-info.name != "windows" {
+		for r in $rows {
+			let p = ($cwd | path join $r.path)
+			if ($r.exec? | default false) { ^chmod +x $p } else { ^chmod -x $p }
+		}
+	}
 	true
 }
 
 def bazel-put [key: string, outs_globs: list<string>, outs_exclude: list<string>, _manifest: string] {
 	let cwd = (pwd)
 	let files = (expand-globs $outs_globs $outs_exclude)
-	# Skip empty PUTs: bazel-get treats an empty response body as miss
-	# (no way to distinguish "stored an empty archive" from "404"
-	# without an extra HEAD request), so storing an empty archive
-	# would fail to round-trip on the next call.
-	if ($files | is-empty) { return }
-	let archive = ($files | each { |f|
-		let rel = ($f | path relative-to $cwd)
-		let content = (open --raw $f | encode base64)
-		$"($rel)\t($content)"
-	} | str join "\n")
-	$archive | http put --headers (bazel-headers) --content-type "application/octet-stream" $"(bazel-url)/ac/($key)"
+	# An empty outs list is a real entry, not a skip: it records "this ran
+	# on these inputs", which is what --full consults.
+	let rows = ($files | par-each { |f|
+		{
+			path:   ($f | path relative-to $cwd),
+			size:   (ls $f | first | get size | into int),
+			sha256: (open --raw $f | hash sha256),
+			exec:   (is-exec $f),
+		}
+	})
+	# Every blob before the entry, never the reverse: the entry is what
+	# makes the payload reachable, so publishing it first would expose a
+	# key whose blobs a concurrent reader cannot fetch.
+	#
+	# HEAD before PUT because an already-present blob is the common case
+	# across rebuilds, turning an upload into a round-trip.
+	#
+	# Bodies go positionally, never piped: a piped body streams with
+	# `Transfer-Encoding: chunked`, and bazel-remote's CAS handler needs the
+	# length upfront to verify the digest, answering 400 without it.
+	$rows | par-each { |r|
+		if not (bazel-blob-present $r.sha256) {
+			try {
+				(http put --headers (bazel-headers) --content-type "application/octet-stream"
+					$"(bazel-url)/cas/($r.sha256)" (open --raw ($cwd | path join $r.path)))
+			} catch { |e|
+				error make { msg: $"cas upload ($r.sha256) for ($r.path): ($e.msg)" }
+			}
+		}
+	} | ignore
+	(http put --headers (bazel-headers) --content-type "application/json"
+		$"(bazel-url)/ac/(bazel-ac-key $key)" ($rows | to json --raw))
 }
 
 # ============================================================================
@@ -408,11 +533,10 @@ def oras-put [project: string, target: string, key: string, outs_globs: list<str
 # Backend dispatch.
 #
 # project + target are passed for ORAS tag construction and local-FS
-# similarity scoping. `meta` is the full metadata record (user, branch,
-# ts, inputs); each backend persists it however its storage shape
-# allows (local: metadata.json sibling; ORAS: OCI annotations;
-# bazel-remote: JSON-prefix in the blob). bazel/oras `_meta` ignored
-# until phase 2/3 implements their metadata persistence.
+# similarity scoping. Only local-FS persists `e.meta` (metadata.json
+# beside the entry); bazel-remote and ORAS receive the entry record but
+# store nothing from it, which is why only local-FS can answer
+# backend-similar.
 def backend-get [project: string, target: string, key: string]: nothing -> bool {
 	match (backend) {
 		"bazel" => (bazel-get $key)
@@ -514,7 +638,7 @@ export def --wrapped "main run" [
 	# `../../<dep>/.task/bayt/<n>.hash`. Inside docker these stamps are
 	# COPYed in via the Dockerfile chain. On the host they only exist
 	# after each dep has been built — `just sayt build` from a fresh
-	# tree has none of them. compute-hash errors loudly in that case;
+	# tree has none of them. compute-fingerprint errors loudly in that case;
 	# the right response here is "no cache key → no cache lookup →
 	# run cmd raw" (the cmd's own semantics handle the missing inputs).
 	#

@@ -4,7 +4,7 @@
 # Each test uses a fresh tempdir for both the project workspace and
 # the cache root (BAYT_CACHE_DIR override) so there's zero leakage
 # between tests. Synthetic manifests are minimal — just enough to
-# exercise resolve-manifest's path-walking + compute-hash's input set.
+# exercise resolve-manifest's path-walking + compute-fingerprint's input set.
 # Real bayt manifests carry many more fields; cache.nu only consumes
 # srcs (via fingerprint.nu) and outs (for restore/store), so the
 # minimal shape suffices.
@@ -431,7 +431,7 @@ def test_no_similar_flag_no_warm_restore [] {
 # `just sayt build` failure where resolve-manifest's underlying
 # `open <manifest>` would error before gradle even ran. The narrower
 # "missing literal in srcs" case is now warned + skipped by
-# fingerprint.nu's compute-hash itself; bypass is the broader fallback
+# fingerprint.nu's compute-fingerprint itself; bypass is the broader fallback
 # for anything resolve-manifest can't make sense of.
 def test_unresolvable_manifest_bypasses [] {
 	print "test unresolvable manifest bypasses cache..."

@@ -31,9 +31,11 @@ say:
     do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu"
   # integrate adds the docker-backed integration tests (need a docker daemon):
   # the cache-hit guard, the diamond-dedup ("expensive bottom runs once") guard,
-  # and the scoped-clamp reproducibility guard (nested-dir digest stability).
+  # the scoped-clamp reproducibility guard (nested-dir digest stability), the
+  # bazel-remote backend's wire contract against a real bazel-remote, and the
+  # generated wiring that carries a payload to it.
   integrate:
-    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu ; nu tests/cache_hit_integration_test.nu ; nu tests/diamond_dedup_integration_test.nu ; nu tests/scoped_clamp_integration_test.nu"
+    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu ; nu tests/cache_hit_integration_test.nu ; nu tests/diamond_dedup_integration_test.nu ; nu tests/scoped_clamp_integration_test.nu ; nu tests/cache_cas_integration_test.nu ; nu tests/cache_wiring_integration_test.nu"
   launch:
     do: "true"
   release:
