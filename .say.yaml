@@ -8,14 +8,8 @@
 #   just sayt doctor    — tools-on-PATH check
 #   just sayt build     — full CUE positive + negative suite
 #                         (CUE has no compile step; "build" = "schema valid").
-#   just sayt test      — same as build, plus the cache.nu nu test suite.
-#   just sayt integrate — same suites as test today (a docker-based
-#                         variant would catch container-only regressions
-#                         like BAYT_CACHE_DIR resolution / mise-musl,
-#                         but our ./bayt/integrate is exercised
-#                         transitively whenever any onboarded project
-#                         runs `just sayt integrate`, so we get that
-#                         coverage for free without a separate image).
+#   just sayt test      — every *_test.nu suite; no daemon needed.
+#   just sayt integrate — every *_it.nu suite; needs docker.
 #   just sayt lint      — default auto-cue (cue fmt) handles it.
 #
 # launch / release / verify don't apply to bayt-the-framework: there's
@@ -26,16 +20,11 @@ say:
   doctor:
     do: "which cue ; which nu ; cue version"
   build:
-    do: "nu tests/test-bayt.nu"
+    do: "nu tests/bayt_test.nu"
   test:
-    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu"
-  # integrate adds the docker-backed integration tests (need a docker daemon):
-  # the cache-hit guard, the diamond-dedup ("expensive bottom runs once") guard,
-  # the scoped-clamp reproducibility guard (nested-dir digest stability), the
-  # bazel-remote backend's wire contract against a real bazel-remote, and the
-  # generated wiring that carries a payload to it.
+    do: 'glob "**/*_test.nu" | par-each { |t| let r = (do { ^nu $t } | complete); print $"($r.stdout)($r.stderr)"; $r.exit_code } | math max | exit $in'
   integrate:
-    do: "nu tests/test-bayt.nu ; nu runtime/cache_test.nu ; nu runtime/fingerprint_test.nu ; nu tests/cache_hit_integration_test.nu ; nu tests/diamond_dedup_integration_test.nu ; nu tests/scoped_clamp_integration_test.nu ; nu tests/cache_cas_integration_test.nu ; nu tests/cache_wiring_integration_test.nu"
+    do: 'glob "**/*_it.nu" | par-each { |t| let r = (do { ^nu $t } | complete); print $"($r.stdout)($r.stderr)"; $r.exit_code } | math max | exit $in'
   launch:
     do: "true"
   release:

@@ -1,4 +1,4 @@
-# diamond_dedup_integration_test.nu — end-to-end "expensive bottom runs once" guard.
+# diamond_dedup_it.nu — end-to-end "expensive bottom runs once" guard.
 #
 # Models a true DIAMOND against a real buildkit:
 #
@@ -42,8 +42,7 @@
 # diamond dedups", not "bayt's generated diamond project dedups". Driving the
 # generator is a larger follow-up.
 #
-# Names are randomized per invocation so concurrent runs don't collide. No docker
-# guard: this is an integration test; it fails if docker is absent.
+# Names are randomized per invocation so concurrent runs don't collide.
 
 const FE = "docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"
 const BB = "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"

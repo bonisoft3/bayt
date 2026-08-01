@@ -474,11 +474,13 @@ plugins/bayt/
 │   ├── nu.toml / cue.toml / oras.toml  (mise tool stubs pinning the runtime)
 │   └── *_test.nu            (cache + fingerprint nu test suites)
 └── tests/
-    ├── test-bayt.nu         (positive + negative suite runner)
-    ├── cache_hit_integration_test.nu
-    ├── diamond_dedup_integration_test.nu
-    ├── scoped_clamp_integration_test.nu
-    └── _negative/           (intentional-cycle test; separate CUE package)
+    ├── bayt_test.nu         (positive + negative suite runner)
+    ├── *_it.nu              (docker-backed: registry cache-hit, diamond
+    │                         dedup, scoped clamp, bazel-remote wire
+    │                         contract)
+    ├── bazel_remote.nu      (disposable bazel-remote, shared by the
+    │                         cache suites; not a suite itself)
+    └── _negative*/ _positive*/  (intentional-fail / -pass CUE packages)
 ```
 
 ## Run the tests
@@ -488,19 +490,18 @@ sayt:sayt-dev-loop TDD skill can drive it):
 
 ```bash
 cd plugins/bayt
-just sayt build      # full CUE positive + negative suite
-just sayt test       # bayt suite + cache.nu nu test suite
-just sayt integrate  # same as test today (docker variant deferred)
+just sayt build      # see plugins/bayt/.say.yaml for what each verb runs
+just sayt test
+just sayt integrate
 ```
 
-Direct invocation also works (skip the sayt wrapper):
+Suites are discovered by glob and run in parallel. Direct invocation of a
+single suite also works (skip the sayt wrapper):
 
 ```bash
-nu tests/test-bayt.nu          # 4 CUE suites: core schema + sayt
-                               # mappings + stacks consumers + negative
-                               # cycle (intentional A→B→A must fail
-                               # `cue eval`). Strict `cue eval`, not
-                               # lenient `cue vet`.
+nu tests/bayt_test.nu          # the CUE positive/negative suites main()
+                               # lists. Strict `cue eval`, not lenient
+                               # `cue vet`.
 
 nu runtime/cache_test.nu       # 12 nu tests: miss / hit / hit-with-full
                                # / disabled / failed-cmd / gc-evicts /
@@ -514,7 +515,7 @@ nu runtime/cache_test.nu       # 12 nu tests: miss / hit / hit-with-full
 
 - Bayt is written in CUE + nushell. Every piece of file I/O lives in `runtime/*.nu`; everything else is pure CUE.
 - Prefer to add new capabilities as plain structs unifiable into `#target`, not as closed `#`-prefixed definitions.
-- Run the test suite before opening a PR — `nu tests/test-bayt.nu` covers both positive and negative paths.
+- Run `sayt test` before opening a PR, and `sayt integrate` when a change touches the runtime or the emitted compose graph.
 - Keep the core schema small. Stacks are where toolchain-specific knowledge lives.
 - No path math in CUE. Use nushell's `path` primitives from `fingerprint.nu` or equivalent.
 - Never swallow errors — `try/catch` with a fallback is a smell. Let misconfigurations fail fast.

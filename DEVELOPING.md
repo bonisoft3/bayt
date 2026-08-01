@@ -104,7 +104,7 @@ times the same. `BAYT_TIMING=1` breaks generate into scan / per-level phases.
 
 - Changing the scale gate, the closures, or the federation root: re-read the
   gotchas above, then validate with **`sayt integrate`** on a real project (the
-  dindbox cascade), not just `test-bayt` — compose behavior is invisible to the
+  dindbox cascade), not just `bayt_test` — compose behavior is invisible to the
   CUE suite.
 - Pick that project for **cross-project deps**. A single-project graph exercises
   none of the in-layer fragment resolution, so it passes changes that break
@@ -112,9 +112,9 @@ times the same. `BAYT_TIMING=1` breaks generate into scan / per-level phases.
 
 ## Test layout
 
-`nu tests/test-bayt.nu` runs the CUE suites (positive + negative + the D-guards in
+`nu tests/bayt_test.nu` runs the CUE suites (positive + negative + the D-guards in
 `core/*_check.cue`). The docker-backed integration guards
-(`tests/*_integration_test.nu`, wired into `sayt integrate`) exercise real
+(`tests/*_it.nu`, discovered by `sayt integrate`) exercise real
 buildkit — cache-hit, diamond-dedup, and scoped-clamp digest stability. The
 D-guards (`docker_compose_check.cue`) are where the emitter's invariants (dep-edge
 shape D12/D13/D17, the scale gate D16, closures D17/D18) are pinned.

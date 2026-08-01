@@ -1,16 +1,8 @@
 #!/usr/bin/env nu
-# test-bayt.nu — run the bayt CUE test suite.
+# bayt_test.nu — run the bayt CUE test suite.
 #
-# Invoke from the bayt plugin root (plugins/bayt/) or pass `--root`.
-# The runner resolves source files under <root>/core/ and stack /
-# negative cue packages relative to <root>/.
-#
-# Positive suites:
-#   - core bayt (schema + images + rulemap + unification)
-#   - stacks/gradle consumers
-#   - stacks/pnpm   consumers
-# Negative suite:
-#   - A→B→A cycle must fail CUE evaluation.
+# Invoke from plugins/bayt/; every path below is relative to it. main()
+# names the suites it runs.
 #
 # `cue vet` is lenient about some schema-incomplete errors, so we use
 # `cue eval` which is strict. Exit non-zero if any expectation diverges.
@@ -53,9 +45,6 @@ def export-fail [label: string, files: list<string>]: nothing -> int {
 }
 
 def main [] {
-	# Run from the plugin root: plugins/bayt/. Core files live under
-	# ./core/; stacks + tests are relative packages.
-	#
 	# Check files use the `_check.cue` suffix (not `_test.cue`) because
 	# Package dirs, not file lists — new gen_*/_check files join the
 	# suite by existing. CUE's package import already excludes

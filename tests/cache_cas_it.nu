@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# cache_cas_integration_test.nu — the bazel-remote backend's wire contract,
+# cache_cas_it.nu — the bazel-remote backend's wire contract,
 # against a real bazel-remote. Its siblings in runtime/cache_test.nu cover
 # the local-FS backend, which needs no server.
 #
@@ -8,7 +8,6 @@
 # stores one file per content address no matter how many times it is
 # uploaded, so disk state cannot tell a skipped upload from a repeated one.
 #
-# No docker guard: this is an integration test; it fails if docker is absent.
 
 use std/assert
 use ./bazel_remote.nu [start-remote, stop-remote, cas-blobs, cas-count, corrupt-blob]

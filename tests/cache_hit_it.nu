@@ -1,4 +1,4 @@
-# cache_hit_integration_test.nu — end-to-end registry-cache hit guard.
+# cache_hit_it.nu — end-to-end registry-cache hit guard.
 #
 # Models the bayt synthetic-stage cache topology against a real local
 # `registry:2` (the `type=registry` backend the generator targets; the GHA
@@ -24,8 +24,7 @@
 # the tag scheme for manual concurrency experiments.
 #
 # Names and the registry port are randomized per invocation so concurrent runs
-# don't collide. No docker guard: this is an integration test; it fails if
-# docker is absent.
+# don't collide.
 
 const FE = "docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"
 const BB = "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"

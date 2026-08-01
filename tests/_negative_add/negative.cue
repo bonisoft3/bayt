@@ -3,7 +3,7 @@
 // #dockerfile.#add's closed disjunction).
 //
 // Kept in its own subdirectory (package `baytaddnegative`) so the main
-// bayt package still vets clean. tests/test-bayt.nu runs `cue export`
+// bayt package still vets clean. tests/bayt_test.nu runs `cue export`
 // on this directory (missing required fields are incomplete, which
 // only export rejects) and asserts exit != 0. The binding is a regular
 // field for the same reason: export must walk it.

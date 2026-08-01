@@ -1,4 +1,4 @@
-# scoped_clamp_integration_test.nu — guards the scoped mtime clamp in
+# scoped_clamp_it.nu — guards the scoped mtime clamp in
 # gen_compose.cue `_clampFlatten`: a nested-dir synthetic's flattened
 # `FROM scratch` stage must have a REPRODUCIBLE digest (the identity that
 # service-graph dedup and the registry cache key rely on).
@@ -15,7 +15,7 @@
 # SOURCE_DATE_EPOCH alone, set in both runs) is what makes it reproducible —
 # i.e. the test isn't vacuous, and the toggle actually disables the clamp.
 #
-# Randomised names; no docker guard (fails if docker is absent).
+# Randomised names, so concurrent runs don't collide.
 
 const FE = "docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"
 const BB = "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
