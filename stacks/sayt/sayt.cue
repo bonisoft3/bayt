@@ -636,10 +636,13 @@ pnpmWorkspace: bayt.#project & {
 		// already installed and downloads only its project delta.
 		// Demoting this back to a files-only no-op makes every
 		// project re-download the full root union in its own stage.
+		// The core toolchain layer: mise install of the root tool set
+		// plus the cross-stack workspace files. Deliberately free of
+		// pnpm state so JVM consumers' warm floors survive JS dep
+		// churn — the JS half lives in setup-js below.
 		"setup": P=setup & Mise.install & {
 			srcs: globs: list.Concat([
 				Mise.installFiles.globs,
-				Pnpm.workspaceFiles.globs,
 				[
 					// JVM composite builds resolve catalog plugin via
 					// ../../gradle/libs.versions.toml from depth-2
@@ -655,6 +658,30 @@ pnpmWorkspace: bayt.#project & {
 					// without an extra explicit dep on a devserver
 					// project.
 					"plugins/devserver/dind.sh",
+				],
+			])
+			// Outs = srcs (so consumers get the exact files staged
+			// here) + .task/bayt/setup.hash (so consumers'
+			// fingerprint Merkle chain reads wsroot's stamp).
+			// Whole-tree `**/*` here would pull the entire monorepo
+			// into every consumer's stage, invalidating BuildKit's
+			// per-COPY cache on any unrelated repo edit — a major
+			// cache-blast-radius regression.
+			outs: globs: list.Concat([P.srcs.globs, [".task/bayt/setup.hash"]])
+			env: SHARP_IGNORE_GLOBAL_LIBVIPS: "1"
+			dockerfile: bayt.nubox
+			// The cmd (from Mise.install) is `mise install` only —
+			// consumers' setup stages own their real installs.
+		}
+		// The JS workspace layer over the toolchain: pnpm state plus
+		// every member's package.json. Only pnpm-workspace consumers
+		// (their setup FROM-chains and deps name :setup-js) pay for
+		// JS dep churn.
+		"setup-js": J=setup & {
+			dockerfile: from: ref: ":setup"
+			srcs: globs: list.Concat([
+				Pnpm.workspaceFiles.globs,
+				[
 					// Every workspace member's package.json. pnpm with
 					// --frozen-lockfile validates the entire workspace
 					// topology against the lockfile, even with --filter,
@@ -671,29 +698,12 @@ pnpmWorkspace: bayt.#project & {
 					"**/package.json",
 				],
 			])
-			// Outs = srcs (so consumers get the exact files staged
-			// here) + .task/bayt/setup.hash (so consumers'
-			// fingerprint Merkle chain reads wsroot's stamp).
-			// Whole-tree `**/*` here would pull the entire monorepo
-			// into every consumer's stage, invalidating BuildKit's
-			// per-COPY cache on any unrelated repo edit — a major
-			// cache-blast-radius regression.
-			outs: globs: list.Concat([P.srcs.globs, [".task/bayt/setup.hash"]])
+			outs: globs: J.srcs.globs
 			// The CAS put walks the filesystem (no git scoping): without
 			// this exclude `**/package.json` sweeps vendored node_modules
 			// manifests — huge entries, and a hash race against sibling
 			// projects' concurrent pnpm installs.
 			outs: exclude: ["**/node_modules/**"]
-			env: SHARP_IGNORE_GLOBAL_LIBVIPS: "1"
-			dockerfile: bayt.nubox
-			// The cmd (from Mise.install) is `mise install` only —
-			// the consumer's setup stage owns the real `pnpm install`.
-			// Beyond the toolchain layer, this target stages the
-			// workspace files into /monorepo/ (so the consumer's
-			// pnpm install finds them via its workspace traversal)
-			// and acts as the shared cache key: any change to
-			// pnpm-lock.yaml or pnpm-workspace.yaml invalidates
-			// every consumer.
 		}
 	}
 }

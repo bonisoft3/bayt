@@ -87,14 +87,32 @@ def scan-projects [workspace_root: string] {
 		| each { |p| $"($workspace_root)/($p)" }
 	)
 	$rel_paths | par-each { |path|
-		let r = (do { run-cue export $path -e '{name: project.name, dir: project.dir, targets: project.targets}' --out json } | complete)
-		if $r.exit_code != 0 {
-			error make {msg: $"bayt: project scan failed for ($path)\n($r.stderr)"}
+		# A sibling bayt.json is the project value itself (pronto's build
+		# seat exports it; the bayt.cue stub only embeds it) — read it
+		# directly. File-mode `cue export` has no module context, so the
+		# stub's @embed cannot resolve there.
+		let json_path = ($path | path dirname | path join "bayt.json")
+		let p = if ($json_path | path exists) {
+			open $json_path
+		} else {
+			let r = (do { run-cue export $path -e '{name: project.name, dir: project.dir, targets: project.targets}' --out json } | complete)
+			if $r.exit_code != 0 {
+				# A bayt.cue with no `project` defines schemas (a stack or a
+				# consumer's roster), not a project — skip it.
+				if ($r.stderr | str contains 'reference "project" not found') {
+					null
+				} else {
+					error make {msg: $"bayt: project scan failed for ($path)\n($r.stderr)"}
+				}
+			} else {
+				$r.stdout | from json
+			}
 		}
-		let p = ($r.stdout | from json)
-		let dir_rel = if ($p.dir | str trim) == "" { "." } else { $p.dir }
-		{path: $path, name: $p.name, dir_rel: $dir_rel, targets: $p.targets}
-	}
+		if $p == null { null } else {
+			let dir_rel = if ($p.dir | str trim) == "" { "." } else { $p.dir }
+			{path: $path, name: $p.name, dir_rel: $dir_rel, targets: $p.targets}
+		}
+	} | compact
 }
 
 # dep-to-dir resolves a Bazel-style cross-project ref ("project:target")
@@ -324,14 +342,24 @@ def write-render-driver [bayt_cue: string] {
 	let pkg = (open --raw $bayt_cue | lines | where ($it | str starts-with "package ") | first | str replace "package " "")
 	let driver = ($bayt_cue | path dirname | path join ".bayt" "render.cue")
 	let core_import = (open $render_import_file)
-	atomic-write $driver $"// generated from bayt.cue — do not edit\npackage ($pkg)\n\nimport bayt_ \"($core_import)\"\n\ndepManifestsIn: {[string]: _}\nruntimeIn: *\"\" | string\n_render: \(bayt_.#render & {\"project\": project, depManifests: depManifestsIn, runtime: runtimeIn}\)\n"
+	atomic-write $driver $"// generated from bayt.cue — do not edit\npackage ($pkg)\n\nimport bayt_ \"($core_import)\"\n\n// Declared so a bayt.json project can inject the value via stdin —\n// file-mode identifier references only resolve against declarations.\nproject: _\ndepManifestsIn: {[string]: _}\nruntimeIn: *\"\" | string\n_render: \(bayt_.#render & {\"project\": project, depManifests: depManifestsIn, runtime: runtimeIn}\)\n"
 }
 
 def pass2 [bayt_cue: string, dep_manifests: record] {
 	write-render-driver $bayt_cue
 	let driver = ($bayt_cue | path dirname | path join ".bayt" "render.cue")
-	let inject = ({depManifestsIn: $dep_manifests, runtimeIn: ($env.BAYT_RUNTIME_DIR? | default "")} | to json --raw)
-	let r = (do { $inject | run-cue export - $bayt_cue $driver -e _render --out json } | complete)
+	# As in scan-projects: a sibling bayt.json is the project value, and
+	# file-mode `cue export` cannot resolve the stub's @embed — inject the
+	# value as `project` and render from the driver alone.
+	let json_path = ($bayt_cue | path dirname | path join "bayt.json")
+	let base = {depManifestsIn: $dep_manifests, runtimeIn: ($env.BAYT_RUNTIME_DIR? | default "")}
+	let r = if ($json_path | path exists) {
+		let inject = ($base | insert project (open $json_path) | to json --raw)
+		(do { $inject | run-cue export - $driver -e _render --out json } | complete)
+	} else {
+		let inject = ($base | to json --raw)
+		(do { $inject | run-cue export - $bayt_cue $driver -e _render --out json } | complete)
+	}
 	if $r.exit_code != 0 {
 		print -e $"bayt: pass-2 failed for ($bayt_cue)"
 		print -e $r.stderr
