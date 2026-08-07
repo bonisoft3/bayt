@@ -305,7 +305,19 @@ def write-bundle [bundle: record, base: string, --depot] {
 # `service:` context as a path. Needs docker; hence the opt-in.
 def emit-depot-yaml [proj_dir: string, ws: string, --required] {
 	let dir = if $proj_dir == "." or $proj_dir == "" { $ws } else { $"($ws)/($proj_dir)" }
-	let r = (do { cd $dir; ^docker compose --profile '*' config --no-interpolate } | complete)
+	# Explicit -f: default project-file resolution auto-loads
+	# docker-compose.override.yml (and honors $COMPOSE_FILE) — local-only
+	# dev config that must not flatten into a committed artifact. The
+	# anchored regex admits exactly compose's base-name family and
+	# nothing else; zero or several bases is a misconfigured project
+	# (compose warns-and-picks on ambiguity — emission refuses).
+	let bases = (ls $dir | get name | each { |p| $p | path basename } | where { |f| $f =~ '^(docker-)?compose\.ya?ml$' })
+	let base = (match ($bases | length) {
+		1 => ($bases | first)
+		0 => { error make {msg: $"bayt: no compose base file in ($dir) — the depot flatten requires one"} }
+		_ => { error make {msg: $"bayt: ambiguous compose base files in ($dir): ($bases | str join ', ')"} }
+	})
+	let r = (do { cd $dir; ^docker compose -f $base --profile '*' config --no-interpolate } | complete)
 	if $r.exit_code != 0 {
 		let detail = ($r.stderr | lines | last 3 | str join "\n")
 		# A depot opt-in declares docker a generate dependency; skipping
@@ -321,7 +333,48 @@ def emit-depot-yaml [proj_dir: string, ws: string, --required] {
 		| str replace --all $"($ws)/" ""
 		| str replace --all $ws "."
 		| str replace --all "service:" "target:")
-	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header $flat)
+	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header (_dedup-x-bake $flat))
+}
+
+# compose >= v5 re-concatenates x-* extension lists once per include
+# path on diamond re-inclusion (compose-spec/compose-go#906; version
+# pin: plugins/sayt/compose.toml) — and the flattening binary floats
+# with the host, so emission dedups regardless. Line-wise surgery
+# scoped to x-bake blocks, not a YAML round-trip: nu's emitter leaves
+# 1.1-ambiguous scalars unquoted (`restart: "no"` re-parses as false).
+# Only pure-scalar items dedup — dropping a duplicate mapping-item head
+# would re-attach its continuation lines to the previous item — and
+# only inside x-bake: elsewhere duplicate list items are meaningful
+# (repeated command args).
+export def _dedup-x-bake [flat: string]: nothing -> string {
+	mut out = []
+	mut xb_indent = -1        # indent of the open `x-bake:` line; -1 = outside
+	mut seen: list<string> = []
+	for line in ($flat | lines) {
+		let stripped = ($line | str trim -l)
+		let indent = (($line | str length) - ($stripped | str length))
+		if $xb_indent >= 0 and ($stripped | is-not-empty) and $indent <= $xb_indent {
+			$xb_indent = -1
+		}
+		if $xb_indent < 0 {
+			if $stripped == "x-bake:" { $xb_indent = $indent; $seen = [] }
+			$out = ($out ++ [$line])
+			continue
+		}
+		if ($stripped | is-empty) {
+			$out = ($out ++ [$line])
+			continue
+		}
+		if ($stripped | str starts-with "- ") and not ($stripped | str contains ": ") {
+			if $line in $seen { continue }
+			$seen = ($seen ++ [$line])
+		} else {
+			# a new field key inside the block scopes its own list
+			$seen = []
+		}
+		$out = ($out ++ [$line])
+	}
+	$out | str join "\n" | $in + "\n"
 }
 
 # pass1 extracts the project.targets map from a bayt.cue.

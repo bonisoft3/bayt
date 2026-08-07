@@ -44,6 +44,24 @@ def export-fail [label: string, files: list<string>]: nothing -> int {
 	}
 }
 
+# _dedup-x-bake guards: dedup only inside x-bake and only for pure
+# scalar items (a dropped mapping-item head re-attaches its continuation
+# to the previous item); blank lines and cross-field duplicates survive.
+def dedup-suite []: nothing -> int {
+	use ../core/generate.nu [_dedup-x-bake]
+	let diamond = "services:\n  s:\n    build:\n      x-bake:\n        cache-from:\n          - a=1\n          - a=1\n\n          - a=1\n        cache-to:\n          - a=1\n    command:\n      - -v\n      - -v\n"
+	let got = (_dedup-x-bake $diamond)
+	let want = "services:\n  s:\n    build:\n      x-bake:\n        cache-from:\n          - a=1\n\n        cache-to:\n          - a=1\n    command:\n      - -v\n      - -v\n"
+	let mapping = "x-bake:\n  contexts:\n    - id: one\n    - id: one\n      src: /p2\n"
+	if $got == $want and (_dedup-x-bake $mapping) == $mapping and (_dedup-x-bake $want) == $want {
+		print "  PASS  x-bake dedup (scalar-only, blank-safe, idempotent)"
+		0
+	} else {
+		print $"  FAIL  x-bake dedup\n($got)"
+		1
+	}
+}
+
 def main [] {
 	# Check files use the `_check.cue` suffix (not `_test.cue`) because
 	# Package dirs, not file lists — new gen_*/_check files join the
@@ -64,6 +82,7 @@ def main [] {
 	mut failed = 0
 	print "positive suites"
 	$failed = $failed + (eval-pass "core bayt" $core)
+	$failed = $failed + (dedup-suite)
 	$failed = $failed + (eval-pass "stacks/sayt" $sayt)
 	$failed = $failed + (eval-pass "ci `:X:bayt` with `:X:srcs` must pass" $pos_ci_srcs)
 	print "negative suites"
