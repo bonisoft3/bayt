@@ -44,7 +44,7 @@
 #
 # Names are randomized per invocation so concurrent runs don't collide.
 
-const FE = "docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"
+const FE = "docker/dockerfile:1.26@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32"
 const BB = "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
 
 # The expensive shared bottom. Both arms reference this single target, so its

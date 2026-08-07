@@ -286,8 +286,9 @@ def write-bundle [bundle: record, base: string, --depot] {
 	}
 
 	# --- depot.{yaml,hcl}: after the compose files depot.yaml flattens.
-	if $depot or ($bundle.manifest.projectManifest.depot? | default false) {
-		emit-depot-yaml $base $ws
+	let depot_opted = ($bundle.manifest.projectManifest.depot? | default false)
+	if $depot or $depot_opted {
+		emit-depot-yaml $base $ws --required=$depot_opted
 		if ($bundle.bake.depotHcl? | is-not-empty) {
 			atomic-write $"($prefix).bayt/depot.hcl" (_slash-header $bundle.bake.depotHcl)
 		}
@@ -302,12 +303,18 @@ def write-bundle [bundle: record, base: string, --depot] {
 # absolutizes contexts and emits `service:` refs, so rewrite to
 # repo-root-relative and `service:X` -> `target:X` — depot bake stats a
 # `service:` context as a path. Needs docker; hence the opt-in.
-def emit-depot-yaml [proj_dir: string, ws: string] {
+def emit-depot-yaml [proj_dir: string, ws: string, --required] {
 	let dir = if $proj_dir == "." or $proj_dir == "" { $ws } else { $"($ws)/($proj_dir)" }
 	let r = (do { cd $dir; ^docker compose --profile '*' config --no-interpolate } | complete)
 	if $r.exit_code != 0 {
+		let detail = ($r.stderr | lines | last 3 | str join "\n")
+		# A depot opt-in declares docker a generate dependency; skipping
+		# would leave the committed depot.yaml silently stale.
+		if $required {
+			error make {msg: $"bayt: depot flatten failed for ($proj_dir) — `docker compose config` exited ($r.exit_code)\n($detail)"}
+		}
 		print -e $"bayt: depot.yaml skipped for ($proj_dir) — `docker compose config` exited ($r.exit_code) \(deps not generated? run with --recursive\)"
-		print -e ($r.stderr | lines | last 3 | str join "\n")
+		print -e $detail
 		return
 	}
 	let flat = ($r.stdout

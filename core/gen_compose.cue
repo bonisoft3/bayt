@@ -52,7 +52,7 @@ import (
 // every buildable compose service (below) so it rides the compose /
 // depot flatten — no `--set` at any bake call site. Matches the
 // sayt/depot action default (which overrides with the same value).
-#buildkitSyntax: "docker/dockerfile:1.24@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"
+#buildkitSyntax: "docker/dockerfile:1.26@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32"
 
 #dockerComposeGen: G={
 	project: #project

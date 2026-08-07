@@ -39,10 +39,10 @@ lock: images: {
 	bayt:         "bonitao/bayt:0.42.0@sha256:b9e67c34e98ea1d02795769f8101674f58d7bae81cd5d716620a61675b3c8356"
 	lazybox:      "bonitao/lazybox:0.8.3@sha256:c896a6836673d8fd217f6021a2522351fd82d580ed985159feb2f10373018e73"
 	busybox:      "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
-	docker:       "docker:29.2.0-cli@sha256:ae2609c051339b48c157d97edc4f1171026251607b29a2b0f25f990898586334"
+	docker:       "docker:29.7.1-cli@sha256:27a51d5ab1cd38d9eeaba7b415b8c07bc10c31e1cf1ec8d78f6413fcfab3f44f"
 	alpine_socat: "mirror.gcr.io/alpine/socat:1.8.0.0@sha256:a6be4c0262b339c53ddad723cdd178a1a13271e1137c65e27f90a08c16de02b8"
 	// depot CLI — static binary for the dindbox's inner depot bake. Multiplatform digest.
-	depot_cli:    "ghcr.io/depot/cli:2.101.65@sha256:08d7a79775468e59711cc8269b6830bb0c8bd0091a36c049cdc1534b44e4c3e5"
+	depot_cli:    "ghcr.io/depot/cli:2.101.78@sha256:71fc7e6cf9f10ee1699bdba40e9461387f3a8406bc7bb9a9b1857c38587a7254"
 	leap: "opensuse/leap:16.0@sha256:859560554b625c225fa767b76d61253d529b95d082c2d68579ad69168d5e3da7"
 	// envoyproxy/envoy ships /usr/local/bin/envoy and /usr/bin/envsubst.
 	// Both are glibc-linked, so they COPY into any glibc-based stage
