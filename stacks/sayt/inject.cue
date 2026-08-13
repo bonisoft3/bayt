@@ -8,7 +8,7 @@
 //   Host                                      Sandbox (RUN inside ci)
 //   ────                                      ───────────────────────
 //   socat publishes /var/run/docker.sock      DOCKER_HOST   = tcp://… (env-sourced)
-//   as tcp://<host-ip>:<port>                 BUILDX_BUILDER= sayt-builder
+//   as tcp://<gateway-ip>:<port>              BUILDX_BUILDER= sayt-builder
 //   buildx instance file pre-sed'd            BUILDX_INSTANCE → placed at
 //   to use the same TCP endpoint              /root/.docker/buildx/instances/sayt-builder
 //   docker auth json                          docker_config → /root/.docker/config.json
