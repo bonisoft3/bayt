@@ -121,6 +121,12 @@ def debug-log [record: record] {
 # `--no-dir` filters real directories but NOT symlinks-to-directories;
 # Nuxt-style build trees can include those. The `path type == "file"`
 # filter catches both — a file or a symlink-to-file.
+# nu's glob parses `\` as an escape, so a native base path is not a usable
+# pattern prefix.
+def glob-pat [base: path, pat: string]: nothing -> string {
+	($base | path join $pat) | str replace -a '\' '/'
+}
+
 def expand-globs [globs: list<string>, excludes: list<string>]: nothing -> list<string> {
 	$globs
 	| each { |g| try { glob $g --no-dir --exclude $excludes } catch { [] } }
@@ -157,6 +163,14 @@ def local-entry [key: string]: nothing -> path {
 	(local-root) | path join ($key | str substring 0..2) | path join $key
 }
 
+# Manifest keys are data, not paths: one spelling so an entry reads the same
+# wherever it was written. Keys only — filesystem work stays native, since
+# `path join` and `path dirname` parse separators rather than hand them to
+# the OS.
+def manifest-key [rel: string]: nothing -> string {
+	$rel | str replace -a '\' '/'
+}
+
 # Copy every file under <outs_dir>/** into the corresponding cwd path,
 # creating parent dirs as needed. Missing <outs_dir> is a valid hit —
 # that is what an empty outs list stores. Used by the local-FS restore
@@ -169,7 +183,7 @@ def restore-outs-from [outs_dir: path]: nothing -> bool {
 	let base = ($outs_dir | path expand)
 	# Same `path type == "file"` filter as expand-globs — `--no-dir`
 	# alone misses symlinks-to-directories.
-	let srcs = (glob ($base | path join "**/*") --no-dir | where { |p| ($p | path type) == "file" })
+	let srcs = (glob (glob-pat $base "**/*") --no-dir | where { |p| ($p | path type) == "file" })
 	try {
 		for src in $srcs {
 			let dst = ($cwd | path join ($src | path relative-to $base))
@@ -245,7 +259,7 @@ def local-put [key: string, e: record] {
 		mkdir ($dst | path dirname)
 		cp $src $dst
 		$rows = ($rows | append {
-			path:   $rel,
+			path:   (manifest-key $rel),
 			size:   (ls $src | first | get size | into int),
 			sha256: (open --raw $src | hash sha256),
 		})
@@ -282,8 +296,8 @@ def local-similar [current: record]: nothing -> any {
 	let root = (local-root)
 	if not ($root | path exists) { return null }
 	let scored = (
-		glob ($root | path join "*/*") --no-symlink --no-file
-		| where { |p| not ($p | str ends-with "/_tmp") }
+		glob (glob-pat $root "*/*") --no-symlink --no-file
+		| where { |p| ($p | path basename) != "_tmp" }
 		| each { |entry|
 			let meta_path = ($entry | path join "metadata.json")
 			if not ($meta_path | path exists) { return null }
@@ -455,7 +469,7 @@ def bazel-put [key: string, outs_globs: list<string>, outs_exclude: list<string>
 	# on these inputs", which is what --full consults.
 	let rows = ($files | par-each { |f|
 		{
-			path:   ($f | path relative-to $cwd),
+			path:   (manifest-key ($f | path relative-to $cwd)),
 			size:   (ls $f | first | get size | into int),
 			sha256: (open --raw $f | hash sha256),
 			exec:   (is-exec $f),
@@ -763,8 +777,8 @@ export def "main gc" [
 	let env_budget = ($env.BAYT_CACHE_MAX_SIZE? | default "")
 	let budget = if ($env_budget | is-empty) { $max_bytes } else { $env_budget | into int }
 	let entries = (
-		glob ($root | path join "*/*") --no-symlink --no-file
-		| where { |p| not ($p | str ends-with "/_tmp") }
+		glob (glob-pat $root "*/*") --no-symlink --no-file
+		| where { |p| ($p | path basename) != "_tmp" }
 		| each { |p| {
 			path: $p,
 			size: (du $p | get apparent | math sum | into int),
@@ -796,7 +810,7 @@ export def "main status" [] {
 		print $"cache empty: ($root)"
 		return
 	}
-	let entries = (glob ($root | path join "*/*") --no-symlink --no-file | where { |p| not ($p | str ends-with "/_tmp") })
+	let entries = (glob (glob-pat $root "*/*") --no-symlink --no-file | where { |p| ($p | path basename) != "_tmp" })
 	let total = ($entries | each { |d| (du $d | get apparent | math sum) } | math sum | default 0)
 	print { root: $root, entries: ($entries | length), size: ($total | into filesize) }
 }

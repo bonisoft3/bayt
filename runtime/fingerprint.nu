@@ -183,7 +183,9 @@ export def compute-fingerprint [
     let hashes = (^git hash-object ...$files | lines)
     $files | zip $hashes | each { |p| {path: ($p | get 0), hash: ($p | get 1)} }
   } else {
-    let files = (expand-paths $paths $excludes)
+    # One spelling across both source modes: `git ls-files` above already
+    # answers in forward slashes, glob expansion answers in the host's.
+    let files = (expand-paths $paths $excludes | each { |f| $f | str replace -a '\' '/' })
     if ($files | is-empty) {
       error make { msg: $"fingerprint: no files found for: ($paths | str join ' ')" }
     }
@@ -202,9 +204,13 @@ export def compute-fingerprint [
   }
 
   let xtool = (xattr-tool)
-  # ls --long: portable mode/user/group/modified/size. mtime '%9f' is
-  # nanosecond (BuildKit's snapshot diff hashes ns). user/group as
-  # resolved names — two runs on the same image diff identically.
+  # ls --long: mode/user/group/modified/size. mtime '%9f' is nanosecond
+  # (BuildKit's snapshot diff hashes ns). user/group as resolved names — two
+  # runs on the same image diff identically. Windows carries none of the
+  # ownership trio, only a readonly bit; the substitutes keep the row shape
+  # uniform and need not match another platform's, since platform-key already
+  # scopes the hash.
+  let windows = ($nu.os-info.name == "windows")
   let enriched = ($unique | each { |it|
     let info = (ls --long $it.path | first)
     let mtime = ($info.modified | format date '%Y-%m-%dT%H:%M:%S.%9f')
@@ -212,9 +218,9 @@ export def compute-fingerprint [
     let base = {
       path:   $it.path
       sha256: $it.hash
-      mode:   $info.mode
-      user:   $info.user
-      group:  $info.group
+      mode:   (if $windows { if $info.readonly { "ro" } else { "rw" } } else { $info.mode })
+      user:   (if $windows { "-" } else { $info.user })
+      group:  (if $windows { "-" } else { $info.group })
       mtime:  $mtime
       size:   $size
     }

@@ -36,8 +36,7 @@ def main [] {
 	print "\nAll cache.nu tests passed!"
 }
 
-# nu's glob parses `\` as an escape, so a Windows `path join` result is not a
-# usable pattern. Forward slashes glob correctly on every platform.
+# Same escape hazard as cache.nu's glob-pat.
 def cache-pat [root: path, pat: string]: nothing -> string {
 	($root | path join $pat) | str replace -a '\' '/'
 }
