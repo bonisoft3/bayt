@@ -36,6 +36,12 @@ def main [] {
 	print "\nAll cache.nu tests passed!"
 }
 
+# nu's glob parses `\` as an escape, so a Windows `path join` result is not a
+# usable pattern. Forward slashes glob correctly on every platform.
+def cache-pat [root: path, pat: string]: nothing -> string {
+	($root | path join $pat) | str replace -a '\' '/'
+}
+
 def make-fixture []: nothing -> record {
 	let proj = (mktemp -d)
 	let cache = (mktemp -d)
@@ -107,7 +113,7 @@ def test_miss_runs_cmd_and_stores [] {
 
 	# Cache directory has at least one shard with one entry, carrying
 	# the full v2 schema (both manifests are required by local-verify).
-	let entries = (glob ($fix.cache | path join "*/*") | where { |p| ($p | path type) == "dir" })
+	let entries = (glob (cache-pat $fix.cache "*/*") | where { |p| ($p | path type) == "dir" })
 	assert ((($entries | length) >= 1)) "expected at least one cache entry after miss"
 	let entry = ($entries | first)
 	for f in ["outs.manifest.json" "srcs.manifest.json" "metadata.json" "manifest.json"] {
@@ -140,7 +146,7 @@ def test_outs_exclude_filters_store [] {
 	let r = (run-cache $fix [sh -c "exit 0"])
 	assert ($r.exit == 0) $"unexpected exit: ($r.exit)"
 
-	let entries = (glob ($fix.cache | path join "*/*") | where { |p| ($p | path type) == "dir" and not ($p | str contains "_tmp") })
+	let entries = (glob (cache-pat $fix.cache "*/*") | where { |p| ($p | path type) == "dir" and not ($p | str contains "_tmp") })
 	assert ((($entries | length) == 1)) "expected one cache entry"
 	let stored = (open (($entries | first) | path join "outs.manifest.json") | get path)
 	assert ("pkg/package.json" in $stored) "tracked package.json should be stored"
@@ -179,7 +185,7 @@ def test_corrupt_entry_degrades_to_miss [] {
 
 	run-cache $fix [sh -c "echo first > output.txt"]
 	# Hollow the stored payload: truncate the copied out inside the entry.
-	let payloads = (glob ($fix.cache | path join "*/*/outs/**/*") --no-dir)
+	let payloads = (glob (cache-pat $fix.cache "*/*/outs/**/*") --no-dir)
 	assert (($payloads | length) >= 1) "precondition: entry payload exists"
 	"" | save -f ($payloads | first)
 	rm $fix.output
@@ -189,7 +195,7 @@ def test_corrupt_entry_degrades_to_miss [] {
 	assert ($r.stdout | str contains "RAN") "cmd should have rerun (corrupt entry = miss)"
 	assert ((open $fix.output | str trim) == "repaired") "workspace out should be the rerun's"
 	# Quarantine + re-store: the fresh entry's payload matches the rerun.
-	let stored = (glob ($fix.cache | path join "*/*/outs/**/*") --no-dir)
+	let stored = (glob (cache-pat $fix.cache "*/*/outs/**/*") --no-dir)
 	assert (($stored | length) >= 1) "entry should be re-stored after quarantine"
 	assert ((open ($stored | first) | str trim) == "repaired") "re-stored payload should be fresh"
 	print "  ok\n"
@@ -222,7 +228,7 @@ def test_disabled_bypasses_entirely [] {
 	}
 	assert ($result.exit_code == 0) "bypass should still propagate cmd exit"
 	# No shard dirs created — cache wasn't touched.
-	let shards = (glob ($fix.cache | path join "*") | where { |p| ($p | path type) == "dir" })
+	let shards = (glob (cache-pat $fix.cache "*") | where { |p| ($p | path type) == "dir" })
 	assert (($shards | is-empty)) "cache root should remain empty when disabled"
 	print "  ok\n"
 }
@@ -296,7 +302,7 @@ def test_warm_hit_restores_similar_entry [] {
 	"v1" | save -f $fix.input
 	run-cache $fix [sh -c "echo from-v1 > output.txt"] --similar
 
-	let v1_entries = (glob ($fix.cache | path join "*/*") | where { |p| ($p | path type) == "dir" })
+	let v1_entries = (glob (cache-pat $fix.cache "*/*") | where { |p| ($p | path type) == "dir" })
 	assert ((($v1_entries | length) >= 1)) "v1 entry should be cached"
 
 	# Change input to "v2" → exact-match miss, but the v1 entry shares
@@ -313,7 +319,7 @@ def test_warm_hit_restores_similar_entry [] {
 	assert ($r.stdout | str contains "from-v1") "warm restore should have placed v1's output"
 	assert ((open $fix.output | str trim) == "from-v2") "cmd should have run and produced v2"
 
-	let final_entries = (glob ($fix.cache | path join "*/*") | where { |p| ($p | path type) == "dir" })
+	let final_entries = (glob (cache-pat $fix.cache "*/*") | where { |p| ($p | path type) == "dir" })
 	assert ((($final_entries | length) >= 2)) "v2 entry should now be cached alongside v1"
 	print "  ok\n"
 }
@@ -446,7 +452,7 @@ def test_unresolvable_manifest_bypasses [] {
 	}
 	assert ($result.exit_code == 0) $"expected bypass + exit 0, got: ($result.exit_code)"
 	assert ($result.stdout | str contains "BYPASSED") "cmd should run on bypass"
-	let entries = (try { glob ($fix.cache | path join "*/*") | where { |p| ($p | path type) == "dir" } } catch { [] })
+	let entries = (try { glob (cache-pat $fix.cache "*/*") | where { |p| ($p | path type) == "dir" } } catch { [] })
 	assert (($entries | is-empty)) "bypass should NOT write a cache entry"
 	print "  ok\n"
 }
@@ -462,7 +468,7 @@ def test_failed_cmd_does_not_pollute_cache [] {
 	# Should be no published entry. _tmp may exist (mktemp scratch);
 	# the real entries live in <shard>/<hash>/ dirs.
 	let entries = (
-		glob ($fix.cache | path join "*/*")
+		glob (cache-pat $fix.cache "*/*")
 		| where { |p| ($p | path type) == "dir" and not ($p | str contains "_tmp") }
 	)
 	assert (($entries | is-empty)) "no entry should be published for a failed cmd"

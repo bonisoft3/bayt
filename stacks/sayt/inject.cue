@@ -136,6 +136,14 @@ inject: {
 		// here so the inner `depot bake` doesn't abort on the OTEL schema clash
 		// from the trace-context vars depot's builder puts in RUN steps.
 		depot_disable_otel:        environment: "DEPOT_DISABLE_OTEL"
+		// actions_results_url / actions_runtime_token — url + token for
+		// buildkit's `gha` cache backend, which reads them from the
+		// environment unless its attrs carry them. Only a workflow context
+		// populates them; without them the backend addresses the
+		// decommissioned cache service v1. Secrets rather than ENV so the
+		// per-run token stays out of layers and out of RUN cache keys.
+		actions_results_url:       environment: "ACTIONS_RESULTS_URL"
+		actions_runtime_token:     environment: "ACTIONS_RUNTIME_TOKEN"
 	}
 
 	// Cmd-level inject: mounts + setup body around the cmd.do invocation.
@@ -161,6 +169,8 @@ inject: {
 			{id: "depot_project_id",     var: contents: "DEPOT_PROJECT_ID"},
 			{id: "depot_org_id",         var: contents: "DEPOT_ORG_ID"},
 			{id: "depot_disable_otel",   var: contents: "DEPOT_DISABLE_OTEL"},
+			{id: "actions_results_url",  var: contents: "ACTIONS_RESULTS_URL"},
+			{id: "actions_runtime_token", var: contents: "ACTIONS_RUNTIME_TOKEN"},
 			// Keep the instance as contents and install it in a guarded pre-step.
 			// The static secret list keeps this RUN cache-compatible with every
 			// capability set, while empty builder credentials remain a no-op.
