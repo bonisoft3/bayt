@@ -190,7 +190,18 @@ _expandCopy: {
 		for n, t in G.project.targets if t != null
 		let _fr = (_fromRef & {tgt: t}).out
 		if strings.HasPrefix(_fr, ":") {_fr},
+		for n, t in G.project.targets if t != null
+		for r in (_copyRefs & {tgt: t}).out
+		if strings.HasPrefix(r, ":") {r},
 	]
+
+	_copyRefs: {
+		tgt: _
+		out: [
+			if tgt.dockerfile != _|_ for c in tgt.dockerfile.copy
+			if c.from != null if c.from.ref != _|_ {c.from.ref},
+		]
+	}
 	_sameProjectRefName: {
 		for d in _sameProjectRefs {
 			let _bare = strings.TrimPrefix(d, ":")
@@ -472,6 +483,22 @@ _expandCopy: {
 	_upClosure: {
 		for n, t in G.project.targets if t != null {
 			let _own = [if t.dockerfile != _|_ {(_fragPath & {dir: G.project.dir, name: n}).out}]
+			// Compose resolves `service:` additional_contexts at parse time,
+			// so a copy ref's target must be in the closure. Membership only:
+			// a dep edge would also emit the dependency's workdir COPY
+			// (copy_federation_check CF1).
+			let _copyClosure = list.FlattenN([
+				for r in (_copyRefs & {tgt: t}).out
+				if strings.HasPrefix(r, ":")
+				let _cn = _sameProjectRefName[r]
+				let _cp = [
+					if strings.HasSuffix(_cn, "_srcs") {strings.TrimSuffix(_cn, "_srcs")},
+					if strings.HasSuffix(_cn, "_outs") {strings.TrimSuffix(_cn, "_outs")},
+					if strings.HasSuffix(_cn, "_bayt") {strings.TrimSuffix(_cn, "_bayt")},
+					_cn,
+				][0]
+				if _upClosure[_cp] != _|_ {_upClosure[_cp]},
+			], 1)
 			// Recurse via the parent target: synthetic dep names have no
 			// map entry, and their graph is a subset of the parent's.
 			let _sameProj = list.FlattenN([
@@ -501,7 +528,13 @@ _expandCopy: {
 					][0]
 				},
 			], 1)
-			(n): (_uniqStrings & {in: list.Concat([_own, _sameProj, _cross])}).out
+			let _copyCross = list.FlattenN([
+				for r in (_copyRefs & {tgt: t}).out
+				if strings.Contains(r, ":") if !strings.HasPrefix(r, ":")
+				if G.depManifests[r] != _|_
+				if G.depManifests[r].upClosure != _|_ {G.depManifests[r].upClosure},
+			], 1)
+			(n): (_uniqStrings & {in: list.Concat([_own, _sameProj, _copyClosure, _copyCross, _cross])}).out
 		}
 	}
 

@@ -607,8 +607,45 @@ _d21_copy: strings.Contains(_d21_body, "COPY --from=d21-setup_bayt /monorepo/d21
 // The context that COPY needs is wired to the synth service, not d21-setup.
 _d21_dc: compose: files: consumer: services: "d21-consumer": build: additional_contexts: "d21-setup_bayt": "service:d21-setup_bayt"
 
+// --- D22: a copy-only `from.ref` earns closure membership. Miss this
+// and the closure is unparseable — `service "X" declares unknown
+// service "Y"` — in every consumer that includes the referencing
+// service, not in the project that declared the edge.
+_d22: #project & {
+	name: "d22"
+	dir:  "d22"
+	targets: {
+		"blobs": {
+			cmd: "builtin": do: "true"
+			dockerfile: busybox
+		}
+		"app": {
+			// No `deps: [":blobs"]`: the copy is the only declaration.
+			cmd: "builtin": do: "true"
+			compose: up: true
+			dockerfile: busybox & {
+				copy: [{from: {ref: ":blobs"}, srcs: ["/opt/blobs"], dst: "/opt/blobs"}]
+			}
+		}
+	}
+}
+_d22_dc: (#dockerComposeGen & {project: _d22, depManifests: {}})
+_d22_dc: compose: files: app: services: "d22-app": build: additional_contexts: "d22-blobs": "service:d22-blobs"
+// The definition the reference resolves against travels with it.
+_d22_inc: _d22_dc.compose.files."app.closure".include
+_d22_inc: [
+	{path: "../../d22/.bayt/compose.app.yaml", required: false},
+	{path: "../../d22/.bayt/compose.blobs.yaml", required: false},
+]
+// Membership must not become a dep edge: that also emits the
+// dependency's workdir COPY, which the consumer never asked for.
+_d22_no_bulk: strings.Contains(_d22_dc.dockerfiles.app, "COPY --from=d22-blobs /monorepo") & false
+
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
+	d22:          _d22_dc
+	d22_inc:      _d22_inc
+	d22_no_bulk:  _d22_no_bulk
 	d19_tool:  _d19_has_tool
 	d19_model: _d19_has_model
 	d1: _d1_dc
