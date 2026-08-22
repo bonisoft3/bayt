@@ -77,7 +77,16 @@ def main [] {
 	let neg_add = ["./tests/_negative_add/"]
 	let neg_view = ["./tests/_negative_from_view/"]
 	let neg_ci_srcs = ["./tests/_negative_ci_srcs/"]
+	# The preamble invariant is a type, not a convention: a copy arm that
+	# names a sibling target must not evaluate.
+	let neg_preamble = ["./tests/_negative_preamble_ref/"]
+	let neg_preamble_empty = ["./tests/_negative_preamble_empty/"]
+	let neg_unpinned = ["./tests/_negative_unpinned_zypper/"]
+	let neg_unpinned_lock = ["./tests/_negative_unpinned_lock/"]
 	let pos_ci_srcs = ["./tests/_positive_ci_srcs/"]
+	# Consumer-side proof that a distros fragment unifies into both the
+	# preamble arm and #cmd.dockerfile, the way a project composes it.
+	let pos_preamble = ["./tests/_positive_preamble/"]
 
 	mut failed = 0
 	print "positive suites"
@@ -85,11 +94,16 @@ def main [] {
 	$failed = $failed + (dedup-suite)
 	$failed = $failed + (eval-pass "stacks/sayt" $sayt)
 	$failed = $failed + (eval-pass "ci `:X:bayt` with `:X:srcs` must pass" $pos_ci_srcs)
+	$failed = $failed + (eval-pass "distros fragment in both positions" $pos_preamble)
 	print "negative suites"
 	$failed = $failed + (eval-fail "A→B→A cycle must fail" $neg)
 	$failed = $failed + (export-fail "remote add without checksum must fail" $neg_add)
 	$failed = $failed + (eval-fail "synthetic view as FROM base must fail" $neg_view)
 	$failed = $failed + (eval-fail "ci `:X:bayt` without `:X:srcs` must fail" $neg_ci_srcs)
+	$failed = $failed + (eval-fail "preamble copy arm with a target ref must fail" $neg_preamble)
+	$failed = $failed + (export-fail "preamble entry naming no arm must fail" $neg_preamble_empty)
+	$failed = $failed + (eval-fail "an unpinned zypper package must fail" $neg_unpinned)
+	$failed = $failed + (eval-fail "an unpinned zypper lock entry must fail" $neg_unpinned_lock)
 
 	if $failed > 0 {
 		print $"($failed) failure\(s\)"

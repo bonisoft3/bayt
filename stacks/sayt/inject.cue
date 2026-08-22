@@ -77,15 +77,14 @@ inject: {
 	// against the outer ci stage's filesystem. The outer stage gets
 	// bayt's runtime tree through this copy entry — `image:` overrides
 	// the additional_contexts value so the fixed `bayt-runtime` key
-	// resolves to the pinned digest. ENV PATH lands via preamble.
-	dockerfile: copy: [{
-		from: {name: "bayt", image: bayt.lock.images.bayt}
-		srcs: ["runtime"]
-		dst: "/monorepo/plugins/bayt/runtime"
-	}]
-	dockerfile: defaultPreamble: "bayt-path": {
-		priority: -5
-		line:     "ENV PATH=/monorepo/plugins/bayt/runtime:${PATH}"
+	// resolves to the pinned digest.
+	dockerfile: defaultPreamble: {
+		"bayt-runtime": {priority: -6, copy: {
+			from: {name: "bayt", image: bayt.lock.images.bayt}
+			srcs: ["runtime"]
+			dst: "/monorepo/plugins/bayt/runtime"
+		}}
+		"bayt-path": {priority: -5, line: "ENV PATH=/monorepo/plugins/bayt/runtime:${PATH}"}
 	}
 	dockerfile: secrets: {
 		docker_host:               environment: "DOCKER_HOST_TCP"

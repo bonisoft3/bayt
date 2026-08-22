@@ -190,6 +190,10 @@ A *stack* captures what a language toolchain needs. Bayt ships four toolchain st
 - **`stacks/mise`** — toolchain installer. `install` (provisions the project's `.mise.toml`), `exec` (sets `activate: "mise x --"` so cmds resolve through mise's shim layer), `doctor`. Used as a building block by other stacks.
 - **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.go`, `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace` are the standard mappings projects compose against. `sayt.pnpmWorkspace`'s setup provisions the shared toolchain layer: it runs the workspace root's `mise install`, so consumer setups FROM-chaining it install only their project's tool delta. `sayt.inject` adds the dind plumbing for ci-cascade flows; `sayt.ci` is a one-line recipe combining inject + the standard bake-and-up-the-integrate-closure RUN body + FROM `:dindbox`; `sayt.dindbox` is the matching dindbox-target preset.
 
+A *distro* captures what a base image's package manager needs. The axes are different: you pick a stack from what the project is written in, a distro from what the base image is — and a package manager spans distros (`apk` covers Alpine and Wolfi, `apt` covers Debian and Ubuntu), so the libraries are named for the manager.
+
+- **`distros/apt`**, **`distros/apk`**, **`distros/zypper`** — each exports one `#install` definition taking `pkgs` and producing an `out` that composes into either position a package install occupies: a `dockerfile.defaultPreamble` entry in-stage, or `cmd: "builtin": dockerfile:` on a shared target. Each owns its manager's cache mounts, and the layer keeps only what the image needs — apt mounts `/var/cache/apt` plus `/var/lib/apt/lists`, zypper mounts all of `/var/cache/zypp` (its metadata is build-time scratch), so no arm needs a `clean` tail. Mounts are project-scoped and locked: a package manager keeps a lock file and fails rather than waiting.
+
 The go and gradle stacks ship an opt-in non-verb `deps` target that bakes the dependency closure into an image layer: go downloads via the RUN-only `dockerfile.do` form (below) and downstream `build` COPYs it in via `:deps:outs`; gradle resolves a read-only dep cache that rides into `build` through the FROM chain (`GRADLE_RO_DEP_CACHE`). pnpm folds the same idea into its `setup` verb instead — `install` materializes the closure as a layer directly.
 
 Using the umbrella collapses a typical service to a handful of lines:
@@ -409,7 +413,7 @@ release-proxy) to targets. Overlays must not define `bayt`.
 4. **No path math in CUE.** Repo-relative `../` computation lives in nushell, which has a proper path library. CUE carries structured data (`{name, projectDir}`), nushell joins it.
 5. **Fragments via unification, not inheritance.** Verbs (`setup`, `build`, …) and base presets (`nubox`, `busybox`, …) are plain structs, not closed `#`-prefixed definitions — CUE's closed conjunction rejects cross-def fields. See the closedness note in `core/bayt.cue`.
 6. **Version intent vs. version lock.** Base image tags go in `bayt.cue`; digests live in `images.lock.cue`, refreshed as part of the self-pin release process.
-7. **Pin every layer ingredient.** Image presets and consumer preambles pin OS-package versions inline (`zypper -n install findutils=4.10.0-160000.2.2 which=2.23-160000.2.2`). The base image is digest-pinned, so an unpinned package install is the one remaining drift surface — pinning closes it. Reproducibility holds across registry-side base updates.
+7. **Pin what the archive can honor.** OS-package installs go through `distros/*` (`(zypper.#install & {pkgs: ["findutils=4.10.0-160000.2.2"]}).out`). The policy follows archive retention rather than being uniform: zypper requires a `name=version` pin and rejects a bare name at evaluation, because leap retains versions for the life of a release; apt and apk take bare names, because Debian/Ubuntu keep one revision per package in `-updates` and Alpine prunes, so a hard pin there encodes a dated build failure rather than reproducibility. Where a build genuinely needs reproducible packages, prefer a leap base, or point apt at `snapshot.ubuntu.com`/`snapshot.debian.org`, which fixes resolution at a timestamp and makes the pin redundant. The base image is always digest-pinned, so reproducibility holds across registry-side base updates regardless.
 8. **Never swallow errors.** fingerprint.nu and cache.nu fail fast on missing inputs, malformed manifests, git-hash-object errors. A misconfigured target surfaces immediately instead of poisoning the cache with silent defaults.
 
 ## Claude Code plugin
@@ -452,6 +456,10 @@ plugins/bayt/
 │   ├── mapaslist.cue        (#MapAsList helper for compose-friendly defaults)
 │   ├── listutils.cue
 │   └── *_check.cue          (vet-as-test stress patterns)
+├── distros/               ← OS package-manager libraries
+│   ├── apt/apt.cue         (#install: pinned apt-get + archive/lists mounts)
+│   ├── apk/apk.cue         (#install: apk add + cache-dir mount)
+│   └── zypper/zypper.cue   (#install: pinned zypper + /var/cache/zypp mount)
 ├── stacks/                ← language preset libraries
 │   ├── go/go.cue           (go concept fragments: modDownload, build,
 │   │                        test, integrationTest, vet, run)

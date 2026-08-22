@@ -257,13 +257,23 @@ noop: #cmd & {
 
 	// #mount — a BuildKit RUN mount, discriminated by `type`, consumed by the
 	// dockerfile emitter (this block's `mounts` + #cmd.dockerfile.mounts). For
-	// cache mounts the emitter owns `id`+`sharing` (users can't set them),
-	// keyed by `scope`: "target" (default) = per-(project,target), locked
-	// (isolation); "project" = per-project, shared (sibling targets);
-	// "global" = the bare target path, shared (every project). Use a shared
-	// scope only for tool stores whose own content verification makes
-	// concurrent access safe (mise, go, pnpm, gradle). Secret/ssh mounts take
-	// `id` (the secret / key name).
+	// cache mounts the emitter owns `id`, keyed by `scope`: "target"
+	// (default) = per-(project,target); "project" = per-project (sibling
+	// targets); "global" = the bare target path (every project).
+	//
+	// Scope also fixes BuildKit's `sharing`, so there is one knob:
+	//
+	//   target  → locked   per-(project,target)
+	//   project → locked   a project's targets, serialized
+	//   global  → shared   every project, concurrent
+	//
+	// `global` is the only concurrent arm and carries a precondition: the
+	// store must verify its own content (mise, go, pnpm, gradle do). One
+	// that doesn't takes `project` — four parallel apt installs against a
+	// concurrent mount fail three times out of four, while a lock at global
+	// scope would serialize every install in the monorepo.
+	//
+	// Secret/ssh mounts take `id` (the secret / key name).
 	#mount: {
 		type:   "cache"
 		target: string
@@ -364,30 +374,71 @@ noop: #cmd & {
 	// WORKDIR. Defaults to /monorepo/<projectDir> in the emitter.
 	workdir?: string
 
-	// Lines emitted between the base-image setup (FROM + WORKDIR +
-	// COPY-from from `dockerfile.copy`) and the project's source COPYs.
-	// preamble runs after the base image is fully assembled and before
-	// any user code lands, so RUN steps here can rely on COPY-from
-	// sources being on PATH/disk (e.g. warming lazybox stubs with
-	// `RUN <tool> --version > /dev/null`). The verbatim escape hatch
-	// for stage setup (ENVs, package installs, smoke tests). Use
-	// `epilogue` for lines after the cmd RUN.
+	// Stage setup, emitted directly after FROM + WORKDIR and before every
+	// source-derived instruction (`add`, `copy`, dep COPYs, src COPYs).
+	//
+	// INVARIANT: a `defaultPreamble` entry cannot reference the repo. No
+	// `srcs`, no target `ref`, no build context — every arm below is
+	// reachable only through an external pin (image digest, checksummed URL,
+	// versioned package), so nothing in the repo can invalidate one. The arms
+	// enforce that; it is not a convention.
+	//
+	// `preamble` is the raw escape hatch and carries no such guarantee: it is
+	// a list of strings, and projects do put repo COPYs in it. A line there
+	// re-couples the region to source churn, which is the cost of the hatch.
+	// Prefer `copy` / `srcs` for anything repo-derived.
 	//
 	// Same two-position pattern as `srcs.globs` / `srcs.defaultGlobs`:
 	//
-	//   preamble        — project-leaf-additive plain list, appended
-	//                     after the framework's contribution.
+	//   preamble        — project-leaf-additive plain list of raw lines,
+	//                     appended after the framework's contribution.
 	//   defaultPreamble — framework/preset's #MapAsList, keyed so
 	//                     multiple stacks (image preset + dind overlay
 	//                     + project add-on) compose by key rather than
 	//                     positional list-unification (which is
 	//                     length-strict and rejects extension).
 	//
-	// Element shape is `{name, line: string}` (name auto-derives from
-	// the map key). Manifest emits the merged list as
-	// `defaultPreamble values + preamble`.
+	// Manifest emits the merged list as `defaultPreamble values + preamble`.
 	preamble:        [...string]
-	defaultPreamble: *null | #MapAsList
+	defaultPreamble: *null | {[Name=string]: (_preambleEl & {name: Name}) | null}
+
+	// Three arms, closed so a mistyped field errors here rather than
+	// silently emitting nothing:
+	//
+	//   line — verbatim Dockerfile instruction. ENVs, and the escape
+	//          hatch for anything the other two arms don't model.
+	//   copy — COPY from a pinned image. `from` is required and takes the
+	//          image-name arm only: `from: null` is an in-context COPY
+	//          (reads the build context) and the ref arm reads a sibling
+	//          target — both violate the invariant above.
+	//   do   — RUN. `mounts` get the same emitter-owned id/sharing as a
+	//          cmd's (see #mount), so a package manager's cache mount is
+	//          spelled once and behaves identically in both positions.
+	//          No `srcs`: a preamble RUN's inputs are its own text.
+	_preambleEl: close({
+		name: string
+		priority?: int
+		line: string
+	}) | close({
+		name: string
+		priority?: int
+		// Narrowed to the image-name arm; the scratch guard and the rest
+		// come from _copyEntry.
+		copy: _copyEntry & {
+			from: close({
+				name:   string
+				image?: string
+			})
+		}
+	}) | close({
+		name: string
+		priority?: int
+		do: string
+		// Defaults to "sh", not #shell's "exec": a preamble RUN is
+		// almost always a package-manager line needing `&&`.
+		shell:  *"sh" | #shell
+		mounts: [...#mount]
+	})
 
 	// Pinned ADD stanzas, emitted after the preamble (stable blobs
 	// layer before source COPYs). Two forms — see #add. The remote form
@@ -414,7 +465,8 @@ noop: #cmd & {
 	epilogue: [...string]
 
 	// Structured COPY directives. Maps directly to Dockerfile COPY
-	// grammar; emitted after the primary FROM, before user preamble.
+	// grammar; emitted after the preamble and `add`, before the dep and
+	// source COPYs.
 	//
 	// `from` reuses the same shape as the stage's primary `from`:
 	// either an external image ref (`name`) or a bayt target ref

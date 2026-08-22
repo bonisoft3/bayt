@@ -16,11 +16,12 @@
 //   }
 package mise
 
-// mise's download dir stays per-project: mise unpacks tarballs IN PLACE here
-// (no temp+rename), so a shared dir collides on concurrent extraction ("File
-// exists"). installs/ is layer content (never mounted), re-extracted and
-// re-verified against mise.lock every RUN, so a poisoned mount can't fake
-// "installed".
+// mise unpacks tarballs IN PLACE here (no temp+rename), so any concurrent
+// extraction collides ("File exists"). `scope: "project"` is bayt's locked
+// arm, which is what actually rules that out — narrowing the sharing set
+// without locking would still let two of a project's targets collide.
+// installs/ is layer content (never mounted), re-extracted and re-verified
+// against mise.lock every RUN, so a poisoned mount can't fake "installed".
 _downloadsMount: {type: "cache", target: "/root/.local/share/mise/downloads", scope: "project"}
 
 // Global tarball store — checksummed tarballs only, shared across every project

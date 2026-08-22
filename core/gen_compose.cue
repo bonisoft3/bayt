@@ -54,6 +54,99 @@ import (
 // sayt/depot action default (which overrides with the same value).
 #buildkitSyntax: "docker/dockerfile:1.26@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32"
 
+// _mount renders one `--mount=...` directive. For cache mounts the emitter
+// owns id + sharing, keyed by scope (see #mount); other mounts pass `id`.
+//
+// Package-level so gen_bayt.cue can render preamble RUN entries through it:
+// one definition, so a preamble mount and a cmd mount cannot drift.
+_mount: {
+	m:       #dockerfile.#mount
+	project: string
+	name:    string
+	out:     string
+	let _t  = m.type
+	let _tg = [if m.target != _|_ {",target=\(m.target)"}, ""][0]
+	let _sc = [if m.source != _|_ {",source=\(m.source)"}, ""][0]
+	let _rq = [if m.required {",required=true"}, ""][0]
+	// Scope carries both id and sharing (see #mount): only the diagonal is
+	// motivated, so there is no separate sharing knob to get wrong.
+	// Bound outside the lookup structs: a `project` key would otherwise
+	// shadow the `project` parameter inside these interpolations.
+	let _targetScopeId  = "\(project)-\(name):\(m.target)"
+	let _projectScopeId = "\(project):\(m.target)"
+	let _cacheId = [
+		if m.type == "cache" {{
+			target:  _targetScopeId
+			project: _projectScopeId
+			global:  m.target
+		}[m.scope]},
+		"",
+	][0]
+	let _sharing = [
+		if m.type == "cache" {{
+			target:  "locked"
+			project: "locked"
+			global:  "shared"
+		}[m.scope]},
+		"",
+	][0]
+	let _id = [
+		if m.type == "cache" {",id=\(_cacheId),sharing=\(_sharing)"},
+		if m.id != _|_ {",id=\(m.id)"},
+		"",
+	][0]
+	out: "--mount=type=\(_t)\(_tg)\(_sc)\(_id)\(_rq)"
+}
+
+// _runForm renders a RUN line from an already-prefixed, already-activated
+// command. Shared by cmd RUNs (_runLine) and preamble RUN entries
+// (gen_bayt's _preambleLine) so shell selection and escaping cannot drift
+// between the two positions.
+_runForm: F={
+	prefix: string
+	shell:  string
+	do:     string
+	out:    string
+	// Dockerfile's default RUN is already `/bin/sh -c <cmd>`, so the "sh"
+	// form avoids the JSON-escape dance and lets quotes and backslashes
+	// flow through verbatim. Other shells take the exec form with the cmd
+	// JSON-escaped: backslash first, so the quote pass doesn't re-escape it.
+	let _esc1 = strings.Replace(F.do, "\\", "\\\\", -1)
+	let _esc2 = strings.Replace(_esc1, "\"", "\\\"", -1)
+	out: [
+		if F.shell == "exec" {
+			let _tokens = strings.Split(F.do, " ")
+			let _quoted = [for tk in _tokens if tk != "" {"\"\(tk)\""}]
+			"RUN \(F.prefix)[\(strings.Join(_quoted, ", "))]"
+		},
+		if F.shell == "sh" {"RUN \(F.prefix)\(F.do)"},
+		"RUN \(F.prefix)[\"\(F.shell)\", \"-c\", \"\(_esc2)\"]",
+	][0]
+}
+
+// _copyLine renders one COPY line from a copy entry. Shared by
+// `dockerfile.copy` (gen_compose) and the preamble's copy arm (gen_bayt)
+// so both spell COPY the same way.
+_copyLine: {
+	c: _
+	out: string
+	// --link only on a same-path --from rebase: --from preserves the source's
+	// dir mtimes only when src == dst (a rename synthesizes the new dest dir at
+	// build time, like --parents), and a build-time dir entry drifts the
+	// content-addressed output → breaks --link's cross-run cache reuse.
+	let _cLink    = [if c.from != null if !c.parents if len(c.srcs) == 1 if c.srcs[0] == c.dst {"--link "}, ""][0]
+	let _cChmod   = [if c.chmod != _|_ {"--chmod=\(c.chmod) "}, ""][0]
+	let _cChown   = [if c.chown != _|_ {"--chown=\(c.chown) "}, ""][0]
+	let _cParents = [if c.parents {"--parents "}, ""][0]
+	let _cExclude = strings.Join([for e in c.exclude {"--exclude=\(e) "}], "")
+	let _cFrom    = [
+		if c.from == null {""},
+		if c.from != null {"--from=\(c.from.name) "},
+	][0]
+	let _cSrcs    = strings.Join(c.srcs, " ")
+	out: "COPY \(_cLink)\(_cChmod)\(_cChown)\(_cParents)\(_cExclude)\(_cFrom)\(_cSrcs) \(c.dst)"
+}
+
 #dockerComposeGen: G={
 	project: #project
 	depManifests:   {[string]: _}
@@ -196,28 +289,6 @@ import (
 		}
 	}
 
-	// _mount renders one `--mount=...` directive. For cache mounts the emitter
-	// owns id + sharing, keyed by scope (see #mount); other mounts pass `id`.
-	_mount: {
-		m:       #dockerfile.#mount
-		project: string
-		name:    string
-		out:     string
-		let _t  = m.type
-		let _tg = [if m.target != _|_ {",target=\(m.target)"}, ""][0]
-		let _sc = [if m.source != _|_ {",source=\(m.source)"}, ""][0]
-		let _rq = [if m.required {",required=true"}, ""][0]
-		let _lockedId  = ",id=\(project)-\(name):\(m.target),sharing=locked"
-		let _projectId = ",id=\(project):\(m.target),sharing=shared"
-		let _globalId  = ",id=\(m.target),sharing=shared"
-		let _id = [
-			if m.type == "cache" {{target: _lockedId, project: _projectId, global: _globalId}[m.scope]},
-			if m.id != _|_ {",id=\(m.id)"},
-			"",
-		][0]
-		out: "--mount=type=\(_t)\(_tg)\(_sc)\(_id)\(_rq)"
-	}
-
 	// Helper: render one RUN line for a cmd rule.
 	//
 	// Shell handling:
@@ -330,27 +401,9 @@ import (
 				])
 				"RUN \(_prefix)<<BAYT_INJECT\n\(strings.Join(_bodyLines, "\n"))\nBAYT_INJECT"
 			},
-			// shell == "exec" → exec form, whitespace-tokenized argv.
-			if _inject == null && _shell == "exec" {
-				let _tokens = strings.Split(_activated, " ")
-				let _quoted = [for tk in _tokens if tk != "" {"\"\(tk)\""}]
-				"RUN \(_prefix)[\(strings.Join(_quoted, ", "))]"
-			},
-			// shell == "sh" → shell form. Dockerfile's default RUN is
-			// already `/bin/sh -c <cmd>`, so writing it that way avoids
-			// the JSON-escape dance on the cmd string. Cmds with quotes,
-			// backslashes, etc. flow through verbatim.
-			if _inject == null && _shell == "sh" {
-				"RUN \(_prefix)\(_activated)"
-			},
-			// other shells (nu, bash, pwsh, …) → exec form wrapping the
-			// cmd in `[<shell>, "-c", <do>]`. The do string is
-			// JSON-escaped: backslash first (so the next pass doesn't
-			// re-escape), then quote.
-			if _inject == null && _shell != "exec" && _shell != "sh" {
-				let _esc1 = strings.Replace(_activated, "\\", "\\\\", -1)
-				let _esc2 = strings.Replace(_esc1, "\"", "\\\"", -1)
-				"RUN \(_prefix)[\"\(_shell)\", \"-c\", \"\(_esc2)\"]"
+			// No inject → the shared shell-form rules.
+			if _inject == null {
+				(_runForm & {prefix: _prefix, shell: _shell, do: _activated}).out
 			},
 		][0]
 	}
@@ -583,9 +636,6 @@ import (
 			"COPY \(strings.Join(_selfTaskfileSources, " ")) ./.bayt/",
 		]
 
-		// bayt-runtime COPY lines come through the standard `_copyLines` path:
-		// capabilities.incremental and sayt.inject each declare a dockerfile.copy.
-
 		_incrementalCopies: list.Concat([
 			if t.dockerfile.incremental {[
 				for d in t.transitiveDeps if G._m.files[d] != _|_ {
@@ -745,29 +795,10 @@ import (
 		_postRun: [if !t.dockerfile.incremental {_selfTaskfileCopies}, []][0]
 
 		// Structured COPY directives from t.dockerfile.copy. Each entry
-		// renders to one COPY line; --link is set by the _cLink rule
-		// below. For from-COPYs, the alias is computed from the entry:
-		// external uses from.name directly; internal uses the bayt
-		// target's qualified name (matching deps' aliasing).
-		_copyLine: {
-			c: _
-			out: string
-			// --link only on a same-path --from rebase: --from preserves the source's
-			// dir mtimes only when src == dst (a rename synthesizes the new dest dir at
-			// build time, like --parents), and a build-time dir entry drifts the
-			// content-addressed output → breaks --link's cross-run cache reuse.
-			let _cLink    = [if c.from != null if !c.parents if len(c.srcs) == 1 if c.srcs[0] == c.dst {"--link "}, ""][0]
-			let _cChmod   = [if c.chmod != _|_ {"--chmod=\(c.chmod) "}, ""][0]
-			let _cChown   = [if c.chown != _|_ {"--chown=\(c.chown) "}, ""][0]
-			let _cParents = [if c.parents {"--parents "}, ""][0]
-			let _cExclude = strings.Join([for e in c.exclude {"--exclude=\(e) "}], "")
-			let _cFrom    = [
-				if c.from == null {""},
-				if c.from != null {"--from=\(c.from.name) "},
-			][0]
-			let _cSrcs    = strings.Join(c.srcs, " ")
-			out: "COPY \(_cLink)\(_cChmod)\(_cChown)\(_cParents)\(_cExclude)\(_cFrom)\(_cSrcs) \(c.dst)"
-		}
+		// renders to one COPY line (see package-level _copyLine). For
+		// from-COPYs, the alias is computed from the entry: external uses
+		// from.name directly; internal uses the bayt target's qualified
+		// name (matching deps' aliasing).
 		_copyLines: [
 			for c in t.dockerfile.copy {
 				(_copyLine & {"c": c}).out
@@ -804,12 +835,18 @@ import (
 			},
 		][0]
 
+		// Ordered by volatility: repo-derived instructions emit below the
+		// preamble, so a source edit does not re-key what sits above it.
+		// `copy` is below because its ref arm and its in-context form are
+		// both repo-derived; a pinned COPY that a preamble RUN depends on
+		// belongs in the preamble's own copy arm. How far the guarantee
+		// actually reaches is on #dockerfile.preamble.
 		_lines: [
 			_from,
 			"WORKDIR \(_workdir)",
-			for p in _copyLines {p},
 			for p in t.dockerfile.preamble {p},
 			for l in _addLines {l},
+			for p in _copyLines {p},
 			for l in _depCopies {l},
 			for l in _srcCopies {l},
 			for l in _preRun {l},
@@ -1184,10 +1221,19 @@ import (
 					if t.compose == _|_ {[]},
 					if t.compose != _|_ {[for k, _ in t.compose.depends_on {k}]},
 				][0]
-				let _copyContextEntries = [
-					for c in t.dockerfile.copy
-					if c.from != null {c.from},
-				]
+				// Preamble copy arms feed the same collector as
+				// `dockerfile.copy`: they render at a different position but
+				// need identical additional_contexts wiring — notably the
+				// `image:` override generate.nu rewrites to a path context
+				// under --runtime. A separate collector would silently drop
+				// a preamble COPY's context entry. Unguarded on purpose: the
+				// manifest always carries the field, and a fallback here
+				// would turn a rename into a silently missing context.
+				let _preambleCopyEntries = t.dockerfile.preambleCopyContexts
+				let _copyContextEntries = list.Concat([
+					[for c in t.dockerfile.copy if c.from != null {c.from}],
+					_preambleCopyEntries,
+				])
 				let _userAddlCtx = [
 					if t.compose == _|_ {{}},
 					if t.compose != _|_ && t.compose.build == _|_ {{}},

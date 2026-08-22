@@ -12,22 +12,55 @@ import (
 	"strings"
 )
 
-// _expandGlobs / _expandLines — flatten a #MapAsList default into a
-// plain list, plucking either `.glob` (for srcs/outs/exclude maps,
-// whose elements have `glob: string`) or `.line` (for preamble maps,
-// whose elements have `line: string`). Both default to [] when the
-// input is null. Saves the same `[if null { [] }, MapToList(in)
-// | pluck-field][0]` boilerplate from repeating ~5 times in the
-// manifest emission.
+// _expandGlobs — flatten a #MapAsList default (srcs/outs/exclude, whose
+// elements have `glob: string`) into a plain list, [] when null.
 _expandGlobs: {
 	in:  null | #MapAsList
 	out: [...string]
 	out: [if in == null {[]}, [for v in (#MapToList & {"in": in}).out {v.glob}]][0]
 }
-_expandLines: {
-	in:  null | #MapAsList
+
+// _preambleLine — one #dockerfile._preambleEl rendered to its Dockerfile
+// instruction. Arms are discriminated by which field is present; the
+// schema's closed disjunction guarantees exactly one is.
+//
+// COPY and RUN rendering come from gen_compose's package-level _copyLine /
+// _mount / _runForm, so a preamble entry and a cmd of the same shape emit
+// byte-identical lines — including emitter-owned cache-mount id/sharing.
+// No `activate` wrap: the preamble runs before any toolchain is staged.
+_preambleLine: P={
+	v:       _
+	project: string
+	target:  string
+	out:     string
+	// The RUN arm is unconditional (last), so the list is never empty when
+	// `v` is unconstrained — an all-`if` list would index out of range on
+	// this helper's own standalone evaluation. Same shape as _expandGlobs.
+	// A real entry can't fall through by mistake: the schema's closed
+	// disjunction guarantees one arm's fields are present, so an entry
+	// reaching here without `do` errors on the missing reference.
+	let _mountStrs = [for m in P.v.mounts {(_mount & {"m": m, project: P.project, name: P.target}).out}]
+	let _prefix = [if len(_mountStrs) > 0 {strings.Join(_mountStrs, " ") + " "}, ""][0]
+	out: [
+		if P.v.line != _|_ {P.v.line},
+		if P.v.copy != _|_ {(_copyLine & {c: P.v.copy}).out},
+		(_runForm & {prefix: _prefix, shell: P.v.shell, do: P.v.do}).out,
+	][0]
+}
+
+// _expandPreamble — flatten a defaultPreamble #MapAsList into rendered
+// Dockerfile lines. `project`/`target` key the cache-mount ids.
+_expandPreamble: E={
+	in:      null | #MapAsList
+	project: string
+	target:  string
 	out: [...string]
-	out: [if in == null {[]}, [for v in (#MapToList & {"in": in}).out {v.line}]][0]
+	out: [
+		if E.in == null {[]},
+		[for v in (#MapToList & {in: E.in}).out {
+			(_preambleLine & {"v": v, project: E.project, target: E.target}).out
+		}],
+	][0]
 }
 
 // _expandCopy — flatten a defaultCopy #MapAsList into a list of copy
@@ -697,7 +730,11 @@ _expandCopy: {
 					// unification) because list-unification is length-
 					// strict — t.dockerfile.preamble (length N) can't
 					// unify with the concat result (length N+M).
-					let _preambleExtras = (_expandLines & {in: t.dockerfile.defaultPreamble}).out
+					let _preambleExtras = (_expandPreamble & {
+						in:      t.dockerfile.defaultPreamble
+						project: t.project
+						target:  t.name
+					}).out
 					let _copyExtras = (_expandCopy & {in: t.dockerfile.defaultCopy}).out
 					dockerfile: {
 						// One dynamic field per iteration (splitting into two
@@ -709,6 +746,15 @@ _expandCopy: {
 							(k): [if k == "copy" {list.Concat([_copyExtras, v])}, v][0]
 						}
 						preamble: list.Concat([_preambleExtras, t.dockerfile.preamble])
+						// defaultPreamble is dropped from the manifest (its
+						// entries are already rendered into `preamble`), but a
+						// copy-arm entry still needs an additional_contexts
+						// entry downstream. Carry just the `from` values so
+						// gen_compose can wire them without the raw map.
+						preambleCopyContexts: [
+							if t.dockerfile.defaultPreamble == null {[]},
+							[for _, e in t.dockerfile.defaultPreamble if e != null if e.copy != _|_ {e.copy.from}],
+						][0]
 					}
 				}
 				if t.compose != _|_ {compose: t.compose}

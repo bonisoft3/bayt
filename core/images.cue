@@ -20,6 +20,11 @@
 // extraction, file placement, and unix-socket forwarding.
 package bayt
 
+// One-way edge: core may import a distro library, never the reverse.
+// A distro fragment imports only stdlib, which is what keeps this
+// acyclic — do not add a core import to distros/ to reach #mount.
+import "github.com/bonisoft3/bayt/distros/zypper"
+
 // _lazyboxOverlay — defaultPreamble fragment that COPYs lazybox into
 // the image and prepends its bin dirs to PATH. Shared by nubox (full
 // dev environment) and staging (ops-shell-on-busybox), so a lazybox
@@ -35,9 +40,7 @@ _lazyboxOverlay: {
 // mise shim under /root/.local/share/lazybox/.
 //
 // Installs GNU findutils + which (absent in leap 16.0's slim base);
-// gradle's gradlew probes for both at startup and dies otherwise. No
-// `zypper clean -a` — chained re-runs are no-ops ("Nothing to do");
-// clearing the metadata cache would make them fail with "no provider".
+// gradle's gradlew probes for both at startup and dies otherwise.
 nubox: {
 	// `from` is bound to the leaf disjunct, so `bayt.nubox & {from: ref: ...}`
 	// fails CUE evaluation. Chained-FROM consumers don't compose the
@@ -47,12 +50,14 @@ nubox: {
 	})
 	defaultPreamble: _lazyboxOverlay & {
 		"mise-trusted":  {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
-		"gnu-shell-utils": {priority: -7, line: "RUN zypper -n install findutils=4.10.0-160000.2.2 which=2.23-160000.2.2"}
+		"gnu-shell-utils": {priority: -7} & (zypper.#install & {
+			pkgs: ["findutils=4.10.0-160000.2.2", "which=2.23-160000.2.2"]
+		}).out
 	}
 }
 
-// dindbox — lean docker:cli + socat binary. No entrypoint script,
-// no defaultPreamble. Pair with `sayt.dindboxInject` on the consuming
+// dindbox — lean docker:cli + socat binary. No entrypoint script.
+// Pair with `sayt.dindboxInject` on the consuming
 // ci target: that helper mounts host-supplied compose secrets
 // (docker_host, buildx_builder, buildx_instance, docker_config) and
 // emits the in-sandbox setup body (env extraction, file placement,
@@ -65,23 +70,26 @@ dindbox: {
 	from: close({
 		name: *lock.images.docker | string
 	})
-	copy: [
-		{
+	// Keyed so an overlay can add a binary without restating the set.
+	// Priorities are distinct to fix the emitted order (ties break
+	// alphabetically).
+	defaultPreamble: {
+		"socat": {priority: -10, copy: {
 			from: {name: lock.images.alpine_socat}
 			srcs: ["/usr/bin/socat1"]
 			dst:  "/usr/local/bin/socat"
-		},
-		{
+		}}
+		"socat-libs": {priority: -9, copy: {
 			from: {name: lock.images.alpine_socat}
 			srcs: ["/usr/lib/libreadline.so.8", "/usr/lib/libncursesw.so.6"]
 			dst:  "/usr/lib/"
-		},
-		{
+		}}
+		"depot": {priority: -8, copy: {
 			from: {name: lock.images.depot_cli}
 			srcs: ["/usr/bin/depot"]
 			dst:  "/usr/local/bin/depot"
-		},
-	]
+		}}
+	}
 }
 
 // busybox — minimal musl runner, scratch-adjacent. Use for release.
