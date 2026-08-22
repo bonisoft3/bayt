@@ -117,14 +117,16 @@ def bake-target [work: string, bld: string, target: string]: nothing -> record {
   })
 }
 
-# hit% over RUN/ADD vertices, exactly as sayt/summary: group_by(.name),
-# hit = any event in the group cached.
+# hit% over RUN/ADD vertices, matching sayt/summary's rawjson verdicts. This
+# reads one bake's rawjson, so a digest is one execution and sayt/summary's
+# `started` half of the key buys nothing here.
 def hit-stats [rawfile: string]: nothing -> record {
   let filter = '[.[].vertexes[]?]
     | map(select((.name // "") | test("^\\[[^\\]]+ [0-9]+/[0-9]+\\] (RUN|ADD) ")))
-    | group_by(.name)
-    | map({cached: (any(.[]; .cached == true))})
-    | {total: length, hit: (map(select(.cached)) | length)}'
+    | group_by(.digest)
+    | map({cached: (any(.[]; .cached == true)), ran: (any(.[]; .completed != null))})
+    | {total: (map(select(.cached or .ran)) | length),
+       hit:   (map(select(.cached))         | length)}'
   (open --raw $rawfile | lines | where ($it | str starts-with "{") | str join "\n"
     | ^jq -s $filter | from json)
 }
