@@ -1299,10 +1299,13 @@ _copyLine: {
 				// layers CACHED. compose-spec's `x-bake` doesn't pass
 				// through `attest` / `provenance` / `sbom` fields
 				// (verified via `bake --print`), so they must be
-				// disabled out-of-band via BUILDX_NO_DEFAULT_ATTESTATIONS=1
-				// on every bake caller. dindbox compose sets it for
-				// the inner-bake; CI workflows must set it for the
-				// outer host bake.
+				// disabled out-of-band by every bake caller. dindbox
+				// compose sets BUILDX_NO_DEFAULT_ATTESTATIONS=1 for the
+				// inner-bake; CI workflows must disable them on the outer
+				// host bake. That env var reaches buildx only — `depot
+				// bake` resolves an identical plan with and without it, so
+				// a depot caller must pass `--provenance=false
+				// --sbom=false`, which land in the plan as `attest`.
 				// `bake?: #bake` means non-bake targets leave t.bake
 				// at _|_, so guard before touching its fields.
 				if t.bake != _|_ {
