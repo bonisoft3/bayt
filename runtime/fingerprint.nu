@@ -27,54 +27,16 @@
 #   --stamp-file <p>     check: exit 0 on match + --outs present, else 1.
 #   --update-stamp       requires --stamp-file. Writes atomically.
 
-def git-available []: nothing -> bool {
-  if (which git | is-empty) { return false }
-  (do -i { ^git rev-parse --is-inside-work-tree } | complete | get exit_code) == 0
-}
-
-# A pattern is a glob when it carries any wildcard metachar. `[` covers
-# the bracket-class idiom bayt emission uses for optional single files
-# (`[m]ise.toml`, `gradle/lib[s].versions.toml`) — git pathspecs and
-# nu's glob both understand it; classifying those as literals silently
-# dropped them from every fingerprint.
+# A pattern is a glob when it carries any wildcard metachar. `[` covers the
+# bracket-class idiom bayt emits for optional single files (`[m]ise.toml`,
+# `gradle/lib[s].versions.toml`); classing those as literals drops them from
+# every fingerprint, since a literal must exist on disk to count.
 def is-glob [p: string]: nothing -> bool {
   ($p | str contains "*") or ($p | str contains "?") or ($p | str contains "[")
 }
 
-# Enumerate files matching the given patterns, pruning excluded dirs
-# at walk time. nu's `glob` returns [] for no-match (deliberately
-# silent); errors only on malformed patterns, which we let propagate.
-def expand-paths [paths: list<string>, excludes: list<string>]: nothing -> list<string> {
-  $paths
-  | each { |p|
-    let t = ($p | path type)
-    if $t == "file" {
-      [$p]
-    } else if $t == "dir" {
-      glob $"($p)/**/*" --exclude $excludes
-      | where ($it | path type) == "file"
-    } else if (is-glob $p) {
-      glob $p --exclude $excludes
-      | where ($it | path type) == "file"
-    } else {
-      []
-    }
-  }
-  | flatten
-  | sort -n
-}
-
-# Translate nu-style `**/X` patterns to git pathspec. git's `*` is
-# multi-segment, so `**/*.vue` MISSES root-level files; stripping the
-# `**/` prefix matches recursively AND catches root-level files.
-# Patterns without `**/` pass through unchanged.
-def git-patterns [paths: list<string>]: nothing -> list<string> {
-  $paths | each { |p|
-    if ($p | str starts-with "**/") { $p | str substring 3.. } else { $p }
-  }
-}
-
 use ./tools.nu [libc-flavor]
+use ./ignore.nu [to-regex, walk-scope]
 
 # Platform identity folded into every hash. Stops an arm64-mac stamp
 # from being trusted on an amd64-linux host when a worktree is cross-
@@ -163,34 +125,59 @@ export def compute-fingerprint [
   paths: list<string>
   excludes: list<string>
   docker: bool = false
+  root: string = "."
 ]: nothing -> record {
-  let pairs = if (git-available) {
-    let gpaths = (git-patterns $paths)
-    let globs = ($gpaths | where { |p| is-glob $p })
-    let literals = ($gpaths | where { |p| not (is-glob $p) })
-    let present_literals = ($literals | where { |p| ($p | path type) == "file" })
-    let missing = ($literals | where { |p| ($p | path type) != "file" })
-    if not ($missing | is-empty) {
-      let n = ($missing | length)
-      let names = ($missing | str join ', ')
-      print -e $"fingerprint: skipping ($n) missing literal paths: ($names)"
-    }
-    let tracked = if ($globs | is-empty) { [] } else { ^git ls-files -co --exclude-standard -- ...$globs | lines }
-    let files = (($tracked ++ $present_literals) | sort | uniq)
-    if ($files | is-empty) {
-      error make { msg: $"fingerprint: no files found for: ($paths | str join ' ')" }
-    }
-    let hashes = (^git hash-object ...$files | lines)
-    $files | zip $hashes | each { |p| {path: ($p | get 0), hash: ($p | get 1)} }
-  } else {
-    # One spelling across both source modes: `git ls-files` above already
-    # answers in forward slashes, glob expansion answers in the host's.
-    let files = (expand-paths $paths $excludes | each { |f| $f | str replace -a '\' '/' })
-    if ($files | is-empty) {
-      error make { msg: $"fingerprint: no files found for: ($paths | str join ' ')" }
-    }
-    $files | each { |f| {path: $f, hash: ((open --raw $f) | hash sha256)} }
+  let gpaths = $paths
+  let globs = ($gpaths | where { |p| is-glob $p })
+  let plain = ($gpaths | where { |p| not (is-glob $p) })
+  # A directory names its whole subtree, so it joins the glob side and the
+  # ignore rules and excludes apply to what is under it. Only file literals
+  # bypass them.
+  let dirs = ($plain | where { |p| ($p | path type) == "dir" } | each { |p| $"($p)/**/*" })
+  let literals = ($plain | where { |p| ($p | path type) != "dir" })
+  let present_literals = ($literals | where { |p| ($p | path type) == "file" })
+  let missing = ($literals | where { |p| ($p | path type) != "file" })
+  if not ($missing | is-empty) {
+    let n = ($missing | length)
+    let names = ($missing | str join ', ')
+    print -e $"fingerprint: skipping ($n) missing literal paths: ($names)"
   }
+
+  # One enumeration whether or not git is installed, so the input set is a
+  # function of the tree alone — see ignore.nu for why it reads only the tracked
+  # ignore files.
+  #
+  # Literals bypass it: the Merkle-chain dep stamps live under the gitignored
+  # `.task/`, and filtering them would break the chain.
+  let globs = ($globs ++ $dirs)
+  let matched = if ($globs | is-empty) { [] } else {
+    let here = ("." | path expand)
+    let scope = if $here == $root { "" } else { $here | str substring (($root | str length) + 1).. }
+    let res = ($globs | each { |g| to-regex $g })
+    let exres = ($excludes | each { |g| to-regex ($g | str trim --left --char '/') })
+    walk-scope $root $scope
+    | each { |p| if ($scope | is-empty) { $p } else { $p | str substring (($scope | str length) + 1).. } }
+    | where { |p| $res | any { |re| $p =~ $re } }
+    | where { |p| not ($exres | any { |re| $p =~ $re }) }
+  }
+
+  let files = (($matched ++ $present_literals) | sort | uniq)
+  if ($files | is-empty) {
+    error make { msg: $"fingerprint: no files found for: ($paths | str join ' ')" }
+  }
+
+  # Hashed in-process rather than by `git hash-object` or `sha256sum`: both are
+  # faster but exist only where installed, and git's is a SHA-1 blob id, so an
+  # identical tree would fingerprint differently on either side of the build
+  # container boundary — and neither ships on Windows.
+  #
+  # Hashing the column in one native pass beats a closure per file by ~4x. The
+  # cost is peak memory: `hash` consumes a byte stream incrementally, but
+  # `insert` collects one into a Value first, so the peak is the largest single
+  # file in scope rather than flat. Chunking cannot lower that floor — one row
+  # holds one whole file — so the alternative is a per-file `par-each`, which
+  # streams but gives back the speed.
+  let pairs = ($files | wrap path | insert hash { |r| open --raw $r.path } | hash sha256 hash)
   # uniq-by path: distinct glob patterns can resolve to the same file.
   # Without uniq the reduce-insert below errors with "Column already
   # exists".
@@ -306,6 +293,10 @@ export def resolve-manifest [manifest: string, cmd: string = ""]: nothing -> rec
   }
   {
     stamp:    $".task/bayt/($scope.stamp_name).hash"
+    # Ignore rules compose from the repo root down, and `up` is already the hop
+    # count to it. Without this the project's own .gitignore would be the only
+    # one applied, and the root's `**/.task/`, `dist` and friends would be missed.
+    root:     (if ($up | is-empty) { "." } else { $up } | path expand)
     paths:    ([$manifest] ++ $scope.srcs ++ $dep_stamps)
     excludes: $scope.excludes
     # state entries gate presence like outs but are never CAS payload —
@@ -326,12 +317,15 @@ def merge-inputs [
   stamp_file: string
 ]: nothing -> record {
   let m = if ($manifest | is-empty) {
-    {paths: [], excludes: [], outs: []}
+    # No manifest: positional paths are relative to the cwd and nothing above it
+    # is in scope, so the cwd is the root.
+    {paths: [], excludes: [], outs: [], root: ("." | path expand)}
   } else {
     resolve-manifest $manifest $cmd
   }
   {
     stamp_file: $stamp_file
+    root:       $m.root
     paths:      (($m.paths ++ $paths) | uniq)
     excludes:   (($m.excludes ++ (parse-list $exclude)) | uniq)
     outs:       (($m.outs ++ (parse-list $outs)) | uniq)
@@ -380,7 +374,7 @@ export def main [
     error make { msg: "fingerprint: at least one path required (positional or --manifest)" }
   }
 
-  let fp = (compute-fingerprint $merged.paths $merged.excludes $docker)
+  let fp = (compute-fingerprint $merged.paths $merged.excludes $docker $merged.root)
 
   if not ($merged.stamp_file | is-empty) {
     if $update_stamp {
