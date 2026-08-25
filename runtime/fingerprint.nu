@@ -101,9 +101,9 @@ def format-xattrs [x: record]: nothing -> string {
 # compute-fingerprint — file enumeration + hashing in one pass.
 # Returns {hash, inputs}; shapes depend on `docker`:
 #
-#   docker=false: hash = sha256 over `platform-key\n<sorted file
+#   docker=false: hash = sha256 over `platform-key\n<dep hashes>\n<sorted file
 #                 hashes>`. inputs = record<path, sha256>.
-#   docker=true:  hash = sha256 over `platform-key\n<sorted per-file
+#   docker=true:  hash = sha256 over `platform-key\n<dep hashes>\n<sorted per-file
 #                 rows>`, where each row carries sha256, mode,
 #                 user:group, mtime (ns), size, xattr (flattened by
 #                 format-xattrs; empty trailing field when a reader is
@@ -126,6 +126,8 @@ export def compute-fingerprint [
   excludes: list<string>
   docker: bool = false
   root: string = "."
+  project: string = "."
+  dep_hashes: list<string> = []
 ]: nothing -> record {
   let gpaths = $paths
   let globs = ($gpaths | where { |p| is-glob $p })
@@ -133,10 +135,11 @@ export def compute-fingerprint [
   # A directory names its whole subtree, so it joins the glob side and the
   # ignore rules and excludes apply to what is under it. Only file literals
   # bypass them.
-  let dirs = ($plain | where { |p| ($p | path type) == "dir" } | each { |p| $"($p)/**/*" })
-  let literals = ($plain | where { |p| ($p | path type) != "dir" })
-  let present_literals = ($literals | where { |p| ($p | path type) == "file" })
-  let missing = ($literals | where { |p| ($p | path type) != "file" })
+  let abs = { |p| $project | path join $p }
+  let dirs = ($plain | where { |p| (do $abs $p | path type) == "dir" } | each { |p| $"($p)/**/*" })
+  let literals = ($plain | where { |p| (do $abs $p | path type) != "dir" })
+  let present_literals = ($literals | where { |p| (do $abs $p | path type) == "file" })
+  let missing = ($literals | where { |p| (do $abs $p | path type) != "file" })
   if not ($missing | is-empty) {
     let n = ($missing | length)
     let names = ($missing | str join ', ')
@@ -151,7 +154,7 @@ export def compute-fingerprint [
   # `.task/`, and filtering them would break the chain.
   let globs = ($globs ++ $dirs)
   let matched = if ($globs | is-empty) { [] } else {
-    let here = ("." | path expand)
+    let here = ($project | path expand)
     let scope = if $here == $root { "" } else { $here | str substring (($root | str length) + 1).. }
     let res = ($globs | each { |g| to-regex $g })
     let exres = ($excludes | each { |g| to-regex ($g | str trim --left --char '/') })
@@ -177,7 +180,7 @@ export def compute-fingerprint [
   # file in scope rather than flat. Chunking cannot lower that floor — one row
   # holds one whole file — so the alternative is a per-file `par-each`, which
   # streams but gives back the speed.
-  let pairs = ($files | wrap path | insert hash { |r| open --raw $r.path } | hash sha256 hash)
+  let pairs = ($files | wrap path | insert hash { |r| open --raw ($project | path join $r.path) } | hash sha256 hash)
   # uniq-by path: distinct glob patterns can resolve to the same file.
   # Without uniq the reduce-insert below errors with "Column already
   # exists".
@@ -186,7 +189,8 @@ export def compute-fingerprint [
   if not $docker {
     let inputs = ($unique | reduce --fold {} { |it, acc| $acc | insert $it.path $it.hash })
     let file_list = ($unique | get hash | str join "\n")
-    let hash = ($"(platform-key)\n($file_list)" | hash sha256)
+    let dep_list = ($dep_hashes | sort | str join "\n")
+  let hash = ($"(platform-key)\n($dep_list)\n($file_list)" | hash sha256)
     return {hash: $hash, inputs: $inputs}
   }
 
@@ -199,7 +203,7 @@ export def compute-fingerprint [
   # scopes the hash.
   let windows = ($nu.os-info.name == "windows")
   let enriched = ($unique | each { |it|
-    let info = (ls --long $it.path | first)
+    let info = (ls --long ($project | path join $it.path) | first)
     let mtime = ($info.modified | format date '%Y-%m-%dT%H:%M:%S.%9f')
     let size = ($info.size | into int)
     let base = {
@@ -218,7 +222,8 @@ export def compute-fingerprint [
     let xs = if $x == null { "" } else { format-xattrs $x }
     $"($r.sha256)\t($r.mode)\t($r.user):($r.group)\t($r.mtime)\t($r.size)\t($xs)"
   } | str join "\n")
-  let hash = ($"(platform-key)\n($file_list)" | hash sha256)
+  let dep_list = ($dep_hashes | sort | str join "\n")
+  let hash = ($"(platform-key)\n($dep_list)\n($file_list)" | hash sha256)
   let inputs = ($enriched | reduce --fold {} { |it, acc|
     $acc | insert $it.path ($it | reject path)
   })
@@ -254,10 +259,63 @@ def outs-present [pats: list<string>]: nothing -> bool {
   true
 }
 
-# resolve-manifest — concrete inputs from a .bayt/bayt.<n>.json:
-# srcs + Merkle-chain dep stamp paths + the manifest itself (always
-# included, so any srcs/cmds/env/deps edit in bayt.cue flips the hash
-# and every target — even srcs-less ones — gets a stable stamp).
+# A target's fingerprint folds its deps' — see dep-hashes for where those come
+# from.
+#
+# `memo` is threaded rather than closed over because nushell closures cannot
+# mutate an outer binding. Keyed by manifest path, so a diamond is walked once.
+def closure-hash [
+  manifest: string
+  cmd: string
+  docker: bool
+  memo: record
+]: nothing -> record {
+  let key = if ($cmd | is-empty) { $manifest } else { $"($manifest)#($cmd)" }
+  if $key in $memo { return {hash: ($memo | get $key), memo: $memo} }
+
+  let r = (resolve-manifest $manifest $cmd)
+  let dr = (dep-hashes $r.deps $docker $memo)
+  let deps = $dr.hashes
+  let own = (compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project $deps)
+  {hash: $own.hash, memo: ($dr.memo | upsert $key $own.hash)}
+}
+
+# Resolve each dep to its fingerprint. The stamp is a memo of that value, left
+# by a `task` run go-task ordered ahead of this one; reading it keeps each
+# target's sources walked once per invocation rather than once per dependent,
+# which is what makes a per-target invocation model affordable on deep graphs.
+#
+# Only the content flavor is memoized: a stamp records whichever flavor wrote
+# it, and every stamped call the generated Taskfiles emit is content-only.
+def dep-hashes [nodes: list<record>, docker: bool, memo: record]: nothing -> record {
+  mut acc = $memo
+  mut out = []
+  for d in $nodes {
+    let cached = (if (not $docker) and ($d.stamp | path exists) {
+      open $d.stamp | str trim
+    } else { "" })
+    if not ($cached | is-empty) {
+      $out = ($out ++ [$cached])
+      continue
+    }
+    if not ($d.manifest | path exists) {
+      error make { msg: $"fingerprint: dep manifest not found: ($d.manifest)" }
+    }
+    let sub = (closure-hash $d.manifest "" $docker $acc)
+    $acc = $sub.memo
+    $out = ($out ++ [$sub.hash])
+  }
+  {hashes: $out, memo: $acc}
+}
+
+# resolve-manifest — concrete inputs from a .bayt/bayt.<n>.json: srcs, the
+# manifest itself (always included, so any srcs/cmds/env/deps edit in bayt.cue
+# flips the hash and every target — even srcs-less ones — gets a stable stamp),
+# and the deps whose own fingerprints fold into this one.
+#
+# `chainedDeps` is one link of the Merkle chain, not a transitive closure — a
+# dep two hops out appears only in the intermediate's own list. Folding each
+# dep's fingerprint reaches the rest by recursion.
 # --cmd selects a per-cmd entry: its srcs feed in and the stamp name
 # picks up `.<cmd>`. The `stamp` field is informational only; callers
 # pick the stamp path via --stamp-file.
@@ -267,12 +325,15 @@ export def resolve-manifest [manifest: string, cmd: string = ""]: nothing -> rec
   # `../` hops from consumer's dir to repo root: one per path segment.
   let hops = ($consumer_dir | path split | where { |s| not ($s | is-empty) } | length)
   let up = (0..<$hops | each { "../" } | str join)
-  let dep_stamps = ($m.chainedDeps | each { |d|
-    if $d.dir == $consumer_dir {
-      $".task/bayt/($d.name).hash"
-    } else {
-      $"($up)($d.dir)/.task/bayt/($d.name).hash"
-    }
+  # Anchored on the manifest, not the cwd: a dep manifest is opened from
+  # wherever the consumer happens to be, and a cwd-derived root would resolve
+  # that dep's own deps against the consumer's project.
+  let mdir = ($manifest | path dirname | path expand)
+  let project = (if ($mdir | path basename) == ".bayt" { $mdir | path dirname } else { $mdir })
+  let root = (0..<$hops | reduce --fold $project { |_, acc| $acc | path dirname })
+  let dep_nodes = ($m.chainedDeps | each { |d|
+    let base = (if ($d.dir | is-empty) { $root } else { $"($root)/($d.dir)" })
+    {manifest: $"($base)/.bayt/bayt.($d.name).json", stamp: $"($base)/.task/bayt/($d.name).hash"}
   })
   let scope = if ($cmd | is-empty) {
     {
@@ -296,8 +357,13 @@ export def resolve-manifest [manifest: string, cmd: string = ""]: nothing -> rec
     # Ignore rules compose from the repo root down, and `up` is already the hop
     # count to it. Without this the project's own .gitignore would be the only
     # one applied, and the root's `**/.task/`, `dist` and friends would be missed.
-    root:     (if ($up | is-empty) { "." } else { $up } | path expand)
-    paths:    ([$manifest] ++ $scope.srcs ++ $dep_stamps)
+    root:     $root
+    project:  $project
+    # Project-relative, so the spelling a caller used cannot change the hash:
+    # the srcs walk finds this same file, and two spellings of it would survive
+    # dedup and get hashed twice.
+    paths:    ([($manifest | path expand | str replace $"($project)/" "")] ++ $scope.srcs)
+    deps:     $dep_nodes
     excludes: $scope.excludes
     # state entries gate presence like outs but are never CAS payload —
     # cache.nu reads m.outs.globs directly and never sees them.
@@ -319,13 +385,15 @@ def merge-inputs [
   let m = if ($manifest | is-empty) {
     # No manifest: positional paths are relative to the cwd and nothing above it
     # is in scope, so the cwd is the root.
-    {paths: [], excludes: [], outs: [], root: ("." | path expand)}
+    {paths: [], excludes: [], outs: [], deps: [], root: ("." | path expand), project: ("." | path expand)}
   } else {
     resolve-manifest $manifest $cmd
   }
   {
     stamp_file: $stamp_file
     root:       $m.root
+    project:    $m.project
+    deps:       $m.deps
     paths:      (($m.paths ++ $paths) | uniq)
     excludes:   (($m.excludes ++ (parse-list $exclude)) | uniq)
     outs:       (($m.outs ++ (parse-list $outs)) | uniq)
@@ -374,7 +442,8 @@ export def main [
     error make { msg: "fingerprint: at least one path required (positional or --manifest)" }
   }
 
-  let fp = (compute-fingerprint $merged.paths $merged.excludes $docker $merged.root)
+  let deps = (dep-hashes $merged.deps $docker {}).hashes
+  let fp = (compute-fingerprint $merged.paths $merged.excludes $docker $merged.root $merged.project $deps)
 
   if not ($merged.stamp_file | is-empty) {
     if $update_stamp {

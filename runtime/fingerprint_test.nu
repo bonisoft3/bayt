@@ -40,6 +40,10 @@ def main [] {
 	# input merging
 	test_manifest_provides_srcs
 	test_positional_unions_with_manifest
+	test_dep_change_reaches_the_root
+	test_absent_stamp_still_counts_the_dep
+	test_stamp_memo_agrees_with_recompute
+	test_manifest_spelling_does_not_change_the_hash
 	test_cmd_scopes_srcs_to_cmd_entry
 	test_exclude_filters_files
 	test_no_paths_errors
@@ -78,14 +82,16 @@ def write-manifest [
 	--outs: list<string> = []
 	--state: list<string> = []
 	--cmds: list = []
+	--name: string = "test"
+	--deps: list = []
 ] {
 	{
-		name: "test"
+		name: $name
 		dir: ""
 		srcs: {globs: $srcs, exclude: []}
 		outs: {globs: $outs, exclude: []}
 		state: {globs: $state}
-		chainedDeps: []
+		chainedDeps: $deps
 		cmds: $cmds
 	} | to json | save -f $path
 }
@@ -507,6 +513,82 @@ def test_git_mode_succeeds [] {
 	let r = (run-fp $tmp ["-q" "t.txt"])
 	assert ($r.exit == 0) $"git-mode hash should succeed: ($r.stderr)"
 	assert (($r.stdout | str trim | str length) > 0) "should emit a hash"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# A dep contributes its own fingerprint, so a change anywhere in the chain
+# reaches the root.
+def test_dep_change_reaches_the_root [] {
+	print "test a change in a dep moves the dependent's hash..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	"leaf\n" | save -f ($tmp | path join "leaf.txt")
+	"root\n" | save -f ($tmp | path join "root.txt")
+	write-manifest ($tmp | path join ".bayt" "bayt.leaf.json") ["leaf.txt"] --name "leaf"
+	write-manifest ($tmp | path join ".bayt" "bayt.root.json") ["root.txt"] --name "root" --deps [{name: "leaf", dir: ""}]
+
+	let before = (run-fp $tmp ["-q" "--manifest" ($tmp | path join ".bayt" "bayt.root.json")])
+	"leaf changed\n" | save -f ($tmp | path join "leaf.txt")
+	let after = (run-fp $tmp ["-q" "--manifest" ($tmp | path join ".bayt" "bayt.root.json")])
+	assert ($before.stdout != $after.stdout) "a dep source change must move the dependent's hash"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# With no stamp to read, the dep must still be hashed. Dropping it yields a
+# hash that collides across trees differing only inside that dep.
+def test_absent_stamp_still_counts_the_dep [] {
+	print "test a missing dep stamp does not drop the dep..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	"leaf\n" | save -f ($tmp | path join "leaf.txt")
+	write-manifest ($tmp | path join ".bayt" "bayt.leaf.json") ["leaf.txt"] --name "leaf"
+	write-manifest ($tmp | path join ".bayt" "bayt.root.json") [] --name "root" --deps [{name: "leaf", dir: ""}]
+	let mroot = ($tmp | path join ".bayt" "bayt.root.json")
+
+	# No stamps anywhere: the dep must still be walked.
+	let a = (run-fp $tmp ["-q" "--manifest" $mroot])
+	"leaf changed\n" | save -f ($tmp | path join "leaf.txt")
+	let b = (run-fp $tmp ["-q" "--manifest" $mroot])
+	assert ($a.stdout != $b.stdout) "with no stamp the dep must still be hashed"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# A present stamp is read instead of recomputing, and must agree with what
+# recomputation would have produced.
+def test_stamp_memo_agrees_with_recompute [] {
+	print "test a fresh stamp memo agrees with recomputing the dep..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	mkdir ($tmp | path join ".task" "bayt")
+	"leaf\n" | save -f ($tmp | path join "leaf.txt")
+	write-manifest ($tmp | path join ".bayt" "bayt.leaf.json") ["leaf.txt"] --name "leaf"
+	write-manifest ($tmp | path join ".bayt" "bayt.root.json") [] --name "root" --deps [{name: "leaf", dir: ""}]
+	let mroot = ($tmp | path join ".bayt" "bayt.root.json")
+
+	let no_memo = (run-fp $tmp ["-q" "--manifest" $mroot])
+	run-fp $tmp ["--manifest" ($tmp | path join ".bayt" "bayt.leaf.json")
+	             "--stamp-file" ".task/bayt/leaf.hash" "--update-stamp"]
+	let with_memo = (run-fp $tmp ["-q" "--manifest" $mroot])
+	assert ($with_memo.stdout == $no_memo.stdout) "reading the memo must equal recomputing"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# The manifest is one of its own srcs, so the walk finds it too. Two spellings
+# of the same file survive dedup and get hashed twice, moving the digest.
+def test_manifest_spelling_does_not_change_the_hash [] {
+	print "test relative and absolute --manifest agree..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	"x\n" | save -f ($tmp | path join "a.txt")
+	let m = ($tmp | path join ".bayt" "bayt.test.json")
+	write-manifest $m ["**/*"]
+	let absolute = (run-fp $tmp ["-q" "--manifest" $m])
+	let relative = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"])
+	assert ($absolute.stdout == $relative.stdout) "path spelling must not change the hash"
 	rm -rf $tmp
 	print "  ok\n"
 }
