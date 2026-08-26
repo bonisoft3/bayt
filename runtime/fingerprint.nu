@@ -259,25 +259,45 @@ def outs-present [pats: list<string>]: nothing -> bool {
   true
 }
 
+# The synthetic views gen_bayt emits into a manifest's `synthetics` map. A
+# `:X:<view>` dep is one of these, and never a file on disk.
+const synthetic_views = ["srcs" "outs" "bayt"]
+
 # A target's fingerprint folds its deps' — see dep-hashes for where those come
 # from.
 #
 # `memo` is threaded rather than closed over because nushell closures cannot
-# mutate an outer binding. Keyed by manifest path, so a diamond is walked once.
+# mutate an outer binding. Keyed by manifest plus view, cmd and scope flavor —
+# each selects a different file set from the same file, so a shared key would
+# hand one scope another's hash. A diamond within one key is walked once.
 def closure-hash [
   manifest: string
   cmd: string
   docker: bool
   memo: record
+  view: string = ""
+  all_cmds: bool = false
 ]: nothing -> record {
-  let key = if ($cmd | is-empty) { $manifest } else { $"($manifest)#($cmd)" }
+  let base = if ($view | is-empty) { $manifest } else { $"($manifest)!($view)" }
+  let base = if $all_cmds { $"($base)+cmds" } else { $base }
+  let key = if ($cmd | is-empty) { $base } else { $"($base)#($cmd)" }
   if $key in $memo { return {hash: ($memo | get $key), memo: $memo} }
 
-  let r = (resolve-manifest $manifest $cmd)
-  let dr = (dep-hashes $r.deps $docker $memo)
+  let r = (resolve-manifest $manifest $cmd $view $all_cmds)
+  let dr = (dep-hashes $r.deps $docker $memo $all_cmds)
   let deps = $dr.hashes
-  let own = (compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project $deps)
+  let ctx = (context-hashes $r.contexts $docker $r.root)
+  let own = (compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx))
   {hash: $own.hash, memo: ($dr.memo | upsert $key $own.hash)}
+}
+
+# Hash each context directory over its own contents. Rooted AT the directory so
+# the walk covers it and nothing else, while ignore rules still compose from the
+# repo root.
+def context-hashes [dirs: list<string>, docker: bool, root: string]: nothing -> list<string> {
+  $dirs | each { |d|
+    (compute-fingerprint ["**/*"] [] $docker $root ($root | path join $d) []).hash
+  }
 }
 
 # Resolve each dep to its fingerprint. The stamp is a memo of that value, left
@@ -285,13 +305,18 @@ def closure-hash [
 # target's sources walked once per invocation rather than once per dependent,
 # which is what makes a per-target invocation model affordable on deep graphs.
 #
-# Only the content flavor is memoized: a stamp records whichever flavor wrote
-# it, and every stamped call the generated Taskfiles emit is content-only.
-def dep-hashes [nodes: list<record>, docker: bool, memo: record]: nothing -> record {
+# Only the narrow content flavor is memoized: a stamp records whichever scope
+# wrote it, and every stamped call the generated Taskfiles emit is content-only
+# and cmd-scoped.
+def dep-hashes [nodes: list<record>, docker: bool, memo: record, all_cmds: bool = false]: nothing -> record {
   mut acc = $memo
   mut out = []
   for d in $nodes {
-    let cached = (if (not $docker) and ($d.stamp | path exists) {
+    # The stamp is only ever written at the narrow scope (the generated
+    # Taskfiles never pass --all-cmds), so reading one here would swap this
+    # walk's wider hash for a narrower one and reinstate the blind spot
+    # --all-cmds exists to close.
+    let cached = (if (not $docker) and (not $all_cmds) and ($d.stamp | path exists) {
       open $d.stamp | str trim
     } else { "" })
     if not ($cached | is-empty) {
@@ -301,7 +326,8 @@ def dep-hashes [nodes: list<record>, docker: bool, memo: record]: nothing -> rec
     if not ($d.manifest | path exists) {
       error make { msg: $"fingerprint: dep manifest not found: ($d.manifest)" }
     }
-    let sub = (closure-hash $d.manifest "" $docker $acc)
+
+    let sub = (closure-hash $d.manifest "" $docker $acc $d.view $all_cmds)
     $acc = $sub.memo
     $out = ($out ++ [$sub.hash])
   }
@@ -319,8 +345,38 @@ def dep-hashes [nodes: list<record>, docker: bool, memo: record]: nothing -> rec
 # --cmd selects a per-cmd entry: its srcs feed in and the stamp name
 # picks up `.<cmd>`. The `stamp` field is informational only; callers
 # pick the stamp path via --stamp-file.
-export def resolve-manifest [manifest: string, cmd: string = ""]: nothing -> record {
-  let m = (open $manifest)
+export def resolve-manifest [manifest: string, cmd: string = "", view: string = "", all_cmds: bool = false]: nothing -> record {
+  let file = (open $manifest)
+  # A synthetic view is a manifest-shaped record inside its parent's
+  # `synthetics` map, not a file of its own.
+  let m = if ($view | is-empty) { $file } else {
+    let syn = ($file.synthetics? | default {} | get -o $view)
+    # `emitsSrcs: false` is the one reason a view is legitimately absent: the
+    # target exports no sources, so a consumer's `:X:srcs` edge carries no
+    # files. Any other absence is a generator bug.
+    let syn = if $syn != null { $syn } else if $view == "srcs" and (($file.emitsSrcs? | default true) == false) {
+      {name: $"($file.name)_($view)", dir: $file.dir, srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}, chainedDeps: [], cmds: []}
+    } else {
+      error make { msg: $"fingerprint: ($manifest) has no synthetic view '($view)'" }
+    }
+    # A view's file set is its declared INTERFACE, which the generator emits as
+    # `outs`; its `srcs` is always empty. Its `chainedDeps` is empty too — the
+    # chain it actually carries is the transitive one. Reading the real
+    # manifest's fields here would fold in nothing and hash a constant.
+    # transitiveDeps names same-project targets; transitiveCrossDeps carries
+    # whole records, each with its own dir.
+    let same = (($syn.transitiveDeps? | default []) | each { |d| {name: $d, dir: $syn.dir} })
+    let cross = (($syn.transitiveCrossDeps? | default []) | each { |d| {name: $d.name, dir: $d.dir} })
+    {
+      name:        $syn.name
+      dir:         $syn.dir
+      srcs:        $syn.outs
+      outs:        {globs: [], exclude: []}
+      state:       {globs: [], exclude: []}
+      cmds:        []
+      chainedDeps: ($same ++ $cross)
+    }
+  }
   let consumer_dir = $m.dir
   # `../` hops from consumer's dir to repo root: one per path segment.
   let hops = ($consumer_dir | path split | where { |s| not ($s | is-empty) } | length)
@@ -331,11 +387,57 @@ export def resolve-manifest [manifest: string, cmd: string = ""]: nothing -> rec
   let mdir = ($manifest | path dirname | path expand)
   let project = (if ($mdir | path basename) == ".bayt" { $mdir | path dirname } else { $mdir })
   let root = (0..<$hops | reduce --fold $project { |_, acc| $acc | path dirname })
-  let dep_nodes = ($m.chainedDeps | each { |d|
+  # A `:X:srcs` dep names a synthetic view, which gen_bayt emits inside its
+  # parent's manifest rather than as `bayt.X_srcs.json` — that file does not
+  # exist. The views are a closed set and no target may take one of their
+  # names, so the suffix decides, and the dep resolves to the parent file plus
+  # the view to select from it.
+  # The image scope walks the whole serialized graph, not just the next hop:
+  # cross-project edges the Dockerfile COPYs from live in transitiveCrossDeps,
+  # and the target's own bayt view enumerates the rendered files it COPYs in
+  # (Dockerfile, compose fragment, Taskfiles).
+  let _cross = (if $all_cmds and ($view | is-empty) {
+    ($m.transitiveCrossDeps? | default [] | each { |d| {name: $d.name, dir: $d.dir} })
+  } else { [] })
+  let _own_bayt = (if $all_cmds and ($view | is-empty) and (($file.synthetics? | default {} | get -o "bayt") != null) {
+    [{name: $"($m.name)_bayt", dir: $m.dir}]
+  } else { [] })
+  let dep_nodes = (($m.chainedDeps ++ $_cross ++ $_own_bayt) | each { |d|
     let base = (if ($d.dir | is-empty) { $root } else { $"($root)/($d.dir)" })
-    {manifest: $"($base)/.bayt/bayt.($d.name).json", stamp: $"($base)/.task/bayt/($d.name).hash"}
+    let view = ($synthetic_views | where { |v| $d.name | str ends-with $"_($v)" } | get -o 0 | default "")
+    let owner = (if ($view | is-empty) { $d.name } else {
+      $d.name | str substring ..<(($d.name | str length) - ($view | str length) - 1)
+    })
+    {
+      manifest: $"($base)/.bayt/bayt.($owner).json"
+      view:     $view
+      # The stamp keeps the dep's own name: it is a memo of this node, and the
+      # parent's stamp is a different value.
+      stamp:    $"($base)/.task/bayt/($d.name).hash"
+    }
   })
-  let scope = if ($cmd | is-empty) {
+  # A context the target COPYs --from is a build input. An image ref needs no
+  # walk — it rides the manifest bytes, which are already hashed — but a
+  # directory does: the path is fixed while its contents are not. It folds in
+  # as its own hash rather than as a glob, because the srcs walk is rooted at
+  # the project and a context lives outside it.
+  let contexts = (if $all_cmds and ($view | is-empty) {
+    ($file | get -o dockerfile.preambleCopyContexts | default [])
+      | each { |c| $c | get -o image }
+      | where { |i| $i != null and (($root | path join $i) | path type) == "dir" }
+  } else { [] })
+
+  let scope = if ($cmd | is-empty) and $all_cmds {
+    # The image's source set. A Dockerfile COPYs the target's own srcs AND
+    # every cmd's, so a per-cmd scope answers a narrower question than "what
+    # goes into this image" — a target whose srcs live only under cmds would
+    # otherwise hash over nothing.
+    {
+      stamp_name: $m.name
+      srcs:       ($m.srcs.globs   ++ ($m.cmds | each { |c| $c.srcs.globs }   | flatten) | uniq)
+      excludes:   ($m.srcs.exclude ++ ($m.cmds | each { |c| $c.srcs.exclude } | flatten) | uniq)
+    }
+  } else if ($cmd | is-empty) {
     {
       stamp_name: $m.name
       srcs:       $m.srcs.globs
@@ -364,6 +466,7 @@ export def resolve-manifest [manifest: string, cmd: string = ""]: nothing -> rec
     # dedup and get hashed twice.
     paths:    ([($manifest | path expand | str replace $"($project)/" "")] ++ $scope.srcs)
     deps:     $dep_nodes
+    contexts: $contexts
     excludes: $scope.excludes
     # state entries gate presence like outs but are never CAS payload —
     # cache.nu reads m.outs.globs directly and never sees them.
@@ -381,19 +484,21 @@ def merge-inputs [
   exclude: string
   outs: string
   stamp_file: string
+  all_cmds: bool = false
 ]: nothing -> record {
   let m = if ($manifest | is-empty) {
     # No manifest: positional paths are relative to the cwd and nothing above it
     # is in scope, so the cwd is the root.
-    {paths: [], excludes: [], outs: [], deps: [], root: ("." | path expand), project: ("." | path expand)}
+    {paths: [], excludes: [], outs: [], deps: [], contexts: [], root: ("." | path expand), project: ("." | path expand)}
   } else {
-    resolve-manifest $manifest $cmd
+    resolve-manifest $manifest $cmd "" $all_cmds
   }
   {
     stamp_file: $stamp_file
     root:       $m.root
     project:    $m.project
     deps:       $m.deps
+    contexts:   $m.contexts
     paths:      (($m.paths ++ $paths) | uniq)
     excludes:   (($m.excludes ++ (parse-list $exclude)) | uniq)
     outs:       (($m.outs ++ (parse-list $outs)) | uniq)
@@ -429,6 +534,7 @@ export def main [
   --docker                       # docker-style: include mode/uid/mtime/size/xattr in hash + rows
   --json                         # structured output (NDJSON or one-line JSON with -q)
   --quiet (-q)                   # emit only the rolled-up hash
+  --all-cmds                     # image scope: every cmd's srcs fold in too
   --stamp-file: string = ""      # check mode (silent, exit 0/1); + --update-stamp to write
   --update-stamp                 # write mode (atomic). Requires --stamp-file.
   ...paths: string
@@ -437,13 +543,14 @@ export def main [
     error make { msg: "fingerprint: --update-stamp requires --stamp-file" }
   }
 
-  let merged = (merge-inputs $manifest $cmd $paths $exclude $outs $stamp_file)
+  let merged = (merge-inputs $manifest $cmd $paths $exclude $outs $stamp_file $all_cmds)
   if ($merged.paths | is-empty) {
     error make { msg: "fingerprint: at least one path required (positional or --manifest)" }
   }
 
-  let deps = (dep-hashes $merged.deps $docker {}).hashes
-  let fp = (compute-fingerprint $merged.paths $merged.excludes $docker $merged.root $merged.project $deps)
+  let deps = (dep-hashes $merged.deps $docker {} $all_cmds).hashes
+  let ctx = (context-hashes ($merged.contexts? | default []) $docker $merged.root)
+  let fp = (compute-fingerprint $merged.paths $merged.excludes $docker $merged.root $merged.project ($deps ++ $ctx))
 
   if not ($merged.stamp_file | is-empty) {
     if $update_stamp {

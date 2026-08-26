@@ -104,6 +104,8 @@ import (
 			"""
 	}
 
+	_depotGroupName: "depot-build"
+
 	// The runtime closure as the `depot-build` group, written to
 	// <project.dir>/.bayt/depot.hcl and baked by the depot build phase.
 	// Its own file, never bake.hcl: that file's `target "release"` binds
@@ -111,10 +113,19 @@ import (
 	// only this selection would strip them (rationale in DESIGN.md).
 	if len(_rtGroupNames) > 0 {
 		depotHcl: """
-			group "depot-build" {
+			group "\(_depotGroupName)" {
 			  targets = [\(_rtGroupList)]
 			}
 
 			"""
+
+		// Same membership as the HCL, for a caller that must decide per
+		// leaf rather than bake the group whole. generate.nu joins it
+		// with the flattened compose to reach each leaf's push repo,
+		// which only that flatten resolves — see emit-depot-yaml.
+		depotGroup: {
+			name:    _depotGroupName
+			targets: _rtGroupNames
+		}
 	}
 }

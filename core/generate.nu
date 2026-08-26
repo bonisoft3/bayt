@@ -159,6 +159,26 @@ def _inject-runtime [content: string, base: string]: nothing -> string {
 	$content | str replace --regex --all 'bayt: docker-image://[^\n"]+' $"bayt: ($rel_path)"
 }
 
+# Manifest twin of `_inject-runtime`: under --runtime the context a target
+# COPYs --from is a directory in this tree, not the published image, so the
+# manifest records the directory.
+#
+# Repo-root-relative, unlike the compose rewrite's `../`-prefixed form —
+# fingerprint resolves manifest paths from the repo root.
+def _inject-runtime-manifest [data: any]: nothing -> any {
+	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
+	if ($runtime_dir | is-empty) { return $data }
+	let ctxs = ($data | get -o dockerfile.preambleCopyContexts)
+	if $ctxs == null { return $data }
+	$data | update dockerfile.preambleCopyContexts { |it|
+		$it.dockerfile.preambleCopyContexts | each { |c|
+			if ($c | get -o image) != null and $c.name == "bayt" {
+				$c | update image $"($runtime_dir)/runtime"
+			} else { $c }
+		}
+	}
+}
+
 # Pair with `_inject-runtime`: when the context is rewritten to point
 # at `runtime/`, the COPY must take `.` (whole context) instead of the
 # `runtime` subdir-selector. Non-monorepo (OCI image) consumers keep
@@ -202,7 +222,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 		if (($data | get --optional synthetics | get --optional srcs) != null) {
 			$data = ($data | update synthetics.srcs.transitiveDeps {|it| $it.synthetics.srcs.transitiveDeps | uniq})
 		}
-		atomic-write $"($prefix).bayt/bayt.($entry.name).json" (_json-header $data | to json --indent 2)
+		atomic-write $"($prefix).bayt/bayt.($entry.name).json" (_json-header (_inject-runtime-manifest $data) | to json --indent 2)
 	}
 
 	# --- Taskfile (the project-root Taskfile.yml is user-authored)
@@ -285,10 +305,10 @@ def write-bundle [bundle: record, base: string, --depot] {
 ')
 	}
 
-	# --- depot.{yaml,hcl}: after the compose files depot.yaml flattens.
+	# --- depot.{yaml,hcl,json}: after the compose files depot.yaml flattens.
 	let depot_opted = ($bundle.manifest.projectManifest.depot? | default false)
 	if $depot or $depot_opted {
-		emit-depot-yaml $base $ws --required=$depot_opted
+		emit-depot-yaml $base $ws --required=$depot_opted --group=($bundle.bake.depotGroup? | default {})
 		if ($bundle.bake.depotHcl? | is-not-empty) {
 			atomic-write $"($prefix).bayt/depot.hcl" (_slash-header $bundle.bake.depotHcl)
 		}
@@ -303,7 +323,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 # absolutizes contexts and emits `service:` refs, so rewrite to
 # repo-root-relative and `service:X` -> `target:X` — depot bake stats a
 # `service:` context as a path. Needs docker; hence the opt-in.
-def emit-depot-yaml [proj_dir: string, ws: string, --required] {
+def emit-depot-yaml [proj_dir: string, ws: string, --required, --group: record = {}] {
 	let dir = if $proj_dir == "." or $proj_dir == "" { $ws } else { $"($ws)/($proj_dir)" }
 	# Explicit -f: default project-file resolution auto-loads
 	# docker-compose.override.yml (and honors $COMPOSE_FILE) — local-only
@@ -334,6 +354,58 @@ def emit-depot-yaml [proj_dir: string, ws: string, --required] {
 		| str replace --all $ws "."
 		| str replace --all "service:" "target:")
 	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header (_dedup-x-bake $flat))
+	if not ($group | is-empty) {
+		atomic-write $"($dir)/.bayt/depot.json" (depot-plan $flat $group | to json --indent 2)
+	}
+}
+
+# repo-of — a compose `image:` minus its tag. A tag cannot contain '/', so only
+# a ':' after the last '/' separates one, and neither counts inside a `${...}`.
+export def repo-of [ref: string]: nothing -> string {
+	mut depth = 0
+	mut cut = -1
+	mut i = 0
+	for c in ($ref | split chars) {
+		if $c == "{" { $depth = $depth + 1 }
+		if $c == "}" { $depth = $depth - 1 }
+		if $depth == 0 and $c == "/" { $cut = -1 }
+		if $depth == 0 and $c == ":" and $cut == -1 { $cut = $i }
+		$i = $i + 1
+	}
+	if $cut < 0 { $ref } else { $ref | str substring ..<$cut }
+}
+
+# depot-plan — .bayt/depot.json: the bake group as data, one row per leaf
+# carrying where the build phase pushes it and which manifest fingerprints
+# it. Lets a caller decide per leaf instead of baking the group whole.
+#
+# Both facts are read off the flattened compose, never derived from a leaf's
+# name: a group member may be an overlay service whose `extends` names a
+# different target, and that indirection lives in hand-authored YAML the CUE
+# model never sees — only the flatten resolves it. Paths are repo-root-
+# relative and `${VAR:-default}` stays literal, as in depot.yaml.
+def depot-plan [flat: string, group: record]: nothing -> record {
+	let svcs = ($flat | from yaml | get services)
+	_json-header {
+		group: $group.name
+		targets: ($group.targets | each { |t|
+			let s = ($svcs | get -o $t)
+			# A member the flatten cannot describe is an error, not an
+			# omission: the caller bakes the misses it is handed, so a
+			# dropped leaf is one that never builds and never publishes.
+			if $s == null {
+				error make {msg: $"bayt: depot group member ($t) is not a service in the flattened compose"}
+			}
+			if ($s | get -o build) == null or ($s | get -o image) == null {
+				error make {msg: $"bayt: depot group member ($t) has no build or image block"}
+			}
+			{
+				target:   $t
+				repo:     (repo-of $s.image)
+				manifest: $"($s.build.context)/.bayt/bayt.($s.build.target).json"
+			}
+		})
+	}
 }
 
 # compose >= v5 re-concatenates x-* extension lists once per include

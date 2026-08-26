@@ -15,6 +15,10 @@ def main [] {
 	print "Running fingerprint.nu tests...\n"
 
 	# determinism + sensitivity
+	test_a_synthetic_dep_resolves_from_its_parent
+	test_an_unemitted_srcs_view_contributes_nothing
+	test_an_unemitted_other_view_is_an_error
+	test_a_dep_stamp_never_narrows_the_image_scope
 	test_hash_stable_across_runs
 	test_hash_changes_with_content
 	test_docker_hash_differs_from_content
@@ -94,6 +98,142 @@ def write-manifest [
 		chainedDeps: $deps
 		cmds: $cmds
 	} | to json | save -f $path
+}
+
+# Write a manifest carrying a synthetic view, the shape gen_bayt emits: the
+# view lives inside `synthetics`, never as a `bayt.<n>_<view>.json` file, and
+# it declares no `state`.
+def write-synthetic-owner [
+	path: string
+	--name: string = "owner"
+	--view: string = "srcs"
+	--view-srcs: list<string> = []
+] {
+	{
+		name: $name
+		dir: ""
+		srcs: {globs: [], exclude: []}
+		outs: {globs: [], exclude: []}
+		state: {globs: []}
+		chainedDeps: []
+		cmds: []
+		synthetics: {
+			($view): {
+				name: $"($name)_($view)"
+				dir: ""
+				# A view's file set is its INTERFACE: the generator emits it as
+				# `outs` and leaves `srcs` empty. A fixture that puts files in
+				# `srcs` asserts a shape that cannot occur.
+				srcs: {globs: [], exclude: []}
+				outs: {globs: $view_srcs, exclude: []}
+				chainedDeps: []
+				transitiveDeps: []
+				transitiveCrossDeps: []
+				cmds: []
+			}
+		}
+	} | to json | save -f $path
+}
+
+# A `:X:srcs` dep resolves to its parent manifest's `synthetics` entry. Deriving
+# a `bayt.X_srcs.json` path instead finds no file and the whole walk errors, so
+# any target whose chain reaches a synthetic cannot be fingerprinted at all.
+def test_a_synthetic_dep_resolves_from_its_parent [] {
+	print "test a synthetic view dep resolves from its parent manifest..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	"payload\n" | save -f ($tmp | path join "viewed.txt")
+	"own\n" | save -f ($tmp | path join "own.txt")
+
+	write-synthetic-owner ($tmp | path join ".bayt/bayt.owner.json") --view-srcs ["viewed.txt"]
+	write-manifest ($tmp | path join ".bayt/bayt.consumer.json") ["own.txt"] --name "consumer" --deps [
+		{name: "owner_srcs", dir: ""}
+	]
+
+	let r = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.consumer.json"])
+	assert ($r.exit == 0) $"synthetic dep did not resolve: ($r.stderr)"
+	let first = $r.stdout
+
+	# The view's own files are folded in: editing one must move the consumer.
+	"payload changed\n" | save -f ($tmp | path join "viewed.txt")
+	let r2 = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.consumer.json"])
+	assert ($r2.stdout != $first) "editing the synthetic's srcs did not move the consumer's hash"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# A target with `emitsSrcs: false` exports no sources, so it emits no `srcs`
+# view and a consumer's `:X:srcs` edge carries no files. Erroring there would
+# make any consumer of such a target unfingerprintable.
+def test_an_unemitted_srcs_view_contributes_nothing [] {
+	print "test a srcs view that was never emitted contributes nothing..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	"own\n" | save -f ($tmp | path join "own.txt")
+	{
+		name: "owner", dir: "", emitsSrcs: false
+		srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}
+		state: {globs: []}, chainedDeps: [], cmds: []
+		synthetics: {bayt: {name: "owner_bayt", dir: "", srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}, chainedDeps: [], cmds: []}}
+	} | to json | save -f ($tmp | path join ".bayt/bayt.owner.json")
+	write-manifest ($tmp | path join ".bayt/bayt.consumer.json") ["own.txt"] --name "consumer" --deps [
+		{name: "owner_srcs", dir: ""}
+	]
+
+	let r = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.consumer.json"])
+	assert ($r.exit == 0) $"an unemitted srcs view should contribute nothing: ($r.stderr)"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# Only `emitsSrcs: false` explains an absent view. Anything else is a
+# generator bug, and dropping the dep would weaken the hash silently.
+def test_an_unemitted_other_view_is_an_error [] {
+	print "test an absent view with no emitsSrcs reason is an error..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	"own\n" | save -f ($tmp | path join "own.txt")
+	{
+		name: "owner", dir: "", emitsSrcs: true
+		srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}
+		state: {globs: []}, chainedDeps: [], cmds: []
+		synthetics: {srcs: {name: "owner_srcs", dir: "", srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}, chainedDeps: [], cmds: []}}
+	} | to json | save -f ($tmp | path join ".bayt/bayt.owner.json")
+	write-manifest ($tmp | path join ".bayt/bayt.consumer.json") ["own.txt"] --name "consumer" --deps [
+		{name: "owner_outs", dir: ""}
+	]
+
+	let r = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.consumer.json"])
+	assert ($r.exit != 0) "an absent `outs` view must not be treated as empty"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# A stamp is written only at the narrow cmd scope, so consuming one under
+# --all-cmds swaps a wide hash for a narrow one. The failure needs a .task/
+# tree to appear, so it reaches any host that has run a task and no CI
+# workspace check can see it: .task/ is gitignored.
+def test_a_dep_stamp_never_narrows_the_image_scope [] {
+	print "test a dep stamp does not narrow the image scope..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	"own\n" | save -f ($tmp | path join "own.txt")
+	"dep\n" | save -f ($tmp | path join "dep.txt")
+	write-manifest ($tmp | path join ".bayt/bayt.owner.json") ["dep.txt"] --name "owner"
+	write-manifest ($tmp | path join ".bayt/bayt.consumer.json") ["own.txt"] --name "consumer" --deps [
+		{name: "owner", dir: ""}
+	]
+
+	let clean = (run-fp $tmp ["-q" "--all-cmds" "--manifest" ".bayt/bayt.consumer.json"])
+	assert ($clean.exit == 0) $"unexpected exit: ($clean.stderr)"
+
+	mkdir ($tmp | path join ".task/bayt")
+	"DEADBEEF\n" | save -f ($tmp | path join ".task/bayt/owner.hash")
+	let stamped = (run-fp $tmp ["-q" "--all-cmds" "--manifest" ".bayt/bayt.consumer.json"])
+
+	assert ($clean.stdout == $stamped.stdout) "a stale stamp replaced the recomputed closure under --all-cmds"
+	rm -rf $tmp
+	print "  ok\n"
 }
 
 # --- determinism + sensitivity --------------------------------------
