@@ -179,15 +179,6 @@ def _inject-runtime-manifest [data: any]: nothing -> any {
 	}
 }
 
-# Pair with `_inject-runtime`: when the context is rewritten to point
-# at `runtime/`, the COPY must take `.` (whole context) instead of the
-# `runtime` subdir-selector. Non-monorepo (OCI image) consumers keep
-# the selector — the published bayt image carries the full bayt tree.
-def _inject-dockerfile-runtime [content: string]: nothing -> string {
-	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
-	if ($runtime_dir | is-empty) { return $content }
-	$content | str replace --regex --all '(COPY (?:--link )?--from=bayt) runtime ' '$1 . '
-}
 
 # Generated-from header, line 1 of every hash-comment file. JSON gets
 # a field instead (no comment syntax).
@@ -242,7 +233,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 
 	# --- Dockerfile
 	for entry in ($bundle.docker.dockerfiles | transpose name body) {
-		atomic-write $"($prefix).bayt/Dockerfile.($entry.name)" (_hash-header (_inject-dockerfile-runtime $entry.body))
+		atomic-write $"($prefix).bayt/Dockerfile.($entry.name)" (_hash-header $entry.body)
 	}
 
 	# --- compose

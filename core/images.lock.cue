@@ -21,22 +21,9 @@
 package bayt
 
 lock: images: {
-	// bayt itself — `FROM scratch + COPY .` of the bayt source tree.
-	// Consumers' generated compose wires this as an additional_context
-	// so `COPY --from=bayt-runtime` lands the runtime in build stages.
-	//
-	// Self-reference necessarily lags one release: writing the digest
-	// into this file changes the file, which changes the COPY content,
-	// which changes the digest. There's no fixed point. The two-step
-	// release ritual:
-	//   1. Code-change PR merges; tag `plugins/bayt/vX.Y.Z`; image
-	//      publishes. The tagged tree still pins v(X.Y.Z-1).
-	//   2. Lock-bump PR merges; lock now pins vX.Y.Z. main HEAD is
-	//      current, the vX.Y.Z tag's file is stale-by-one.
-	// Regen against main picks up the latest; regen against a tagged
-	// tarball lags by one. In practice, consumers regenerate after
-	// bumping bayt anyway, so the lag closes naturally.
-	bayt:         "bonitao/bayt:0.45.0@sha256:d93bad67bbd81f99ff67ee50ff70551a08ca693da497f66874ce1dd929b3dadb"
+	// The runtime tree consumers COPY onto their PATH — built by
+	// plugins/bayt/Dockerfile.runtime, released on the `runtime/v*` stream.
+	bayt:         "bonitao/bayt-runtime:1.0.0@sha256:321c8181ad0bdfc6cefdebea454912a58012ff52366919264abb0560758451dc"
 	lazybox:      "bonitao/lazybox:0.8.3@sha256:c896a6836673d8fd217f6021a2522351fd82d580ed985159feb2f10373018e73"
 	busybox:      "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
 	docker:       "docker:29.7.1-cli@sha256:27a51d5ab1cd38d9eeaba7b415b8c07bc10c31e1cf1ec8d78f6413fcfab3f44f"

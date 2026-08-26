@@ -5,4 +5,5 @@ tests
 dist
 bayt-stage
 Dockerfile
+Dockerfile.runtime
 .dockerignore

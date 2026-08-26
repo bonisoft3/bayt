@@ -484,7 +484,7 @@ noop: #cmd & {
 	// `--from=<name>` reference in the COPY. Default value emitted
 	// in additional_contexts is `docker-image://<name>`; `image:`
 	// overrides that so one fixed key aliases a pinned digest
-	// (bayt-runtime → docker-image://bonitao/bayt:…).
+	// (bayt-runtime → docker-image://bonitao/bayt-runtime:…).
 	//
 	// Open (not closed) so `defaultCopy`'s #MapAsList can add name/priority.
 	_copyEntry: {

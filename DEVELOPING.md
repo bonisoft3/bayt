@@ -118,3 +118,37 @@ times the same. `BAYT_TIMING=1` breaks generate into scan / per-level phases.
 buildkit — cache-hit, diamond-dedup, and scoped-clamp digest stability. The
 D-guards (`docker_compose_check.cue`) are where the emitter's invariants (dep-edge
 shape D12/D13/D17, the scale gate D16, closures D17/D18) are pinned.
+
+## Releasing
+
+Two artifacts on two independent tag streams: `bonitao/bayt` — the generator's
+CUE, CLI and release assets — and `bonitao/bayt-runtime`, built by
+`Dockerfile.runtime`. Neither references the other's source, so neither release
+has to follow the other.
+
+**Generator.** Merge, then tag the merge commit; the image and release assets
+publish.
+
+**Runtime.** Only when `runtime/` changes: bump `runtime/VERSION`, merge, tag,
+then bump `images.lock.cue` to the published digest in an ordinary pull request.
+
+    docker buildx imagetools inspect bonitao/bayt-runtime:X.Y.Z \
+      --format '{{json .Manifest.Digest}}'
+
+That build is reproducible only while left alone; `.github/workflows/cd.yml`
+says what not to change.
+
+### What stops you
+
+- **`verify-generated`** runs `just generate-all`, so regenerating only the
+  project you touched passes locally and fails there.
+- **Tag versus VERSION.** A tag disagreeing with its component's `VERSION` is
+  rejected — in CI, and in `sayt release` before the tag is pushed.
+- **`sayt lint`** holds the frontend digest equal across every file stating it.
+
+### Cutting a tag
+
+Tags are prefixed per component: `plugins/bayt/vX.Y.Z`,
+`plugins/bayt/runtime/vX.Y.Z`. Tag the merge commit, and only once its SHA
+appears downstream as a `GitOrigin-RevId:` trailer — CI going green is not the
+signal.

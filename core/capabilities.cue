@@ -66,7 +66,7 @@ incremental: {
 	dockerfile: defaultPreamble: {
 		"bayt-runtime": {priority: -6, copy: {
 			from: {name: "bayt", image: lock.images.bayt}
-			srcs: ["runtime"]
+			srcs: ["."]
 			dst: "/monorepo/plugins/bayt/runtime"
 		}}
 		"bayt-path": {priority: -5, line: "ENV PATH=/monorepo/plugins/bayt/runtime:${PATH}"}

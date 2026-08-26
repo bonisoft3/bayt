@@ -1189,7 +1189,7 @@ _copyLine: {
 				// `bayt`: when a stage needs bayt's runtime tree (any
 				// incremental target, sayt.inject stages, or
 				// dockerfile.baytRuntime: true), the consumer's COPY
-				// `--from=bayt runtime /monorepo/plugins/bayt/runtime`
+				// `--from=bayt . /monorepo/plugins/bayt/runtime`
 				// pulls only `runtime/*` (the slim self-contained tree
 				// with bayt.nu / cache.nu / fingerprint.nu / nu.toml).
 				// additional_contexts wires it to

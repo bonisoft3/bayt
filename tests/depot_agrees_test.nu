@@ -12,20 +12,13 @@
 # docker daemon to reflatten.
 
 use std/assert
-
-def repo-root []: nothing -> string {
-  (^git rev-parse --show-toplevel | str trim)
-}
+use repo.nu [repo-root repo-glob]
 
 def main [] {
   print "Running bayt/depot agreement tests...\n"
 
   let root = (repo-root)
-  # Not `.worktrees/**`: those are other branches' checkouts, and testing one
-  # would assert against a tree this commit does not contain.
-  let projects = (glob $"($root)/**/.bayt/depot.json"
-    | where { |p| not ($p | str contains "/.worktrees/") }
-    | each { |p| $p | path dirname })
+  let projects = (repo-glob "**/.bayt/depot.json" | each { |p| $p | path dirname })
   if ($projects | is-empty) {
     print "    SKIP (no project emits depot.json)"
     return

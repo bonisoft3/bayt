@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1.26@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# The runtime tree alone — the nu scripts a build stage COPYs onto its PATH to
+# call `bayt fingerprint` / `bayt cache`. No CUE: the generator runs on the
+# host and never enters a container.
+#
+# Must reference no bayt artifact: the generator pins this by digest, so a
+# reference back would make that pin a self-reference with no fixed point.
+#
+# Root IS the runtime tree, so consumers COPY `.`.
+FROM scratch
+COPY runtime/ /

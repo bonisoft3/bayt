@@ -12,10 +12,10 @@
 #   just sayt integrate — every *_it.nu suite; needs docker.
 #   just sayt lint      — default auto-cue (cue fmt) handles it.
 #
-# launch / release / verify don't apply to bayt-the-framework: there's
-# no dev-server (it's a library), no shippable image (rides with the
-# monorepo), no e2e against deployed (no deployed surface). They use
-# the do: "true" no-op so the dev loop doesn't error if invoked.
+# launch / verify don't apply to bayt-the-framework: there's no dev-server
+# (it's a library) and no e2e against deployed (no deployed surface). They use
+# the do: "true" no-op so the dev loop doesn't error if invoked. release does
+# apply — bayt ships two images.
 say:
   doctor:
     do: "which cue ; which nu ; cue version"
@@ -25,9 +25,34 @@ say:
     do: 'glob "**/*_test.nu" | par-each { |t| let r = (do { ^nu $t } | complete); print $"($r.stdout)($r.stderr)"; $r.exit_code } | math max | exit $in'
   integrate:
     do: 'glob "**/*_it.nu" | par-each { |t| let r = (do { ^nu $t } | complete); print $"($r.stdout)($r.stderr)"; $r.exit_code } | math max | exit $in'
+  # The frontend digest is stated in both images, in the arg every generated
+  # build carries, and in four integration fixtures. They must agree or a
+  # generated build and bayt's own build interpret Dockerfiles differently —
+  # and a fixture that misses the bump tests the old frontend without
+  # failing. Bump the pattern with the pin.
+  lint:
+    shared:
+      - pattern: "docker/dockerfile:1\\.26@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32"
+        files:
+          - Dockerfile
+          - Dockerfile.runtime
+          - core/gen_compose.cue
+          - tests/cache_hit_it.nu
+          - tests/diamond_dedup_it.nu
+          - tests/export_repro_it.nu
+          - tests/scoped_clamp_it.nu
   launch:
     do: "true"
+  # Both images bayt build, and a tag on HEAD agreeing with the VERSION it
+  # claims. No push and no reproducibility flags: the registry write happens in
+  # the mirror's cd, and stating those flags here too would let the two drift.
   release:
-    do: "true"
+    do: >-
+      ["Dockerfile" "Dockerfile.runtime"]
+      | each { |f| ^docker buildx build --output type=cacheonly -f $f . } | ignore;
+      let t = (git tag -l "plugins/bayt/runtime/v*" --points-at HEAD | lines
+      | where {|x| $x != ""} | get -o 0 | default "");
+      if ($t != "") and (($t | split row "/" | last) != (open runtime/VERSION | str trim)) {
+      error make {msg: $"($t) disagrees with runtime/VERSION"} }
   verify:
     do: "true"
