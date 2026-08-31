@@ -302,14 +302,14 @@ _d11_bayt_from: [
 	"type=registry,ref=reg.example/p:sc-${CACHE_SCOPE_FALLBACK:-unscoped}-d11-build_bayt",
 ]
 _d11_bayt_to: _d11_dc.compose.files.build.services."d11-build_bayt".build."x-bake"."cache-to"
-_d11_bayt_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_bayt,mode=max,image-manifest=true,oci-mediatypes=true"]
+_d11_bayt_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_bayt,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 
 // cache-to mode: max for every synthetic — each flattens an unmodelled
 // `_ctxs` intermediate (_srcs, _outs, _bayt) whose result mode=min drops.
 _d11_srcs_to: _d11_dc.compose.files.build.services."d11-build_srcs".build."x-bake"."cache-to"
-_d11_srcs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_srcs,mode=max,image-manifest=true,oci-mediatypes=true"]
+_d11_srcs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_srcs,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 _d11_outs_to: _d11_dc.compose.files.build.services."d11-build_outs".build."x-bake"."cache-to"
-_d11_outs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs,mode=max,image-manifest=true,oci-mediatypes=true"]
+_d11_outs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 
 
 // --- D12: a `:x:outs` dep on a target with empty outs.globs copies

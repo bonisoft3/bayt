@@ -912,7 +912,12 @@ noop: #cmd & {
 			"type=gha,mode=\(X.mode),scope=\(X.c.scope)-\(X.t)",
 		]},
 		if X.c.type == "registry" {[
-			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE:-unscoped}-\(X.t),mode=\(X.mode),image-manifest=true,oci-mediatypes=true",
+			// zstd pays on the import side: a cache blob is written once and
+			// re-imported by every later build. It can only be set here —
+			// buildx `--set '*.cache-to=…'` replaces the whole value, so
+			// appending downstream would mean restating the
+			// scope-interpolated ref.
+			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE:-unscoped}-\(X.t),mode=\(X.mode),image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3",
 		]},
 	][0]
 }

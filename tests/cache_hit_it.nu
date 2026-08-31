@@ -67,20 +67,20 @@ target "proja_srcs" {
   dockerfile = "Dockerfile.proja_srcs"
   target     = "proja_srcs"
   cache-from = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-proja-srcs"}"]
-  cache-to   = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-proja-srcs"},mode=max,image-manifest=true,oci-mediatypes=true"]
+  cache-to   = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-proja-srcs"},mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 }
 target "projb_srcs" {
   dockerfile = "Dockerfile.projb_srcs"
   target     = "projb_srcs"
   cache-from = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-projb-srcs"}"]
-  cache-to   = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-projb-srcs"},mode=max,image-manifest=true,oci-mediatypes=true"]
+  cache-to   = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-projb-srcs"},mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 }
 target "C" {
   dockerfile = "Dockerfile.C"
   target     = "C"
   contexts   = { proja_srcs = "target:proja_srcs", projb_srcs = "target:projb_srcs" }
   cache-from = ["type=registry,ref=__REG__:proj-C"]
-  cache-to   = ["type=registry,ref=__REG__:proj-C,mode=max,image-manifest=true,oci-mediatypes=true"]
+  cache-to   = ["type=registry,ref=__REG__:proj-C,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 }
 group "default" { targets = ["C"] }
 '#
