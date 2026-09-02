@@ -63,7 +63,9 @@ _store: {type: "cache", target: "/zypper-store", scope: "global"}
 	// package resolves to "no provider". The service pin precedes the rewrite
 	// because a RIS service regenerates these .repo files at their http
 	// baseurls during an install. Not --disable: that drops the repos with it.
-	let _https = "zypper -n modifyservice --no-refresh --all; sed -i 's|http://|https://|g' /etc/zypp/repos.d/*.repo; "
+	// A no-op in either half resurfaces as that same "no provider", far from
+	// its cause.
+	let _https = "zypper -n modifyservice --no-refresh --all && sed -i 's|http://|https://|g' /etc/zypp/repos.d/*.repo || exit; "
 	let _publish = "; cd \"$d\" && for f in */*.rpm */*/*.rpm; do [ -f \"$f\" ] || continue; o=\"$s/$f\"; [ -e \"$o\" ] && continue; mkdir -p \"$(dirname \"$o\")\"; t=\"$(mktemp \"$(dirname \"$o\")/.pXXXXXX\")\" && cp \"$f\" \"$t\" && mv -f \"$t\" \"$o\"; done; zypper -n modifyrepo --no-keep-packages --all || true"
 
 	out: {
