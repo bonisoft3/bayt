@@ -140,8 +140,10 @@ says what not to change.
 
 ### What stops you
 
-- **`verify-generated`** runs `just generate-all`, so regenerating only the
-  project you touched passes locally and fails there.
+- **`verify-generated`** runs `just generate-all` on the *tagged* commit, not on
+  main: regenerating only the project you touched passes locally and fails there,
+  and a fix landing after the newest component-touching commit leaves nothing
+  taggable until you land a component-touching change on top of it.
 - **Tag versus VERSION.** A tag disagreeing with its component's `VERSION` is
   rejected — in CI, and in `sayt release` before the tag is pushed.
 - **`sayt lint`** holds the frontend digest equal across every file stating it.

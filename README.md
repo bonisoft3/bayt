@@ -17,11 +17,11 @@ Bayt is an opinionated build-config generator: you describe targets in CUE, bayt
 
 ## Install
 
-Pin the release in your project's `mise.toml`:
+Pin the release in your project's `.mise.toml`:
 
 ```toml
 [tools]
-"github:bonisoft3/bayt" = "0.30.1"
+"github:bonisoft3/bayt" = "0.46.0"
 ```
 
 `bayt` is then on PATH and the cue/nu tree lives next to it. Run from any directory containing a `bayt.cue`:
