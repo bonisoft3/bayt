@@ -58,10 +58,16 @@ _store: {type: "cache", target: "/zypper-store", scope: "global"}
 	// repo served it, and the leap base ships no `find`, so each depth gets
 	// its own fixed glob.
 	let _seed = "s=/zypper-store; d=/var/cache/zypp/packages; mkdir -p \"$s\" \"$d\"; cp -r \"$s\"/. \"$d\"/ 2>/dev/null || true; "
+	// The leap base serves its repos over plaintext http; where those
+	// connections come back empty, zypper skips the repo and every pinned
+	// package resolves to "no provider". The service pin precedes the rewrite
+	// because a RIS service regenerates these .repo files at their http
+	// baseurls during an install. Not --disable: that drops the repos with it.
+	let _https = "zypper -n modifyservice --no-refresh --all; sed -i 's|http://|https://|g' /etc/zypp/repos.d/*.repo; "
 	let _publish = "; cd \"$d\" && for f in */*.rpm */*/*.rpm; do [ -f \"$f\" ] || continue; o=\"$s/$f\"; [ -e \"$o\" ] && continue; mkdir -p \"$(dirname \"$o\")\"; t=\"$(mktemp \"$(dirname \"$o\")/.pXXXXXX\")\" && cp \"$f\" \"$t\" && mv -f \"$t\" \"$o\"; done; zypper -n modifyrepo --no-keep-packages --all || true"
 
 	out: {
-		do:    "\(_seed)zypper -n modifyrepo --keep-packages --all && zypper -n install \(strings.Join(list.Concat([I.pkgs, I.lock]), " ")) || exit\(_publish)"
+		do:    "\(_seed)\(_https)zypper -n modifyrepo --keep-packages --all && zypper -n install \(strings.Join(list.Concat([I.pkgs, I.lock]), " ")) || exit\(_publish)"
 		shell: "sh"
 		mounts: [_store, _cacheMount]
 	}
