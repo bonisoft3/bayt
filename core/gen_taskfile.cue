@@ -62,13 +62,16 @@ import (
 		cmd: *"" | string
 		out: string
 		// Manifest path uses {{.TASKFILE_DIR}} so it's absolute and
-		// immune to the nested-include working-directory bug. The stamp
-		// path stays cwd-relative; go-task runs each task from the
-		// Taskfile's dir, so `.task/bayt/` lands in the same project.
+		// immune to the nested-include working-directory bug, and it is
+		// quoted because go-task hands that expansion to a shell, where a
+		// backslash in an unquoted word is an escape: an absolute Windows
+		// path arrives with its separators eaten. The stamp path stays
+		// cwd-relative; go-task runs each task from the Taskfile's dir,
+		// so `.task/bayt/` lands in the same project.
 		let _cmdFlag    = [if F.cmd != "" {" --cmd \(F.cmd)"}, ""][0]
 		let _stampName  = [if F.cmd != "" {"\(F.t.name).\(F.cmd)"}, F.t.name][0]
 		let _updateFlag = [if F.mode == "stamp" {" --update-stamp"}, ""][0]
-		out: "\(_baytPath) fingerprint --manifest {{.TASKFILE_DIR}}/bayt.\(F.t.name).json\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
+		out: "\(_baytPath) fingerprint --manifest '{{.TASKFILE_DIR}}/bayt.\(F.t.name).json'\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
 	}
 
 	// _baytWrap — the per-task BAYTW variable: the cache-run prefix that
@@ -91,7 +94,7 @@ import (
 
 		// No shell wrap here: per-OS variants can each pick their own
 		// shell, so `<shell> -c` lives per-line in _osCmdList.
-		out: "\(_baytPath) cache run --manifest {{.TASKFILE_DIR}}/bayt.\(W.t.name).json\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)"
+		out: "\(_baytPath) cache run --manifest '{{.TASKFILE_DIR}}/bayt.\(W.t.name).json'\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)"
 	}
 
 	// _taskCmdLine — a (do, shell) pair as a go-task cmd string, prefixed

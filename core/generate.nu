@@ -701,6 +701,16 @@ export def main [--recursive (-r), --all, --runtime: string = "", --depot] {
 	with-env { BAYT_RUNTIME_DIR: $effective } { _main --recursive=$recursive --all=$all --depot=$depot }
 }
 
+# A workspace-relative dir spelled the way the scan spells it: `git ls-files`
+# and a bayt.json's `dir` both answer in forward slashes, where the `path
+# relative-to` this is given answers in the platform's own. Without it a
+# project on Windows never matches its own scanned row, and the pass-1
+# fallback below cannot read a bayt.json-backed stub.
+export def scan-dir [rel: string]: nothing -> string {
+	let slashed = ($rel | str replace --all '\' '/')
+	if ($slashed | str trim) == "" { "." } else { $slashed }
+}
+
 def _main [--recursive (-r), --all, --depot] {
 	if not $all and not ("bayt.cue" | path exists) {
 		return
@@ -718,9 +728,7 @@ def _main [--recursive (-r), --all, --depot] {
 		let schedule = (topo-schedule ($scan | get dir_rel | uniq) $scan $index)
 		run-schedule $schedule $scan $index $workspace_root --depot=$depot
 	} else if $recursive {
-		let project_abs = (pwd)
-		let project_rel = ($project_abs | path relative-to $workspace_root)
-		let project_rel = if ($project_rel | str trim) == "" { "." } else { $project_rel }
+		let project_rel = (scan-dir ((pwd) | path relative-to $workspace_root))
 
 		# Work from workspace root so write-bundle's relative paths are correct.
 		cd $workspace_root
@@ -731,9 +739,7 @@ def _main [--recursive (-r), --all, --depot] {
 		# Single-project mode: cd to workspace_root so write-bundle's
 		# relative paths (used by --runtime injection) are computed
 		# against the right depth — same convention --recursive uses.
-		let project_abs = (pwd)
-		let project_rel = ($project_abs | path relative-to $workspace_root)
-		let project_rel = if ($project_rel | str trim) == "" { "." } else { $project_rel }
+		let project_rel = (scan-dir ((pwd) | path relative-to $workspace_root))
 		let bayt_cue = if $project_rel == "." { $"($workspace_root)/bayt.cue" } else { $"($workspace_root)/($project_rel)/bayt.cue" }
 		cd $workspace_root
 		# The row can be missing here (e.g. a gitignored dir escapes the

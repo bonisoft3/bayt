@@ -4,7 +4,7 @@
 # Run with: nu generate_test.nu (from this directory).
 
 use std/assert
-use ./generate.nu [repo-of]
+use ./generate.nu [repo-of, scan-dir]
 
 def main [] {
 	print "Running generate.nu tests...\n"
@@ -14,6 +14,9 @@ def main [] {
 	test_repo_of_survives_a_templated_tag
 	test_repo_of_keeps_a_registry_port
 	test_repo_of_ignores_a_slash_inside_a_template
+	test_scan_dir_answers_the_scan_s_spelling
+	test_scan_dir_answers_dot_at_the_root
+	test_scan_dir_leaves_a_posix_dir_alone
 
 	print "\nAll generate.nu tests passed!"
 }
@@ -47,4 +50,23 @@ def test_repo_of_keeps_a_registry_port [] {
 # search for the tag colon.
 def test_repo_of_ignores_a_slash_inside_a_template [] {
 	check "slash in template" "${R:-a/b}/img:${T:-latest}" "${R:-a/b}/img"
+}
+
+# The scan keys its rows by a forward-slash dir and a project is looked up by
+# this, so a platform spelling its own paths differently misses every row —
+# and the fallback that covers a miss cannot read a bayt.json-backed stub.
+# Windows is that platform, and nothing else in this suite runs there.
+def test_scan_dir_answers_the_scan_s_spelling [] {
+	assert equal (scan-dir "apps\\shadcnui") "apps/shadcnui"
+	print "  PASS  a windows dir answers in the scan's slashes"
+}
+
+def test_scan_dir_answers_dot_at_the_root [] {
+	assert equal (scan-dir "") "."
+	print "  PASS  the workspace root answers ."
+}
+
+def test_scan_dir_leaves_a_posix_dir_alone [] {
+	assert equal (scan-dir "apps/truco") "apps/truco"
+	print "  PASS  a posix dir is unchanged"
 }
