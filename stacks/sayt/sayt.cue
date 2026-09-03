@@ -531,44 +531,56 @@ go: bayt.#project & {
 // `deps` target materializes the locked environment (Uv.sync) as a
 // layer on the setup chain. Setup churn re-keys the layer, and that's
 // fine — the re-run hits the warm cache mount.
-uv: bayt.#project & {
-	activate: *"mise x --" | string
-	targets: {
-		"setup": *(Mise.install & {
-			srcs: globs: Mise.installFiles.globs
-			outs: globs: list.Concat([Mise.installFiles.globs, [".task/bayt/setup.hash"]])
-			taskfile: setup.taskfile
-			deps:     setup.deps
-		}) | null
-		"doctor": *(doctor & Mise.doctor) | null
-		"deps": *(Uv.sync & Mise.exec & {
-			deps: *[] | [...string]
-			taskfile: run: "when_changed"
-			dockerfile: from: ref: ":setup"
-		}) | null
-		// FROM `:deps`, not `:setup`: chaining is the only form that
-		// carries the venv with the interpreter its symlinks point at
-		// (see Uv.sync). `_depsDefault` raises the same edge on the
-		// host, where nothing chains; _u3 guards both.
-		"build": *(build & Mise.exec & Uv.build & {
-			_depsDefault: [":setup", ":deps"]
-			dockerfile: from: ref: ":deps"
-		}) | null
-		"test": *(test & Mise.exec & Uv.test) | null
-		"integrate": *(integrate & Mise.exec & Uv.integrationTest & {
-			dockerfile: from: ref: ":build"
-		}) | null
-		// launch and release carry no toolchain opinion: a python
-		// deployable is an image shape the leaf provides, and python has
-		// no conventional entrypoint to default to. `Uv.toolEnv` is
-		// explicit here because they compose no fragment carrying it.
-		"launch":   *(launch  & Mise.exec & {env: Uv.toolEnv}) | null
-		"release":  *(release & Mise.exec & {env: Uv.toolEnv}) | null
-		"verify":   *(verify  & Mise.exec & {env: Uv.toolEnv}) | null
-		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
-		"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+// Layout is a project-level parameter, threaded into the fragments that
+// name a directory. A leaf on a different layout writes
+// `(sayt.#uv & {srcDir: "app"}).out` rather than restating a glob and a
+// command per target and keeping them in agreement.
+#uv: {
+	srcDir:         *"src" | string
+	unitDir:        *"tests/unit" | string
+	integrationDir: *"tests/integration" | string
+	out: bayt.#project & {
+		activate: *"mise x --" | string
+		targets: {
+			"setup": *(Mise.install & {
+				srcs: globs: Mise.installFiles.globs
+				outs: globs: list.Concat([Mise.installFiles.globs, [".task/bayt/setup.hash"]])
+				taskfile: setup.taskfile
+				deps:     setup.deps
+			}) | null
+			"doctor": *(doctor & Mise.doctor) | null
+			"deps": *(Uv.sync & Mise.exec & {
+				deps: *[] | [...string]
+				taskfile: run: "when_changed"
+				dockerfile: from: ref: ":setup"
+			}) | null
+			// FROM `:deps`, not `:setup`: chaining is the only form that
+			// carries the venv with the interpreter its symlinks point at
+			// (see Uv.sync). `_depsDefault` raises the same edge on the
+			// host, where nothing chains; _u3 guards both.
+			"build": *(build & Mise.exec & (Uv.#build & {"srcDir": srcDir}).out & {
+				_depsDefault: [":setup", ":deps"]
+				dockerfile: from: ref: ":deps"
+			}) | null
+			"test": *(test & Mise.exec & (Uv.#test & {"srcDir": srcDir, "unitDir": unitDir}).out) | null
+			"integrate": *(integrate & Mise.exec & (Uv.#integrationTest & {"integrationDir": integrationDir}).out & {
+				dockerfile: from: ref: ":build"
+			}) | null
+			// launch and release carry no toolchain opinion: a python
+			// deployable is an image shape the leaf provides, and python has
+			// no conventional entrypoint to default to. `Uv.toolEnv` is
+			// explicit here because they compose no fragment carrying it.
+			"launch":   *(launch  & Mise.exec & {env: Uv.toolEnv}) | null
+			"release":  *(release & Mise.exec & {env: Uv.toolEnv}) | null
+			"verify":   *(verify  & Mise.exec & {env: Uv.toolEnv}) | null
+			"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
+			"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+		}
 	}
 }
+
+// The stock layout, for a project that wants it.
+uv: (#uv).out
 
 // sayt.pnpm — per-project Pnpm. Project-local sources only;
 // workspace-root files (pnpm-lock.yaml, etc.) belong to a separate

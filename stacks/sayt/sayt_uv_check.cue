@@ -24,11 +24,15 @@ _u1: activate: "mise x --"
 // CAS a tree of symlinks it silently drops, and the restored venv —
 // interpreter missing — still satisfies the state gate below, so the
 // re-sync that would repair it never runs.
+// Asserted at the target, where stacks/uv says the gate reads them.
+// Losing this is invisible here and everywhere else: the package still
+// evaluates, and a re-lock silently keeps the venv it should replace.
 _u1: targets: deps: {
-	cmd: "uv": {
-		dockerfile: mounts: [{type: "cache", target: "/root/.cache/uv", scope: "global"}]
-		srcs: globs: ["pyproject.toml", "uv.lock"]
+	srcs: defaultGlobs: {
+		"uv-project": glob: "pyproject.toml"
+		"uv-lock": glob:    "uv.lock"
 	}
+	cmd: "uv": dockerfile: mounts: [{type: "cache", target: "/root/.cache/uv", scope: "global"}]
 	outs: globs: []
 }
 
@@ -115,3 +119,38 @@ _u3: targets: build: srcs: {
 	globs: ["u3pkg/**/*"]
 	defaultGlobs: "uv-src": null
 }
+
+// --- U4: the layout parameters reach both the glob and the command.
+//
+// A project on app/ with an unsplit tests/ states each directory once.
+// The pair has to stay in agreement — a glob naming one tree while the
+// command walks another fails at runtime, not here — which is the whole
+// reason the directory is a parameter rather than two overrides.
+_u4: (#uv & {srcDir: "app", unitDir: "tests"}).out & {
+	name: "u4"
+	dir:  "services/u4"
+}
+
+_u4: targets: build: {
+	srcs: defaultGlobs: "uv-src": glob: "app/**/*"
+	cmd: "builtin": do:            "uv run --no-sync python -m compileall -q app"
+}
+
+_u4: targets: test: {
+	srcs: defaultGlobs: {
+		"uv-src":  glob: "app/**/*"
+		"uv-unit": glob: "tests/**/*"
+	}
+	cmd: "builtin": do: "uv run --no-sync python -m pytest tests -q"
+}
+
+// A task runner stands in for pytest as long as it keeps the flag: the
+// guard constrains what the command must carry, not what it invokes. The
+// layout parameters still hold, so the srcs keep naming the real tree.
+_u5: (#uv & {srcDir: "app", unitDir: "tests"}).out & {
+	name: "u5"
+	dir:  "services/u5"
+	targets: test: cmd: "builtin": do: "uv run --no-sync poe test"
+}
+
+_u5: targets: test: srcs: defaultGlobs: "uv-unit": glob: "tests/**/*"

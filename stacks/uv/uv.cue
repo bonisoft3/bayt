@@ -58,12 +58,8 @@ runFlags: "--no-sync"
 // project" and resolves the interpreter by luck.
 projectFile: "pyproject.toml"
 
-lockFiles: globs: [projectFile, "uv.lock"]
-
-// These land in `defaultGlobs`/`defaultExclude` — the framework-side
-// position — leaving the plain `globs`/`exclude` free for the leaf,
-// which a flat-layout consumer (common in python) needs to name its own
-// tree without a positional conflict.
+// Framework-side `defaultExclude`, so the plain `exclude` stays free for
+// whatever a leaf adds — the two positions compose instead of colliding.
 //
 // BOTH __pycache__ spellings are required: `**/x/**` leaves the empty
 // dir entries in the fileset, `**/x` prunes the dir.
@@ -71,15 +67,6 @@ _pycacheExclude: {
 	"uv-pycache-dir": {glob: "**/__pycache__"}
 	"uv-pycache-tree": {glob: "**/__pycache__/**"}
 }
-
-// The layout-bearing entries are `| null`, so a leaf that does not use
-// src/ or tests/{unit,integration}/ can null-delete the key outright
-// rather than carrying a glob that matches nothing. A concrete entry
-// (as every other stack writes) cannot be deleted: `null` unified with
-// a struct is a conflict, not a removal.
-_srcGlob:         *{glob: "src/**/*"} | null
-_unitGlob:        *{glob: "tests/unit/**/*"} | null
-_integrationGlob: *{glob: "tests/integration/**/*"} | null
 
 // sync — the dependency closure as a real image layer (the `deps`
 // target), reachable by runtime containers and cold builders.
@@ -95,10 +82,18 @@ _integrationGlob: *{glob: "tests/integration/**/*"} | null
 // interpreter's CWD already covers) belongs to the consumer.
 sync: {
 	env: toolEnv
+	// The manifest and the lockfile key this target, and the target is
+	// where they have to sit: the host status gate hashes target srcs, so
+	// declaring them only on the cmd leaves them out of the gate's hash
+	// and a re-lock reports "up to date" while every later
+	// `uv run --no-sync` keeps using the venv from before it.
+	srcs: defaultGlobs: {
+		"uv-project": {glob: projectFile}
+		"uv-lock": {glob: "uv.lock"}
+	}
 	cmd: "uv": {
 		do: (*"uv sync \(syncFlags)" | string) & =~"--no-install-project"
 		dockerfile: mounts: [cacheMount]
-		srcs: globs: lockFiles.globs
 	}
 	// No `outs`: the venv is presence-gated, never CAS payload. It is
 	// not relocatable in either direction — its own path is baked into
@@ -134,28 +129,41 @@ bytecode: env: UV_COMPILE_BYTECODE: "1"
 // nearest thing to a compile, failing on syntax errors and leaving the
 // bytecode the runtime would otherwise generate on first import.
 //
-// src/ is named twice — the glob and compileall's argument — and a
-// flat-layout leaf overrides both together. One parameter cannot drive
-// them: `#target` is closed, so the stack has nowhere to hang a layout
-// field, and a package-level constant would be shared by every uv
-// project at once. services/news is the worked example.
-build: {
-	env: toolEnv
-	srcs: {
-		defaultGlobs: {
-			"uv-project": {glob: projectFile}
-			"uv-src": _srcGlob
+// This and the two suites below take their directory and produce an
+// `out`, the shape distros/#install already uses. The directory reaches
+// the glob and the command that walks it from one place, so a project on
+// another tree states it once rather than overriding two fields that
+// must agree — and disagreement between them fails at runtime, never
+// here. A definition rather than a field on the target: `#target` is
+// closed, and a package-level constant would be shared by every uv
+// project at once.
+//
+// Each entry stays `| null` for a project with no such tree at all. A
+// concrete entry (as every other stack writes) cannot be deleted: `null`
+// unified with a struct is a conflict, not a removal.
+#build: {
+	srcDir: *"src" | string
+	out: {
+		env: toolEnv
+		srcs: {
+			defaultGlobs: {
+				"uv-project": {glob: projectFile}
+				"uv-src": *{glob: "\(srcDir)/**/*"} | null
+			}
+			defaultExclude: _pycacheExclude
 		}
-		defaultExclude: _pycacheExclude
+		// No `outs`. Per PEP 3147 a __pycache__/*.pyc is importable only
+		// with its .py beside it, so — unlike stacks/go, where build outs
+		// IS the artifact — the bytecode is not an interface any consumer
+		// can deploy. Declaring it would invite `deps: [":build:outs"]` on
+		// a release target and ship an image whose modules cannot be
+		// imported; a python release carries the source tree.
+		cmd: "builtin": do: (*"uv run \(runFlags) python -m compileall -q \(srcDir)" | string) & =~"--no-sync"
 	}
-	// No `outs`. Per PEP 3147 a __pycache__/*.pyc is importable only
-	// with its .py beside it, so — unlike stacks/go, where build outs IS
-	// the artifact — the bytecode is not an interface any consumer can
-	// deploy. Declaring it would invite `deps: [":build:outs"]` on a
-	// release target and ship an image whose modules cannot be imported;
-	// a python release carries the source tree.
-	cmd: "builtin": do: (*"uv run \(runFlags) python -m compileall -q src" | string) & =~"--no-sync"
 }
+
+// The stock layout, for a project that wants it.
+build: (#build).out
 
 // Unit and integration suites split by directory, the convention this
 // stack imposes: `tests/unit` answers to the ide-layer `test` verb and
@@ -166,30 +174,41 @@ build: {
 //
 // Globbed `**/*` rather than `**/*.py` so a non-python fixture
 // re-fingerprints too.
-test: {
-	env: toolEnv
-	srcs: {
-		defaultGlobs: {
-			"uv-project": {glob: projectFile}
-			"uv-src": _srcGlob
-			"uv-unit": _unitGlob
+#test: {
+	srcDir:  *"src" | string
+	unitDir: *"tests/unit" | string
+	out: {
+		env: toolEnv
+		srcs: {
+			defaultGlobs: {
+				"uv-project": {glob: projectFile}
+				"uv-src": *{glob: "\(srcDir)/**/*"} | null
+				"uv-unit": *{glob: "\(unitDir)/**/*"} | null
+			}
+			defaultExclude: _pycacheExclude
 		}
-		defaultExclude: _pycacheExclude
+		cmd: "builtin": do: (*"uv run \(runFlags) python -m pytest \(unitDir) -q" | string) & =~"--no-sync"
 	}
-	cmd: "builtin": do: (*"uv run \(runFlags) python -m pytest tests/unit -q" | string) & =~"--no-sync"
 }
 
-integrationTest: {
-	env: toolEnv
-	srcs: {
-		defaultGlobs: {
-			"uv-project": {glob: projectFile}
-			"uv-integration": _integrationGlob
+test: (#test).out
+
+#integrationTest: {
+	integrationDir: *"tests/integration" | string
+	out: {
+		env: toolEnv
+		srcs: {
+			defaultGlobs: {
+				"uv-project": {glob: projectFile}
+				"uv-integration": *{glob: "\(integrationDir)/**/*"} | null
+			}
+			defaultExclude: _pycacheExclude
 		}
-		defaultExclude: _pycacheExclude
+		cmd: "builtin": do: (*"uv run \(runFlags) python -m pytest \(integrationDir) -q" | string) & =~"--no-sync"
 	}
-	cmd: "builtin": do: (*"uv run \(runFlags) python -m pytest tests/integration -q" | string) & =~"--no-sync"
 }
+
+integrationTest: (#integrationTest).out
 
 // No `run` fragment: python has no conventional entrypoint the way
 // `go run .` is conventional, so a launch target's command belongs to
