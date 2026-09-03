@@ -69,6 +69,7 @@ import (
 	Gradle "github.com/bonisoft3/bayt/stacks/gradle"
 	Mise   "github.com/bonisoft3/bayt/stacks/mise"
 	Pnpm   "github.com/bonisoft3/bayt/stacks/pnpm"
+	Uv     "github.com/bonisoft3/bayt/stacks/uv"
 )
 
 // setup — toolchain install. Runs once when .mise.lock changes.
@@ -95,8 +96,13 @@ doctor: {
 // requirement: a build/test target without an activate convention
 // should fail generation rather than emit tasks that resolve tools
 // off bare PATH.
+// `deps` defaults through `_depsDefault` rather than carrying its own
+// disjunction default directly. A stack that needs a wider default
+// raises `_depsDefault`; unifying a second default onto `deps` itself
+// would leave the disjunction with none and fail on concreteness.
 build: {
-	deps: *[":setup"] | [...string]
+	_depsDefault: *[":setup"] | [...string]
+	deps:         *_depsDefault | [...string]
 	taskfile: {}
 	dockerfile: {}
 	vscode: group: {kind: "build", isDefault: true}
@@ -516,6 +522,49 @@ go: bayt.#project & {
 		// shapes the leaf provides (FROM + epilogue COPY of the binary).
 		"release":  *(release & Mise.exec) | null
 		"verify":   *(verify   & Mise.exec & Go.vet) | null
+		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
+		"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+	}
+}
+
+// sayt.uv — python project on uv, shaped like sayt.go: a non-verb
+// `deps` target materializes the locked environment (Uv.sync) as a
+// layer on the setup chain. Setup churn re-keys the layer, and that's
+// fine — the re-run hits the warm cache mount.
+uv: bayt.#project & {
+	activate: *"mise x --" | string
+	targets: {
+		"setup": *(Mise.install & {
+			srcs: globs: Mise.installFiles.globs
+			outs: globs: list.Concat([Mise.installFiles.globs, [".task/bayt/setup.hash"]])
+			taskfile: setup.taskfile
+			deps:     setup.deps
+		}) | null
+		"doctor": *(doctor & Mise.doctor) | null
+		"deps": *(Uv.sync & Mise.exec & {
+			deps: *[] | [...string]
+			taskfile: run: "when_changed"
+			dockerfile: from: ref: ":setup"
+		}) | null
+		// FROM `:deps`, not `:setup`: chaining is the only form that
+		// carries the venv with the interpreter its symlinks point at
+		// (see Uv.sync). `_depsDefault` raises the same edge on the
+		// host, where nothing chains; _u3 guards both.
+		"build": *(build & Mise.exec & Uv.build & {
+			_depsDefault: [":setup", ":deps"]
+			dockerfile: from: ref: ":deps"
+		}) | null
+		"test": *(test & Mise.exec & Uv.test) | null
+		"integrate": *(integrate & Mise.exec & Uv.integrationTest & {
+			dockerfile: from: ref: ":build"
+		}) | null
+		// launch and release carry no toolchain opinion: a python
+		// deployable is an image shape the leaf provides, and python has
+		// no conventional entrypoint to default to. `Uv.toolEnv` is
+		// explicit here because they compose no fragment carrying it.
+		"launch":   *(launch  & Mise.exec & {env: Uv.toolEnv}) | null
+		"release":  *(release & Mise.exec & {env: Uv.toolEnv}) | null
+		"verify":   *(verify  & Mise.exec & {env: Uv.toolEnv}) | null
 		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
 		"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
 	}
