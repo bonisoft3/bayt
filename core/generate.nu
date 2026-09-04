@@ -137,26 +137,37 @@ def atomic-write [target: string, content: string] {
 	mv -f $tmp $target
 }
 
-# write-bundle writes all output files for a pre-loaded render bundle.
-# base — workspace-root-relative project dir (e.g. "path/to/project" or ".")
-# Rewrite `bayt: docker-image://…` to a compose-YAML-relative path when
-# BAYT_RUNTIME_DIR is set (monorepo-dev mode). Post-write rewrite
-# predates the runtimeIn channel gen_taskfile uses; migrate into
-# gen_compose when next touching its emission.
+# Rewrite the `bayt` build context from the published image to a
+# compose-YAML-relative path when BAYT_RUNTIME_DIR is set (monorepo-dev
+# mode).
+#
+# Operates on the record, not on the emitted text: the emitter folds a long
+# scalar onto a `>-` continuation line, so a pattern expecting
+# `bayt: docker-image://…` on one line matches nothing.
 #
 # Path points at `runtime/`, not the bayt project root — inner-bake
 # FS only has /monorepo/plugins/bayt/runtime, so any broader context
 # would hash differently outer-vs-inner and break the depot cache.
-def _inject-runtime [content: string, base: string]: nothing -> string {
+export def _inject-runtime [data: any, base: string]: nothing -> any {
 	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
-	if ($runtime_dir | is-empty) { return $content }
+	if ($runtime_dir | is-empty) { return $data }
 	# base arrives with OS separators when generation runs on Windows —
 	# normalize before splitting or the depth (and every ../ prefix)
 	# comes out short.
 	let depth = if ($base == "." or $base == "") { 0 } else { ($base | str replace --all '\' '/' | split row "/" | length) }
 	let prefix = (0..$depth | each {|_| "../" } | str join "")
 	let rel_path = $"($prefix)($runtime_dir)/runtime"
-	$content | str replace --regex --all 'bayt: docker-image://[^\n"]+' $"bayt: ($rel_path)"
+	if ($data | get -o services) == null { return $data }
+	$data | update services {|d|
+		$d.services | items {|name, svc|
+			let ctx = ($svc | get -o build.additional_contexts.bayt)
+			if $ctx != null and ($ctx | str starts-with "docker-image://") {
+				{$name: ($svc | update build.additional_contexts.bayt $rel_path)}
+			} else {
+				{$name: $svc}
+			}
+		} | reduce --fold {} {|it, acc| $acc | merge $it}
+	}
 }
 
 # Manifest twin of `_inject-runtime`: under --runtime the context a target
@@ -186,6 +197,8 @@ def _hash-header       [c: string]: nothing -> string { "# generated from bayt.c
 def _slash-header      [c: string]: nothing -> string { "// generated from bayt.cue — do not edit\n" + $c }
 def _json-header  [d: any]: nothing -> any { {_generated_from: "bayt.cue (do not edit)"} | merge $d }
 
+# write-bundle writes all output files for a pre-loaded render bundle.
+# base — workspace-root-relative project dir (e.g. "path/to/project" or ".")
 def write-bundle [bundle: record, base: string, --depot] {
 	let ws = (pwd | str trim)
 	let prefix = if $base == "." or $base == "" { "" } else { $"($base)/" }
@@ -237,10 +250,10 @@ def write-bundle [bundle: record, base: string, --depot] {
 	}
 
 	# --- compose
-	atomic-write $"($prefix).bayt/compose.yaml" (_hash-header (_inject-runtime ($bundle.docker.compose.root | to yaml) $base))
-	atomic-write $"($prefix).bayt/compose.bayt.yaml" (_hash-header (_inject-runtime ($bundle.docker.compose.bayt_root | to yaml) $base))
+	atomic-write $"($prefix).bayt/compose.yaml" (_hash-header (_inject-runtime $bundle.docker.compose.root $base | to yaml))
+	atomic-write $"($prefix).bayt/compose.bayt.yaml" (_hash-header (_inject-runtime $bundle.docker.compose.bayt_root $base | to yaml))
 	for entry in ($bundle.docker.compose.files | transpose name data) {
-		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" (_hash-header (_inject-runtime ($entry.data | to yaml) $base))
+		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" (_hash-header (_inject-runtime $entry.data $base | to yaml))
 	}
 
 	# --- skaffold

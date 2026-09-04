@@ -1200,7 +1200,7 @@ _copyLine: {
 				// additional_contexts wires it to
 				// `${BAYT_RUNTIME:-docker-image://<image>}` —
 				// monorepo-dev mode rewrites this to a relative path
-				// via generate.nu's _inject-runtime regex.
+				// via generate.nu's _inject-runtime.
 				// Auto-mirror compose.runtime.depends_on as additional_contexts:
 				// service:X on the same target. depends_on is the runtime
 				// tree; additional_contexts is the build tree. Docker

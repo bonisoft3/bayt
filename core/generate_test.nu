@@ -4,7 +4,7 @@
 # Run with: nu generate_test.nu (from this directory).
 
 use std/assert
-use ./generate.nu [repo-of, scan-dir]
+use ./generate.nu [repo-of, scan-dir, _inject-runtime]
 
 def main [] {
 	print "Running generate.nu tests...\n"
@@ -17,6 +17,10 @@ def main [] {
 	test_scan_dir_answers_the_scan_s_spelling
 	test_scan_dir_answers_dot_at_the_root
 	test_scan_dir_leaves_a_posix_dir_alone
+	test_inject_runtime_rewrites_the_published_image
+	test_inject_runtime_climbs_out_of_a_nested_project
+	test_inject_runtime_is_a_noop_without_the_env
+	test_inject_runtime_keeps_service_order
 
 	print "\nAll generate.nu tests passed!"
 }
@@ -69,4 +73,48 @@ def test_scan_dir_answers_dot_at_the_root [] {
 def test_scan_dir_leaves_a_posix_dir_alone [] {
 	assert equal (scan-dir "apps/truco") "apps/truco"
 	print "  PASS  a posix dir is unchanged"
+}
+
+# _inject-runtime's failure mode is silent: a rewrite that does not happen
+# leaves the published image as the build context, which builds fine and
+# looks intentional. Nothing downstream notices, so the behaviour is pinned
+# here rather than trusted.
+def _svc [ctx: string]: nothing -> record {
+	{services: {a: {build: {additional_contexts: {bayt: $ctx, other: "service:x"}}}}}
+}
+const IMG = "docker-image://bonitao/bayt-runtime:1.0.1@sha256:e0f4"
+
+def test_inject_runtime_rewrites_the_published_image [] {
+	print "test the published image becomes a relative runtime path..."
+	# `../` even at the root: the compose file sits in `.bayt/`, so every
+	# path climbs out of that before the repo-relative part.
+	let got = (with-env {BAYT_RUNTIME_DIR: "plugins/bayt"} { _inject-runtime (_svc $IMG) "." })
+	assert equal $got.services.a.build.additional_contexts.bayt "../plugins/bayt/runtime"
+	# Siblings are left alone: the rewrite is keyed on the context name.
+	assert equal $got.services.a.build.additional_contexts.other "service:x"
+}
+
+# One `../` per path segment plus one for the project's own .bayt dir; the
+# compose file resolves its contexts relative to itself, not the repo root.
+def test_inject_runtime_climbs_out_of_a_nested_project [] {
+	print "test the relative path climbs out of a nested project..."
+	let got = (with-env {BAYT_RUNTIME_DIR: "plugins/bayt"} { _inject-runtime (_svc $IMG) "libraries/logs" })
+	assert equal $got.services.a.build.additional_contexts.bayt "../../../plugins/bayt/runtime"
+}
+
+# Unset is the published path: a consumer outside this repo has no local
+# runtime tree to point at.
+def test_inject_runtime_is_a_noop_without_the_env [] {
+	print "test an unset BAYT_RUNTIME_DIR leaves the image ref alone..."
+	let got = (with-env {BAYT_RUNTIME_DIR: ""} { _inject-runtime (_svc $IMG) "." })
+	assert equal $got.services.a.build.additional_contexts.bayt $IMG
+}
+
+# The record is rebuilt service by service, so order is not free. Emitted
+# order is the diff a reviewer reads.
+def test_inject_runtime_keeps_service_order [] {
+	print "test rebuilding the record preserves service order..."
+	let d = {services: {zeta: {build: {additional_contexts: {bayt: $IMG}}}, alpha: {image: "x"}, mid: {build: {additional_contexts: {bayt: $IMG}}}}}
+	let got = (with-env {BAYT_RUNTIME_DIR: "plugins/bayt"} { _inject-runtime $d "." })
+	assert equal ($got.services | columns) ["zeta", "alpha", "mid"]
 }
