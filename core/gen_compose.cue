@@ -134,7 +134,12 @@ _copyLine: {
 	// dir mtimes only when src == dst (a rename synthesizes the new dest dir at
 	// build time, like --parents), and a build-time dir entry drifts the
 	// content-addressed output → breaks --link's cross-run cache reuse.
-	let _cLink    = [if c.from != null if !c.parents if len(c.srcs) == 1 if c.srcs[0] == c.dst {"--link "}, ""][0]
+	//
+	// `link` gates this test and cannot widen it: forcing the flag onto an
+	// ineligible shape is the direction that breaks
+	// tests/export_repro_it.nu, so the shape test is not a consumer's to
+	// override. Suppressing costs cache reuse and nothing else.
+	let _cLink    = [if c.link if c.from != null if !c.parents if len(c.srcs) == 1 if c.srcs[0] == c.dst {"--link "}, ""][0]
 	let _cChmod   = [if c.chmod != _|_ {"--chmod=\(c.chmod) "}, ""][0]
 	let _cChown   = [if c.chown != _|_ {"--chown=\(c.chown) "}, ""][0]
 	let _cParents = [if c.parents {"--parents "}, ""][0]

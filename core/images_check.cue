@@ -15,8 +15,13 @@ _i3_scratch: scratch
 _i3_scratch: from: null
 
 // --- I4: dindbox COPYs socat (binary + readline/ncurses libs) and the
-// depot CLI — three entries.
-_i4_dindbox_copy: len(dindbox.copy) & 3
+// depot CLI — three entries. Counted over defaultPreamble's copy arms,
+// which is where they live: `dindbox.copy` is an undefined field, and `len`
+// of one is incomplete rather than wrong, so the obvious spelling holds
+// against any number.
+_i4_dindbox_copy: len([
+	for _, e in dindbox.defaultPreamble if e != null if e.copy != _|_ {e},
+]) & 3
 
 // --- I6: presets unify into a target's dockerfile block. Project-level
 // composition: each leaf target picks a preset (or chains via from.ref).

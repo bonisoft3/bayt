@@ -648,6 +648,11 @@ Tests: docker_compose: {
 	d22_no_bulk:  _d22_no_bulk
 	d19_tool:  _d19_has_tool
 	d19_model: _d19_has_model
+	d23_linked:           _d23_linked
+	d23_rename_plain:     _d23_rename_plain
+	d23_incontext_plain:  _d23_incontext_plain
+	d23_parents_plain:    _d23_parents_plain
+	d23_optout_plain:     _d23_optout_plain
 	d1: _d1_dc
 	d2: _d2_dc
 	d3: _d3_dc
@@ -701,3 +706,37 @@ Tests: docker_compose: {
 	d20_no_bulk_copy:  _d20_no_bulk_copy
 	d20_inc:           _d20_inc
 }
+
+// --- D23: `_copyLine`'s `--link` predicate, pinned shape by shape. See
+// that function for why the flag belongs on one shape only; what matters
+// here is that the flag reaches no compose field, so a widened predicate
+// would surface as a reproducibility failure in an integration test rather
+// than as anything a unit suite could see.
+//
+// Spelled out rather than derived from one another: unification conflicts
+// on an override, so `base & {from: null}` is an error, not a variant.
+
+// The only shape that gets the flag.
+_d23_linked: (_copyLine & {c: {
+	link: true, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
+}}).out & "COPY --link --from=img /bin/busybox /bin/busybox"
+
+// The three that do not. Asserting the whole line,
+// not the absence of "--link": a flag that moved would pass a contains
+// check against a substring that no longer appears in that position.
+_d23_rename_plain: (_copyLine & {c: {
+	link: true, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/usr/bin/busybox", exclude: []
+}}).out & "COPY --from=img /bin/busybox /usr/bin/busybox"
+
+_d23_incontext_plain: (_copyLine & {c: {
+	link: true, from: null, parents: false, srcs: ["busybox"], dst: "/bin/busybox", exclude: []
+}}).out & "COPY busybox /bin/busybox"
+
+_d23_parents_plain: (_copyLine & {c: {
+	link: true, from: {name: "img"}, parents: true, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
+}}).out & "COPY --parents --from=img /bin/busybox /bin/busybox"
+
+// `link: false` on the one eligible shape: the flag goes away.
+_d23_optout_plain: (_copyLine & {c: {
+	link: false, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
+}}).out & "COPY --from=img /bin/busybox /bin/busybox"

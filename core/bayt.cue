@@ -476,10 +476,12 @@ noop: #cmd & {
 	// reference. When `from` is unset, it's an in-context COPY from
 	// the build context.
 	//
-	// `--link` defaults on (BuildKit overlay copies are almost always
-	// desirable: faster cache, less invalidation cascade). Other
-	// BuildKit flags map directly: --chmod, --chown, --parents,
-	// --exclude.
+	// `link` suppresses `--link`; it does not request it. The flag is only
+	// correct on a same-path `--from` rebase (see _copyLine), so the
+	// default means "where that holds" and `false` means "never" — which is
+	// the escape for a destination that must not be overlaid, such as a
+	// usrmerged base's /bin. Other BuildKit flags map directly: --chmod,
+	// --chown, --parents, --exclude.
 	// from.name doubles as the additional_context key and the
 	// `--from=<name>` reference in the COPY. Default value emitted
 	// in additional_contexts is `docker-image://<name>`; `image:`

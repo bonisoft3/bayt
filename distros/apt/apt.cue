@@ -53,6 +53,29 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 	// retains versions.
 	pkgs: [...string]
 
+	// Build-only packages, all inside the install's own RUN: `then` runs
+	// once they are in place, `purge` takes them out again, and
+	// `--auto-remove` drops whatever apt then considers orphaned, which is
+	// not only what `pkgs` pulled in — a base package already marked
+	// auto-installed and orphaned for its own reasons goes too.
+	// Order is install → publish → then → purge; tests/_positive_preamble
+	// pins it and says why.
+	//
+	// `then` sees the repo only from the cmd position. In `defaultPreamble`
+	// the RUN is emitted before `add`, the copy arms and the source COPYs,
+	// so the workdir is still empty there and `then` can only work on what
+	// the entry itself fetched. Put the fragment under
+	// `cmd.<n>.dockerfile` when it has to compile checked-out sources.
+	//
+	// A list, like `pkgs`, so the element constraints are reached — see
+	// tests/_negative_then_empty. Entries join with `&&`, so the first
+	// failure stops the rest. Each must carry a non-space character: a
+	// blank one renders `( )`, the same parse error an empty one does, and
+	// both arrive from a mixin joining nothing rather than from anything an
+	// author typed.
+	then: [...string & =~"[^[:space:]]" & !~"\n"]
+	purge: [...string & !="" & !~"\n"]
+
 	// Fixes resolution at a point in time, which makes a version pin
 	// redundant. Only the distro's own sources are rewritten, so any
 	// third-party repo the base image ships (nodesource, pgdg, a vendor
@@ -78,11 +101,17 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 	// Seed from the store, install, publish anything new back. `|| exit`
 	// keeps a real install failure fatal; the publish loop's trailing `:`
 	// keeps a torn dedup write from failing a good install.
+	let _pwd = [if len(I.then) > 0 {"p=\"$PWD\"; "}, ""][0]
 	let _seed = "s=/apt-store; d=/var/cache/apt/archives; mkdir -p \"$s\" \"$d\"; cp -r \"$s\"/. \"$d\"/ 2>/dev/null || true; "
+
+	// Fatal like the install.
+	let _then = [if len(I.then) > 0 {"; (cd \"$p\" && \(strings.Join(I.then, " && "))) || exit"}, ""][0]
+	let _purge = [if len(I.purge) > 0 {"; DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq --auto-remove \(strings.Join(I.purge, " ")) || exit"}, ""][0]
+
 	let _publish = "; cd \"$d\" && for f in *.deb; do [ -f \"$f\" ] || continue; o=\"$s/$f\"; [ -e \"$o\" ] && continue; t=\"$(mktemp \"$s/.pXXXXXX\")\" && cp \"$f\" \"$t\" && mv -f \"$t\" \"$o\"; done; :"
 
 	out: {
-		do:    "\(_seed)\(_snap)rm -f /etc/apt/apt.conf.d/docker-clean && echo 'Binary::apt::APT::Keep-Downloaded-Packages \"true\";' > /etc/apt/apt.conf.d/keep-cache && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \(strings.Join(I.pkgs, " ")) || exit\(_publish)"
+		do:    "\(_pwd)\(_seed)\(_snap)rm -f /etc/apt/apt.conf.d/docker-clean && echo 'Binary::apt::APT::Keep-Downloaded-Packages \"true\";' > /etc/apt/apt.conf.d/keep-cache && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \(strings.Join(I.pkgs, " ")) || exit\(_publish)\(_then)\(_purge)"
 		shell: "sh"
 		mounts: [_store, _archiveMount, _listsMount]
 	}

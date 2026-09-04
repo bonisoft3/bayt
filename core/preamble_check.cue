@@ -16,10 +16,15 @@ import "strings"
 
 _pc_preamble: {
 	"env": {name: "env", priority: -20, line: "ENV FOO=bar"}
+	// Spelled out field by field because `in` is typed `#MapAsList`, not
+	// `_preambleEl` — the fixture gets none of the schema's defaults, so a
+	// field added to _copyEntry and read by _copyLine has to be added here
+	// too. `link` is one; a rename is not a `--link` shape anyway.
 	"pin": {name: "pin", priority: -19, copy: {
 		from: {name: "busybox:musl@sha256:03db"}
 		srcs: ["/bin/busybox"]
 		dst:     "/busybox"
+		link:    true
 		parents: false
 		exclude: []
 	}}

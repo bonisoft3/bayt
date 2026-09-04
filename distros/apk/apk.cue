@@ -20,11 +20,20 @@ _store: {type: "cache", target: "/apk-store", scope: "global"}
 #install: I={
 	pkgs: [...string]
 
+	// See distros/apt for `then` / `purge`. `apk del` drops the
+	// dependencies that came in alongside the named packages.
+	then: [...string & =~"[^[:space:]]" & !~"\n"]
+	purge: [...string & !="" & !~"\n"]
+
+	let _then = [if len(I.then) > 0 {"; (cd \"$p\" && \(strings.Join(I.then, " && "))) || exit"}, ""][0]
+	let _purge = [if len(I.purge) > 0 {"; apk del \(strings.Join(I.purge, " ")) || exit"}, ""][0]
+
+	let _pwd = [if len(I.then) > 0 {"p=\"$PWD\"; "}, ""][0]
 	let _seed = "s=/apk-store; d=/var/cache/apk; mkdir -p \"$s\" \"$d\"; cp -r \"$s\"/. \"$d\"/ 2>/dev/null || true; "
 	let _publish = "; cd \"$d\" && for f in *.apk; do [ -f \"$f\" ] || continue; o=\"$s/$f\"; [ -e \"$o\" ] && continue; t=\"$(mktemp \"$s/.pXXXXXX\")\" && cp \"$f\" \"$t\" && mv -f \"$t\" \"$o\"; done; :"
 
 	out: {
-		do:    "\(_seed)apk add --cache-dir=/var/cache/apk \(strings.Join(I.pkgs, " ")) || exit\(_publish)"
+		do:    "\(_pwd)\(_seed)apk add --cache-dir=/var/cache/apk \(strings.Join(I.pkgs, " ")) || exit\(_publish)\(_then)\(_purge)"
 		shell: "sh"
 		mounts: [_store, _cacheMount]
 	}

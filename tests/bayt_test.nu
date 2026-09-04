@@ -81,6 +81,10 @@ def main [] {
 	# names a sibling target must not evaluate.
 	let neg_preamble = ["./tests/_negative_preamble_ref/"]
 	let neg_preamble_empty = ["./tests/_negative_preamble_empty/"]
+	# Both projected inline — the shape a consumer writes, and the one an
+	# optional scalar `then?` would not have caught.
+	let neg_then_empty = ["./tests/_negative_then_empty/"]
+	let neg_then_multiline = ["./tests/_negative_then_multiline/"]
 	let neg_unpinned = ["./tests/_negative_unpinned_zypper/"]
 	let neg_unpinned_lock = ["./tests/_negative_unpinned_lock/"]
 	let pos_ci_srcs = ["./tests/_positive_ci_srcs/"]
@@ -102,6 +106,8 @@ def main [] {
 	$failed = $failed + (eval-fail "ci `:X:bayt` without `:X:srcs` must fail" $neg_ci_srcs)
 	$failed = $failed + (eval-fail "preamble copy arm with a target ref must fail" $neg_preamble)
 	$failed = $failed + (export-fail "preamble entry naming no arm must fail" $neg_preamble_empty)
+	$failed = $failed + (eval-fail "an empty `then` entry must fail" $neg_then_empty)
+	$failed = $failed + (eval-fail "a multi-line `then` entry must fail" $neg_then_multiline)
 	$failed = $failed + (eval-fail "an unpinned zypper package must fail" $neg_unpinned)
 	$failed = $failed + (eval-fail "an unpinned zypper lock entry must fail" $neg_unpinned_lock)
 
