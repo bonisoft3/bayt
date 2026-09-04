@@ -603,9 +603,10 @@ def test_bracket_glob_hashes_in_git_mode [] {
 	print "  ok\n"
 }
 
-# Bracket-only outs are the optional-file idiom: absence is a valid
-# state and must not fail the stamp check. Star globs keep the strict
-# ≥1-match contract (covered by test_check_misses_when_outs_missing).
+# Bracket-only outs are the optional-file idiom: absence is a valid state and
+# must not fail the stamp check. Guards nushell 0.115, where `path type`
+# glob-expands its input, so a bracket out matching nothing errored instead.
+# Star globs keep the strict ≥1-match contract (test_check_misses_when_outs_missing).
 def test_check_tolerates_missing_optional_bracket_out [] {
 	print "test check tolerates absent bracket-only optional out..."
 	let tmp = (make-tmp)

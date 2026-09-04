@@ -125,8 +125,8 @@ def "main run-stamp" [
 }
 
 def "main where" [target: string = "root"] {
-	use runtime/where.nu
-	where $target
+	use runtime/where.nu resolve
+	resolve $target
 }
 
 def main [] {

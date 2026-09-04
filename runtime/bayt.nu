@@ -2,7 +2,7 @@
 
 use cache.nu
 use fingerprint.nu
-use where.nu
+use where.nu resolve
 
 const _fat_cli = (path self | path dirname | path join ".." "bayt.nu")
 
@@ -36,7 +36,7 @@ def "main fingerprint" [
 }
 
 def "main where" [target: string = "root"] {
-	where $target
+	resolve $target
 }
 
 # generate — regenerate this project's .bayt from bayt.cue. No bayt.cue

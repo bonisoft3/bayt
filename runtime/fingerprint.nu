@@ -240,10 +240,8 @@ def parse-list [s: string]: nothing -> list<string> {
 # existence probe — the `generates:`-style check without content hashing.
 def outs-present [pats: list<string>]: nothing -> bool {
   for p in $pats {
-    let t = ($p | path type)
-    let found = if $t == "file" or $t == "dir" {
-      true
-    } else if ($p | str contains "*") or ($p | str contains "?") {
+    # Keep `path type` off globs.
+    let found = if ($p | str contains "*") or ($p | str contains "?") {
       not ((glob $p --no-dir) | is-empty)
     } else if (is-glob $p) {
       # Bracket-only pattern: the optional-file idiom. Zero matches is a
@@ -252,7 +250,8 @@ def outs-present [pats: list<string>]: nothing -> bool {
       # status short-circuit of any target declaring an optional out.
       true
     } else {
-      false
+      let t = ($p | path type)
+      $t == "file" or $t == "dir"
     }
     if not $found { return false }
   }
