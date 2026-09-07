@@ -21,7 +21,7 @@ Pin the release in your project's `.mise.toml`:
 
 ```toml
 [tools]
-"github:bonisoft3/bayt" = "0.46.0"
+"github:bonisoft3/bayt" = "0.52.0"
 ```
 
 `bayt` is then on PATH and the cue/nu tree lives next to it. Run from any directory containing a `bayt.cue`:
@@ -415,7 +415,7 @@ release-proxy) to targets. Overlays must not define `bayt`.
 4. **No path math in CUE.** Repo-relative `../` computation lives in nushell, which has a proper path library. CUE carries structured data (`{name, projectDir}`), nushell joins it.
 5. **Fragments via unification, not inheritance.** Verbs (`setup`, `build`, …) and base presets (`nubox`, `busybox`, …) are plain structs, not closed `#`-prefixed definitions — CUE's closed conjunction rejects cross-def fields. See the closedness note in `core/bayt.cue`.
 6. **Version intent vs. version lock.** Base image tags go in `bayt.cue`; digests live in `images.lock.cue`, bumped as ordinary dependency changes.
-7. **Pin what the archive can honor.** OS-package installs go through `distros/*` (`(zypper.#install & {pkgs: ["findutils=4.10.0-160000.2.2"]}).out`). The policy follows archive retention rather than being uniform: zypper requires a `name=version` pin and rejects a bare name at evaluation, because leap retains versions for the life of a release; apt and apk take bare names, because Debian/Ubuntu keep one revision per package in `-updates` and Alpine prunes, so a hard pin there encodes a dated build failure rather than reproducibility. Where a build genuinely needs reproducible packages, prefer a leap base, or point apt at `snapshot.ubuntu.com`/`snapshot.debian.org`, which fixes resolution at a timestamp and makes the pin redundant. The base image is always digest-pinned, so reproducibility holds across registry-side base updates regardless.
+7. **Pin what the archive can honor.** OS-package installs go through `distros/*` (`(zypper.#install & {pkgs: ["findutils=4.10.0-160000.2.2"]}).out`). The policy follows archive retention rather than being uniform: zypper requires a `name=version` pin and rejects a bare name at evaluation, because leap retains versions for the life of a release; apt and apk take bare names, because Debian/Ubuntu keep one revision per package in `-updates` and Alpine prunes, so a hard pin there encodes a dated build failure rather than reproducibility. Where a build genuinely needs reproducible packages, prefer a leap base, or point apt at `snapshot.ubuntu.com`/`snapshot.debian.org`, which fixes resolution at a timestamp and makes the pin redundant. The base image is always digest-pinned, so reproducibility holds across registry-side base updates regardless — but the pin and the archive are two clocks, and they drift: a digest-pinned base eventually meets packages rebuilt against a libc it does not ship. Refresh the base pin when that happens. Nothing catches it until something forces a cold build, so a layer can stay broken for as long as its cache key holds.
 8. **Never swallow errors.** fingerprint.nu and cache.nu fail fast on missing inputs, malformed manifests, git-hash-object errors. A misconfigured target surfaces immediately instead of poisoning the cache with silent defaults.
 
 ## Claude Code plugin
