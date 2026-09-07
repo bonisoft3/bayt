@@ -899,8 +899,10 @@ noop: #cmd & {
 		if len(X.c.from) > 0 {X.c.from},
 		if X._type == "none" {[]},
 		if X._type == "gha" {[
-			"type=gha,scope=main-\(X._seg)",
-			"type=gha,scope=\(X._scope)-\(X._seg)",
+			// Same branch dimension as the registry arm below: without it every
+			// branch reads and writes one key, so a PR's writes land on main's.
+			"type=gha,scope=\(X._scope)-${CACHE_SCOPE:-unscoped}-\(X._seg)",
+			"type=gha,scope=\(X._scope)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(X._seg)",
 		]},
 		if X._type == "registry" {[
 			// CACHE_SCOPE — branch + builder identity (engine, frontend,
@@ -922,7 +924,7 @@ noop: #cmd & {
 		if len(X.c.to) > 0 {X.c.to},
 		if X._type == "none" {[]},
 		if X._type == "gha" {[
-			"type=gha,mode=\(X.mode),scope=\(X._scope)-\(X._seg)",
+			"type=gha,mode=\(X.mode),scope=\(X._scope)-${CACHE_SCOPE:-unscoped}-\(X._seg)",
 		]},
 		if X._type == "registry" {[
 			// zstd pays on the import side: a cache blob is written once and

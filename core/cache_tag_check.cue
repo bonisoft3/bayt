@@ -121,12 +121,12 @@ _ct_gha: #project & {
 }
 _ct_gha_from: _ct_gha.targets[_ct_n1].bake.cache.from
 _ct_gha_from: [
-	"type=gha,scope=main-s-ba5aecb3de71d779",
-	"type=gha,scope=aaaaaaaaaa-bbbbbbbbbb-ccccc-50be3cfe432d9405-s-ba5aecb3de71d779",
+	"type=gha,scope=aaaaaaaaaa-bbbbbbbbbb-ccccc-50be3cfe432d9405-${CACHE_SCOPE:-unscoped}-s-ba5aecb3de71d779",
+	"type=gha,scope=aaaaaaaaaa-bbbbbbbbbb-ccccc-50be3cfe432d9405-${CACHE_SCOPE_FALLBACK:-unscoped}-s-ba5aecb3de71d779",
 ]
 _ct_gha_to: _ct_gha.targets[_ct_n1].bake.cache.to
 _ct_gha_to: [
-	"type=gha,mode=min,scope=aaaaaaaaaa-bbbbbbbbbb-ccccc-50be3cfe432d9405-s-ba5aecb3de71d779",
+	"type=gha,mode=min,scope=aaaaaaaaaa-bbbbbbbbbb-ccccc-50be3cfe432d9405-${CACHE_SCOPE:-unscoped}-s-ba5aecb3de71d779",
 ]
 
 // Every synthetic rides the same emitter; each is pinned so a change that stops
