@@ -1465,9 +1465,9 @@ _copyLine: {
 	// secrets. additional_contexts wires the COPY --from refs each stage needs.
 	// =========================================================================
 
-	// _xbakeCache: a synthetic's x-bake cache block — a project-qualified,
-	// length-bounded tag (so each synthetic under a shared scope is distinct) at
-	// the caller's cache-to mode.
+	// _xbakeCache: a synthetic's x-bake cache block — a project-qualified tag (so
+	// each synthetic under a shared scope is distinct) at the caller's cache-to
+	// mode. #bakeCacheRefs bounds the tag's length.
 	_xbakeCache: X={
 		svc:  string
 		mode: *"min" | "max"
@@ -1475,12 +1475,15 @@ _copyLine: {
 			if G.project.bake != _|_ {
 				let _r = (#bakeCacheRefs & {
 					c:    G.project.bake.cache
-					t:    (#cacheTagSeg & {in: X.svc, scope: G.project.bake.cache.scope}).out
+					t:    X.svc
 					mode: X.mode
 				})
-				"x-bake": {
-					if len(_r.from) > 0 {"cache-from": _r.from}
-					if len(_r.to) > 0 {"cache-to": _r.to}
+				// No refs, no key: a contentless `x-bake` has no consumer.
+				if len(_r.from) > 0 || len(_r.to) > 0 {
+					"x-bake": {
+						if len(_r.from) > 0 {"cache-from": _r.from}
+						if len(_r.to) > 0 {"cache-to": _r.to}
+					}
 				}
 			}
 		}

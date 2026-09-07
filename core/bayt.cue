@@ -874,24 +874,35 @@ noop: #cmd & {
 // tag from #project.bake.cache sugar. Shared by the per-target loop and
 // the synthetic _srcs/_outs emitters so a target and its synthetics get
 // identical refs differing only by the tag (siblings never clobber each
-// other). The tag-length guard must stay at each call site: a hidden
-// guard in this let-bound helper is not validated.
+// other).
 // =============================================================================
 #bakeCacheRefs: X={
 	c: _ // #project.bake.cache sugar
 	t: string
+	// An unset optional cannot be referenced, so the arms select on a presence
+	// probe: iterating a struct yields regular fields only, so an omitted `type`
+	// falls through. A default on #bake.cache would read the same and emit
+	// `type` into every per-target block.
+	_type: [for k, v in X.c if k == "type" {v}, "none"][0]
+	// Keyed on the type, not on `scope`: passthrough carries no scope, while a
+	// sugar type that omits one must still report `scope` rather than a name the
+	// author never wrote. `_ct_direct` guards the shape that needs the guard.
+	if X._type != "none" {
+		_scope: (#cacheTagScope & {in: X.c.scope}).out
+		_seg:   (#cacheTagSeg & {in: X.t, scope: X.c.scope}).out
+	}
 	// cache-to mode. Use "min": bayt models the full dependency graph, so min
 	// exports every modelled stage. Use "max" only for local dependencies bayt
 	// cannot see — an intermediate stage that is not its own modelled target.
 	mode: *"min" | "max"
 	from: [
 		if len(X.c.from) > 0 {X.c.from},
-		if X.c.type == _|_ {[]},
-		if X.c.type == "gha" {[
-			"type=gha,scope=main-\(X.t)",
-			"type=gha,scope=\(X.c.scope)-\(X.t)",
+		if X._type == "none" {[]},
+		if X._type == "gha" {[
+			"type=gha,scope=main-\(X._seg)",
+			"type=gha,scope=\(X._scope)-\(X._seg)",
 		]},
-		if X.c.type == "registry" {[
+		if X._type == "registry" {[
 			// CACHE_SCOPE — branch + builder identity (engine, frontend,
 			// platform) of whichever builder runs THIS bake, composed
 			// host-side by sayt (dind.nu for local builders, the sayt/depot
@@ -903,42 +914,72 @@ noop: #cmd & {
 			// main's writes. The `unscoped` default quarantines invocations
 			// outside the sayt env plumbing — they collide only with each
 			// other, and mismatched reads degrade to graceful chain-ID misses.
-			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE:-unscoped}-\(X.t)",
-			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(X.t)",
+			"type=registry,ref=\(X.c.registry):\(X._scope)-${CACHE_SCOPE:-unscoped}-\(X._seg)",
+			"type=registry,ref=\(X.c.registry):\(X._scope)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(X._seg)",
 		]},
 	][0]
 	to: [
 		if len(X.c.to) > 0 {X.c.to},
-		if X.c.type == _|_ {[]},
-		if X.c.type == "gha" {[
-			"type=gha,mode=\(X.mode),scope=\(X.c.scope)-\(X.t)",
+		if X._type == "none" {[]},
+		if X._type == "gha" {[
+			"type=gha,mode=\(X.mode),scope=\(X._scope)-\(X._seg)",
 		]},
-		if X.c.type == "registry" {[
+		if X._type == "registry" {[
 			// zstd pays on the import side: a cache blob is written once and
 			// re-imported by every later build. It can only be set here —
 			// buildx `--set '*.cache-to=…'` replaces the whole value, so
 			// appending downstream would mean restating the
 			// scope-interpolated ref.
-			"type=registry,ref=\(X.c.registry):\(X.c.scope)-${CACHE_SCOPE:-unscoped}-\(X.t),mode=\(X.mode),image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3",
+			"type=registry,ref=\(X.c.registry):\(X._scope)-${CACHE_SCOPE:-unscoped}-\(X._seg),mode=\(X.mode),image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3",
 		]},
 	][0]
 }
 
-// #cacheTagSeg bounds segment `t` so the full `<scope>-${CACHE_SCOPE}-<t>` tag
-// stays under Docker's 128-char cap. CACHE_SCOPE is host-bounded to ≤64, so the
-// budget is 62 − len(scope). Over budget, collapse to a budget-filling name
-// prefix + 8 bytes (16 hex) of the full name's sha256 for uniqueness — keeping
-// as much of the readable name as fits rather than truncating hard.
-#cacheTagSeg: X={
-	in:     string
-	scope:  string
-	_max:   62 - len(X.scope)
-	_hash:  16 // hex chars = 8 bytes of sha256
-	_slug:  X._max - 1 - X._hash
+// Docker caps a tag at 128 chars. A registry cache tag is
+// `<scope>-${CACHE_SCOPE}-<seg>` and CACHE_SCOPE is host-bounded to ≤64, so
+// scope and segment share 128 − 64 − 2 separators = 62 chars.
+_cacheTagBudget: 62
+
+// Hex chars of sha256 kept when a name is collapsed. 16 hex = 8 bytes, so
+// distinct names never land on the same cache manifest.
+_cacheTagHash: 16
+
+// Splitting the budget leaves every segment `_cacheTagHash + 2` chars — one
+// readable char, a separator, and the hash — so #cacheTagFit's slice stays
+// non-negative for any scope in the OCI tag charset.
+_cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
+
+// #cacheTagFit bounds `in` to `max` chars, idempotently — a name already within
+// budget passes through, which is what lets independent call sites apply it
+// without agreeing on who goes first. Over budget the hash is of the *full*
+// name, so a collapsed name stays distinct from the siblings it shares a
+// readable prefix with.
+#cacheTagFit: X={
+	in: string
+	// len() counts bytes and SliceRunes counts runes, so outside the tag charset
+	// the budget can go negative. This turns that slice into a diagnosis.
+	max: int & >=(_cacheTagHash + 2)
+	_slug: X.max - 1 - _cacheTagHash
 	out: [
-		if len(X.in) <= X._max {X.in},
-		strings.SliceRunes(X.in, 0, X._slug) + "-" + strings.SliceRunes(hex.Encode(sha256.Sum256(X.in)), 0, X._hash),
+		if len(X.in) <= X.max {X.in},
+		strings.SliceRunes(X.in, 0, X._slug) + "-" + strings.SliceRunes(hex.Encode(sha256.Sum256(X.in)), 0, _cacheTagHash),
 	][0]
+}
+
+// Callers derive `bake.cache.scope` from project directories, so a nested path
+// plus a cache-busting suffix clears the budget without looking unusual. bayt
+// owns the 128-char invariant, so it bounds what it is handed.
+#cacheTagScope: X={
+	in:  string
+	out: (#cacheTagFit & {in: X.in, max: _cacheScopeMax}).out
+}
+
+// Bounds `scope` itself rather than trusting the caller to, so the budget a
+// segment is measured against and the scope actually emitted cannot disagree.
+#cacheTagSeg: X={
+	in:    string
+	scope: string
+	out:   (#cacheTagFit & {in: X.in, max: _cacheTagBudget - len((#cacheTagScope & {in: X.scope}).out)}).out
 }
 
 // =============================================================================
@@ -1127,6 +1168,10 @@ noop: #cmd & {
 // #project — a named group of targets sharing toolchain activation.
 // =============================================================================
 
+// Reserved target names, as one pattern so the rule and reserved_names_check
+// cannot drift apart. Documented at #project.targets, where it is applied.
+_reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
+
 #project: P={
 	// Relative to monorepo root; copybara-friendly. Primary identity
 	// — `name` defaults from `dir` via slash→underscore (with the
@@ -1183,9 +1228,17 @@ noop: #cmd & {
 	//   - anything ending in `_bayt`, `_srcs`, or `_outs`
 	//     (collides with file-name + service-name pattern of synthetics)
 	// Names with incidental endings (e.g. `playbayt`, `outside`) are
-	// allowed — only the underscore-suffix forms are reserved.
+	// allowed — only the underscore-suffix forms are reserved. Checked on the
+	// project, not on the target: CUE reports every arm of an empty
+	// disjunction, so a violation of this inside the `| null` below would lead
+	// with the mismatch against `null` and name neither the rule nor the key.
+	_reservedNames: {
+		for Name, _ in P.targets {
+			(Name): Name & !~_reservedNamePattern
+		}
+	}
 	targets: [Name=string]: (#target & {
-		name:    Name & !~"^bayt$|_(srcs|outs|bayt)$"
+		name:    Name
 		project: P.name
 		dir:     P.dir
 		// Compose per-target cache strings keyed by this target's name
@@ -1199,15 +1252,6 @@ noop: #cmd & {
 		if P.bake != _|_ {
 			let _t = Name
 			let _c = P.bake.cache
-			// Guard the registry tag length at generation. The tag is
-			// `<scope>-${CACHE_SCOPE}-<_t>`; CACHE_SCOPE is host-bounded to
-			// ≤64 chars (sayt dind.nu / sayt-depot action), so scope+_t must
-			// fit the remaining budget or the build hits Docker's 128-char
-			// tag cap. Shorten bake.cache.scope or the target name if this
-			// fails generation.
-			if _c.type == "registry" {
-				_cacheTagBudgetOK: true & (len(_c.scope)+len(_t)+66 <= 128)
-			}
 			let _refs = (#bakeCacheRefs & {c: _c, t: _t})
 			bake: cache: {
 				from: _refs.from
@@ -1218,6 +1262,7 @@ noop: #cmd & {
 	// Nulling a target is how a consumer opts out, so never author one inside a
 	// defaulted disjunction: whichever side the default sits on, a target that
 	// fails a check here drops to the null disjunct and reads as deliberately
-	// absent rather than failing generation.
+	// absent rather than failing generation. Keep checks bayt owns at this level
+	// out of the disjunction either way — see `_reservedNames`.
 }
 

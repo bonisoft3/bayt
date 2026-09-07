@@ -62,6 +62,21 @@ def dedup-suite []: nothing -> int {
 	}
 }
 
+# Non-zero is not enough when the point of a rule is the error it names: an
+# unrelated break in the fixture keeps a bare eval-fail green while the
+# message regresses to something that locates nothing.
+def eval-fail-msg [label: string, files: list<string>, msg: string]: nothing -> int {
+	let r = (do { ^cue eval ...$files } | complete)
+	if $r.exit_code != 0 and ($r.stderr | str contains $msg) {
+		print $"  PASS  ($label) exit=($r.exit_code) as expected"
+		0
+	} else {
+		print $"  FAIL  ($label) exit=($r.exit_code), stderr lacks ($msg)"
+		print $r.stderr
+		1
+	}
+}
+
 def main [] {
 	# Check files use the `_check.cue` suffix (not `_test.cue`) because
 	# Package dirs, not file lists — new gen_*/_check files join the
@@ -87,6 +102,8 @@ def main [] {
 	let neg_then_multiline = ["./tests/_negative_then_multiline/"]
 	let neg_unpinned = ["./tests/_negative_unpinned_zypper/"]
 	let neg_unpinned_lock = ["./tests/_negative_unpinned_lock/"]
+	let neg_reserved = ["./tests/_negative_reserved_name/"]
+	let neg_nonascii = ["./tests/_negative_nonascii_scope/"]
 	let pos_ci_srcs = ["./tests/_positive_ci_srcs/"]
 	# Consumer-side proof that a distros fragment unifies into both the
 	# preamble arm and #cmd.dockerfile, the way a project composes it.
@@ -110,6 +127,8 @@ def main [] {
 	$failed = $failed + (eval-fail "a multi-line `then` entry must fail" $neg_then_multiline)
 	$failed = $failed + (eval-fail "an unpinned zypper package must fail" $neg_unpinned)
 	$failed = $failed + (eval-fail "an unpinned zypper lock entry must fail" $neg_unpinned_lock)
+	$failed = $failed + (eval-fail-msg "a target name colliding with a synthetic must fail, naming the key" $neg_reserved "_reservedNames.thing_srcs")
+	$failed = $failed + (eval-fail-msg "a scope outside the tag charset must hit the budget bound, not SliceRunes" $neg_nonascii "out of bound >=18")
 
 	if $failed > 0 {
 		print $"($failed) failure\(s\)"
