@@ -417,7 +417,7 @@ app + its always-on infra); everything else — build/setup stages and `manual`
 harnesses — sits at `scale: 0`, present so `service:` build contexts resolve but
 running no container. Keeping harnesses at `scale: 0` (rather than behind a
 profile) is what lets `depends_on`/context edges onto them resolve with no
-`--profile`; the verified gotchas are in DEVELOPING.md.
+`--profile`; the measurements behind it are in CONTRIBUTING.md.
 
 The `:outs` interface is opt-in per dep edge (`deps: [":foo:outs"]`), not
 inferred from a target's role. A target in this group ships an image rather

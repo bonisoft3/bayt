@@ -595,7 +595,7 @@ noop: #cmd & {
 	//     name. Set on launch and integrate.
 	//   manual — a harness kept off the bare-`up` stack; reached by targeting
 	//     its root alias (`docker compose up <n>`).
-	// See DEVELOPING.md. Emission in gen_compose (scale gate / closure).
+	// See CONTRIBUTING.md. Emission in gen_compose (scale gate / closure).
 	up:     *false | bool
 	manual: *false | bool
 

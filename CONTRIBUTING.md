@@ -1,9 +1,9 @@
-# Developing bayt
+# Contributing to bayt
 
-Contributor guide for the generator itself — the model behind the emitted
-`.bayt/` files and, more importantly, the **compose behaviors that will bite you**
-if you touch the runtime emission. README.md is the user-facing pitch; DESIGN.md
-is the architecture/rationale; this is "what's actually true and what breaks."
+For changing the generator itself: the model behind the emitted `.bayt/` files,
+why the runtime emission has the shape it does, and what validates a change.
+`README.md` is the user-facing pitch and `DESIGN.md` is the architecture and
+rationale; this is the working guide.
 
 ## Target lifecycle flags
 
@@ -48,10 +48,13 @@ synthetics, and `manual` harnesses — is `scale: 0`, present so `service:`
 contexts resolve. A `manual` harness is reached by targeting its root alias
 (`docker compose up integrate`).
 
-## Compose gotchas (empirically verified — do not "fix" without re-testing)
+## Why the scale gate, and not profiles
 
-The load-bearing facts behind the scale-gate design, all reproduced with
-`docker compose` directly.
+The bring-up model above looks over-engineered until you know what compose
+actually does. Each of these was reproduced directly with `docker compose`, and
+together they are the reason a `manual` harness is `scale: 0` rather than
+profiled. Re-measure before changing any of them — the CUE suite cannot see
+compose behaviour at all.
 
 1. **A profiled service is dropped from a profile-less `config`/`up`**, so any
    non-profiled service that `depends_on` it — or build-context-refs it via
@@ -100,15 +103,16 @@ When attributing cost, ablate. CUE evaluates the whole render eagerly, so
 `cue export -e <sub-expression>` does **not** prune and every sub-expression
 times the same. `BAYT_TIMING=1` breaks generate into scan / per-level phases.
 
-## When you touch the runtime emission
+## Validating a change to the runtime emission
 
-- Changing the scale gate, the closures, or the federation root: re-read the
-  gotchas above, then validate with **`sayt integrate`** on a real project (the
-  dindbox cascade), not just `bayt_test` — compose behavior is invisible to the
-  CUE suite.
-- Pick that project for **cross-project deps**. A single-project graph exercises
-  none of the in-layer fragment resolution, so it passes changes that break
-  every federated project.
+The CUE suite proves the emitter agrees with itself; it says nothing about what
+compose then does with the output. So a change to the scale gate, the closures
+or the federation root is validated with **`sayt integrate`** on a real project
+— the dindbox cascade — and not by `bayt_test` alone.
+
+Pick a project with **cross-project deps**. A single-project graph exercises
+none of the in-layer fragment resolution, which is how a change can pass
+locally and break every federated project.
 
 ## Test layout
 
