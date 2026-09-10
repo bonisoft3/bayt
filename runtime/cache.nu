@@ -330,7 +330,7 @@ def local-similar [current: record]: nothing -> any {
 # ============================================================================
 # buchgr/bazel-remote HTTP cache backend (pure nushell, no curl/tar)
 #
-# Split storage; see DESIGN.md's cache section for the rationale.
+# Split storage; the rationale is docs/2026-04-20-three-tier-cache.md.
 #   /cas/<sha256>  one blob per payload file, addressed by its content
 #   /ac/<key>      the entry: JSON [{path, size, sha256, exec}]
 #

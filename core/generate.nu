@@ -323,7 +323,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 
 # emit-depot-yaml writes <proj>/.bayt/depot.yaml: the integration graph
 # flattened by `docker compose config --no-interpolate`, so ${VARS} stay literal
-# for bake to resolve in CI (DESIGN.md on why compose, not bake). compose
+# for bake to resolve in CI. compose
 # absolutizes contexts and emits `service:` refs, so rewrite to
 # repo-root-relative and `service:X` -> `target:X` — depot bake stats a
 # `service:` context as a path. Needs docker; hence the opt-in.

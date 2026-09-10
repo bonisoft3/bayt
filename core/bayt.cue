@@ -1,5 +1,5 @@
 // Package bayt is the CUE DSL for cross-format build targets.
-// See docs/plans/2026-03-10-bazel-dsl-design.md for the full design.
+// What a target may contain is ../SPEC.md; why it has that shape is ../docs/.
 //
 // A #target describes a build unit: portable action (srcs/outs/deps/cmd)
 // plus optional output-file-named blocks (dockerfile, compose, taskfile,

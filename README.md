@@ -435,7 +435,7 @@ The **bayt-dev-loop** agent can drive the generate → build → verify cycle fo
 ```
 plugins/bayt/
 ├── README.md              ← this file
-├── DESIGN.md              ← full design doc (rationale, cross-cutting concerns)
+├── SPEC.md                ← what a bayt.cue may contain, field by field
 ├── bayt / bayt.nu         ← CLI entry (generate / fingerprint / cache / where)
 ├── bin/                   ← launchers (`bayt` sh + `bayt.ps1`) for PATH use
 ├── core/                  ← CUE package `bayt`: schema + emitters

@@ -110,7 +110,7 @@ import (
 	// <project.dir>/.bayt/depot.hcl and baked by the depot build phase.
 	// Its own file, never bake.hcl: that file's `target "release"` binds
 	// tags/output onto every matrix member by name, so a caller wanting
-	// only this selection would strip them (rationale in DESIGN.md).
+	// only this selection would strip them (rationale in SPEC.md).
 	if len(_rtGroupNames) > 0 {
 		depotHcl: """
 			group "\(_depotGroupName)" {

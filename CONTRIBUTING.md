@@ -2,8 +2,9 @@
 
 For changing the generator itself: the model behind the emitted `.bayt/` files,
 why the runtime emission has the shape it does, and what validates a change.
-`README.md` is the user-facing pitch and `DESIGN.md` is the architecture and
-rationale; this is the working guide.
+`README.md` is the user-facing pitch, `SPEC.md` states what a `bayt.cue` may
+contain, and `docs/` argues the decisions behind that shape; this is the
+working guide.
 
 ## Target lifecycle flags
 
@@ -40,7 +41,7 @@ producer (gotcha 2 below) — take it only when the consumer needs it running.
 
 ## The runtime bring-up model
 
-DESIGN.md describes the roles and what bare `docker compose up` starts. The
+`SPEC.md` describes the roles and what bare `docker compose up` starts. The
 invariant to hold when touching the scale gate (gen_compose.cue, guarded by
 D16): a container runs on bare `up` iff it declares a compose block and isn't
 `manual`. Everything else — build/setup stages, the `_srcs`/`_outs`/`bayt`
