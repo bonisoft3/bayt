@@ -151,7 +151,7 @@ def fail [builders: list<string>, work: string, msg: string, stderr: string] {
 }
 
 def main [] {
-  let id  = (random chars --length 10 | str downcase)
+  let id  = (random chars --length 10 | str lowercase)
   let bld = $"bayt-diamond-it-bk-($id)"
   let builders = [$bld]
 

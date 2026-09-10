@@ -147,7 +147,7 @@ def fail [reg_name: string, builders: list<string>, work: string, msg: string, s
 }
 
 def main [] {
-  let id = (random chars --length 10 | str downcase)
+  let id = (random chars --length 10 | str lowercase)
   let reg_name = $"bayt-cache-it-reg-($id)"
   let bk1 = $"bayt-cache-it-bk1-($id)"   # synthetic A's buildkit
   let bk2 = $"bayt-cache-it-bk2-($id)"   # synthetic B's buildkit (separate)

@@ -97,7 +97,7 @@ def two-builds [work: string, bld: string, clamp: string]: nothing -> list<strin
 }
 
 def main [] {
-  let id = (random chars --length 8 | str downcase)
+  let id = (random chars --length 8 | str lowercase)
   let work = (mktemp -d)
   "hello-a-b\n"    | save -f $"($work)/f.txt"
   "dep1-payload\n" | save -f $"($work)/d1.txt"

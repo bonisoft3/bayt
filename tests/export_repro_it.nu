@@ -75,7 +75,7 @@ def build-digest [
   (with-env {SOURCE_DATE_EPOCH: "0"} {
     (^docker buildx build --builder $bld --no-cache
       -f $"($work)/Dockerfile" --target app_launch
-      --provenance $"($prov == '1' | into string | str downcase)"
+      --provenance $"($prov == '1' | into string | str lowercase)"
       --sbom=false
       --output $"type=oci,dest=($out),tar=false($attrs)" $work) o> /dev/null e> /dev/null
   })
@@ -92,7 +92,7 @@ def two-builds [work: string, bld: string, cell: string, prov: string, rwts: str
 }
 
 def main [] {
-  let id = (random chars --length 8 | str downcase)
+  let id = (random chars --length 8 | str lowercase)
   let work = (mktemp -d)
   "app-payload\n" | save -f $"($work)/src.txt"
   (dockerfile) | save -f $"($work)/Dockerfile"
