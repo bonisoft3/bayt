@@ -243,13 +243,10 @@ def make-fake-cache [n: int, bytes_each: int]: nothing -> path {
 		let entry = ($root | path join "ab" | path join $hash)
 		mkdir ($entry | path join "outs")
 		let blob = ($entry | path join "outs" | path join "blob")
-		# `truncate -s` is portable enough; macOS ships it via brew or
-		# coreutils, BSD also has it. Falls back to dd.
-		do { ^truncate -s $bytes_each $blob } | complete | if $in.exit_code != 0 {
-			^dd if=/dev/zero of=$blob bs=1 count=$bytes_each err> /dev/null
-		}
-		# Older index → older mtime. macOS `touch -t YYYYMMDDhhmm`.
-		^touch -t $"2025010($i)0000" $entry
+		let stamp = $"2025-01-0($i) 00:00:00"
+		0..<$bytes_each | each { |_| bytes build 0x00 } | bytes collect | save -f $blob
+		# Older index → older mtime.
+		touch --modified --date $stamp $entry
 	}
 	$root
 }
