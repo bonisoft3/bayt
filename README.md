@@ -51,15 +51,13 @@ Start with one target. Here's a gradle service:
 // services/my-service/bayt.cue
 package my_service
 
-import (
-    bayt "github.com/bonisoft3/bayt/core:bayt"
-    sayt "github.com/bonisoft3/bayt/stacks/sayt"
-)
+import sayt "github.com/bonisoft3/bayt/stacks/sayt"
 
 _proj: sayt.gradle & {
     dir: "services/my-service"
     targets: {
-        "release": skaffold: image: "gcr.io/proj/my-service"
+        "launch": dockerfile: from: ref: ":build"
+        "release": bake: image: "gcr.io/proj/my-service"
     }
 }
 
