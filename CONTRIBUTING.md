@@ -156,6 +156,8 @@ says what not to change.
 ### Cutting a tag
 
 Tags are prefixed per component: `plugins/bayt/vX.Y.Z`,
-`plugins/bayt/runtime/vX.Y.Z`. Tag the merge commit, and only once its SHA
-appears downstream as a `GitOrigin-RevId:` trailer — CI going green is not the
-signal.
+`plugins/bayt/runtime/vX.Y.Z`. Tag the merge commit; nothing has to be synced
+first, because `propagate-tag` publishes the component to its mirror before
+looking the commit up there. Copybara replays a bounded batch per run, so a
+mirror far behind may not reach the tagged commit in one — the lookup is what
+reports it, and `sync.yml` run again closes the gap.
