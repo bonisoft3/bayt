@@ -740,3 +740,42 @@ _d23_parents_plain: (_copyLine & {c: {
 _d23_optout_plain: (_copyLine & {c: {
 	link: false, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
 }}).out & "COPY --from=img /bin/busybox /bin/busybox"
+
+// --- D24: a dependency waited on for health carries `restart: true`, so
+// the dependent is recreated inside the `up` that recreates it and
+// `--wait` waits on its new health. Stated per entry: a `service_started`
+// entry is untouched, and an explicit `restart` on the entry wins.
+_d24: #project & {
+	name: "d24"
+	dir:  "d24"
+	targets: {
+		"db": {
+			cmd: "builtin": null
+			dockerfile: busybox
+			compose: up: true
+		}
+		"bus": {
+			cmd: "builtin": null
+			dockerfile: busybox
+			compose: up: true
+		}
+		"app": {
+			cmd: "builtin": null
+			dockerfile: busybox
+			compose: {
+				up: true
+				depends_on: {
+					"d24-db":  condition: "service_healthy"
+					"d24-bus": condition: "service_started"
+					"d24-app-cache": {condition: "service_healthy", restart: false}
+				}
+			}
+		}
+	}
+}
+_d24_dc: (#dockerComposeGen & {project: _d24, depManifests: {}})
+_d24_dc: compose: files: app: services: "d24-app": depends_on: {
+	"d24-db":        {condition: "service_healthy", restart: true}
+	"d24-bus":       {condition: "service_started"}
+	"d24-app-cache": {condition: "service_healthy", restart: false}
+}

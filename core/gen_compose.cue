@@ -1399,7 +1399,21 @@ _copyLine: {
 				if r.env_file != _|_ {env_file: r.env_file}
 				if len(r.ports) > 0 {ports: r.ports}
 				if len(r.volumes) > 0 {volumes: r.volumes}
-				if len(r.depends_on) > 0 {depends_on: r.depends_on}
+				// A dependency waited on for health is one the dependent is bound to:
+				// recreated inside the `up` that recreates it, so `--wait` waits on
+				// the dependent's new health rather than the health it had. An
+				// explicit `restart` on the entry wins.
+				if len(r.depends_on) > 0 {
+					depends_on: {
+						for k, v in r.depends_on {
+							// Nested guards, not `&&` (CUE doesn't short-circuit).
+							(k): [
+								if v.condition != _|_ if v.condition == "service_healthy" if v.restart == _|_ {v & {restart: true}},
+								v,
+							][0]
+						}
+					}
+				}
 				if r.network_mode != _|_ {network_mode: r.network_mode}
 				if r.networks != _|_ {networks: r.networks}
 				if r.extra_hosts != _|_ {extra_hosts: r.extra_hosts}
