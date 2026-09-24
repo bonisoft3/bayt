@@ -1464,25 +1464,15 @@ _copyLine: {
 			// .bayt/ — wrong both standalone and when an outer
 			// compose.yaml extends this service. `../<glob>` resolves
 			// to the project root in both cases (build context is the
-			// same `..`).
 			if t.hmr != _|_ {
-<<<<<<< HEAD
-				let _hmrWatch = list.Concat([
-=======
 				let _watches = list.Concat([
->>>>>>> 78d17024f (feat(pronto,omnishell): integrate M-SSR zero-diff hydration, resilient storage, and offline service worker)
 					[for g in t.hmr.code    {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
 					[for g in t.hmr.configs {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
 					[for g in t.hmr.assets  {let b = (_hmrBase & {"g": g}).out, {action: "sync+restart", path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
 					[for g in t.hmr.tools   {let b = (_hmrBase & {"g": g}).out, {action: "rebuild",      path: "../\(b)"}}],
 				])
-<<<<<<< HEAD
-				if len(_hmrWatch) > 0 {
-					develop: watch: _hmrWatch
-=======
 				if len(_watches) > 0 {
 					develop: watch: _watches
->>>>>>> 78d17024f (feat(pronto,omnishell): integrate M-SSR zero-diff hydration, resilient storage, and offline service worker)
 				}
 			}
 		}
