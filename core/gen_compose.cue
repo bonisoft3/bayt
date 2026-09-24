@@ -1434,7 +1434,10 @@ _copyLine: {
 			}
 
 			if t.compose != _|_ && t.compose.develop != _|_ {
-				develop: t.compose.develop
+				let _hasWatch = t.compose.develop.watch != _|_
+				if !_hasWatch || len(t.compose.develop.watch) > 0 {
+					develop: t.compose.develop
+				}
 			}
 
 			// HMR: derive compose.develop.watch entries from
@@ -1463,12 +1466,15 @@ _copyLine: {
 			// to the project root in both cases (build context is the
 			// same `..`).
 			if t.hmr != _|_ {
-				develop: watch: list.Concat([
+				let _hmrWatch = list.Concat([
 					[for g in t.hmr.code    {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
 					[for g in t.hmr.configs {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
 					[for g in t.hmr.assets  {let b = (_hmrBase & {"g": g}).out, {action: "sync+restart", path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
 					[for g in t.hmr.tools   {let b = (_hmrBase & {"g": g}).out, {action: "rebuild",      path: "../\(b)"}}],
 				])
+				if len(_hmrWatch) > 0 {
+					develop: watch: _hmrWatch
+				}
 			}
 		}
 	}

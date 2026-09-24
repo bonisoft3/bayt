@@ -779,3 +779,19 @@ _d24_dc: compose: files: app: services: "d24-app": depends_on: {
 	"d24-bus":       {condition: "service_started"}
 	"d24-app-cache": {condition: "service_healthy", restart: false}
 }
+
+// --- D25: empty develop.watch lists are omitted so Compose v5 schema
+// validation does not reject empty watch blocks.
+_d25: #project & {
+	name: "d25"
+	dir:  "d25"
+	targets: {
+		"launch": {
+			cmd: "builtin": do: "pnpm dev"
+			dockerfile: nubox
+			compose: develop: watch: []
+		}
+	}
+}
+_d25_dc: (#dockerComposeGen & {project: _d25, depManifests: {}})
+_d25_dc: compose: files: launch: services: "d25-launch": develop?: _|_
