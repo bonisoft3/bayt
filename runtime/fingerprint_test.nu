@@ -33,6 +33,7 @@ def main [] {
 
 	# stamp ops
 	test_write_then_check_matches
+	test_concurrent_stamp_writers
 	test_check_misses_when_content_changed
 	test_check_misses_when_stamp_missing
 	test_check_misses_when_outs_missing
@@ -62,6 +63,9 @@ def main [] {
 	test_bracket_glob_hashes_matching_file
 	test_bracket_glob_hashes_in_git_mode
 	test_check_tolerates_missing_optional_bracket_out
+
+	# file stat index
+	test_file_index_caching_and_invalidation
 
 	print "\nAll fingerprint.nu tests passed!"
 }
@@ -370,6 +374,27 @@ def test_docker_dump_has_extra_columns [] {
 
 # --- stamp ops ------------------------------------------------------
 
+# Writers racing on one stamp must all succeed. A target reached through
+# several dependents is stamped by several processes at once; with one fixed
+# temp name, one writer renames the temp away and the next finds it gone.
+def test_concurrent_stamp_writers [] {
+	print "test concurrent stamp writers..."
+	let tmp = (make-tmp)
+	"stable\n" | save -f ($tmp | path join "x.txt")
+	let stamp = ($tmp | path join "stamp.hash")
+	let runs = (1..16 | par-each { |_|
+		run-fp $tmp ["--stamp-file" $stamp "--update-stamp" "x.txt"]
+	})
+	let failed = ($runs | where exit != 0)
+	assert ($failed | is-empty) $"all writers should succeed, ($failed | length) failed: ($failed | first | get stderr? | default '')"
+	let c = (run-fp $tmp ["--stamp-file" $stamp "x.txt"])
+	assert ($c.exit == 0) "the stamp left behind should match"
+	let strays = (ls $tmp | where name =~ 'stamp\.hash\.' | length)
+	assert ($strays == 0) $"no temp files should be left behind, found ($strays)"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
 # Write then check round-trips successfully.
 def test_write_then_check_matches [] {
 	print "test stamp write then check matches..."
@@ -570,12 +595,12 @@ def test_no_paths_errors [] {
 def test_bracket_glob_hashes_matching_file [] {
 	print "test bracket glob hashes its matching file..."
 	let tmp = (make-tmp)
-	"tools-v1\n" | save -f ($tmp | path join "mise.toml")
+	"[tools]\n# v1\n" | save -f ($tmp | path join "mise.toml")
 	let r1 = (run-fp $tmp ["-q" "[m]ise.toml"])
 	assert ($r1.exit == 0) $"bracket glob should resolve: ($r1.stderr)"
 	let direct = (run-fp $tmp ["-q" "mise.toml"])
 	assert ($r1.stdout == $direct.stdout) "bracket glob should hash the same file as the literal"
-	"tools-v2\n" | save -f ($tmp | path join "mise.toml")
+	"[tools]\n# v2\n" | save -f ($tmp | path join "mise.toml")
 	let r2 = (run-fp $tmp ["-q" "[m]ise.toml"])
 	assert ($r1.stdout != $r2.stdout) "hash should change when the bracket-matched file changes"
 	rm -rf $tmp
@@ -588,7 +613,7 @@ def test_bracket_glob_hashes_matching_file [] {
 def test_bracket_glob_hashes_in_git_mode [] {
 	print "test bracket glob resolves through git pathspecs..."
 	let tmp = (make-tmp)
-	"tools\n" | save -f ($tmp | path join "mise.toml")
+	"[tools]\n" | save -f ($tmp | path join "mise.toml")
 	let init = (do {
 		cd $tmp
 		^git init -q
@@ -733,3 +758,33 @@ def test_manifest_spelling_does_not_change_the_hash [] {
 	rm -rf $tmp
 	print "  ok\n"
 }
+
+# The file index memoizes (mtime, size, hash). Unchanged files are served
+# from index without re-reading bytes; edits invalidate on mtime/size/content change.
+def test_file_index_caching_and_invalidation [] {
+	print "test index caches and invalidates on edit..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".task" "bayt")
+	"hello\n" | save -f ($tmp | path join "a.txt")
+	let r1 = (run-fp $tmp ["-q" "a.txt"])
+	assert ($r1.exit == 0) $"first run should succeed: ($r1.stderr)"
+	let idx_file = ($tmp | path join ".task" "bayt" "index")
+	assert ($idx_file | path exists) "index file should be created"
+	let idx = (open $idx_file | from json)
+	assert ("a.txt" in $idx) "a.txt should be indexed"
+	let expected_h1 = (open --raw ($tmp | path join "a.txt") | hash sha256)
+	let cached_hash = ($idx | get "a.txt" | get hash)
+	assert ($cached_hash == $expected_h1) "cached hash must match computed file hash"
+
+	sleep 50ms
+	"world!\n" | save -f ($tmp | path join "a.txt")
+	let expected_h2 = (open --raw ($tmp | path join "a.txt") | hash sha256)
+	let r2 = (run-fp $tmp ["-q" "a.txt"])
+	assert ($r2.exit == 0) $"second run should succeed: ($r2.stderr)"
+	assert ($r1.stdout != $r2.stdout) "hash must change when file is modified"
+	let idx2 = (open $idx_file | from json)
+	assert (($idx2 | get "a.txt" | get hash) == $expected_h2) "index must be updated with new file hash"
+	rm -rf $tmp
+	print "  ok\n"
+}
+

@@ -281,8 +281,8 @@ def walk [
 
   let descended = ($entries | where type == dir | each { |d|
     let p = if ($rel | is-empty) { $d.name } else { $"($rel)/($d.name)" }
-    # `.git` itself is the boundary, not content.
-    if $d.name == ".git" { [] } else if (ignored? $p true $rules) { [] } else {
+    # `.git` and `.task` are tool boundaries, not project source content.
+    if $d.name == ".git" or $d.name == ".task" { [] } else if (ignored? $p true $rules) { [] } else {
       walk $"($dir)/($d.name)" $rules $p $flavor
     }
   } | flatten)

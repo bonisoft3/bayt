@@ -19,6 +19,10 @@ def --wrapped "main cache run" [
 	cache main run --manifest $manifest --cmd $cmd --full=$full --similar=$similar -- ...$inner
 }
 
+def "main cache check" [--manifest: string, --stamp-file: string] {
+	cache main check --manifest $manifest --stamp-file $stamp_file
+}
+
 def "main cache gc" [--max-bytes: int = 10737418240] {
 	cache main gc --max-bytes $max_bytes
 }

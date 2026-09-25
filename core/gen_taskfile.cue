@@ -228,6 +228,13 @@ import (
 							status: [(_fingerprint & {"t": t, mode: "check"}).out]
 						}
 
+						// go-task evaluates `if:` before the deps, so a hit
+						// skips them too. Exit contract at cache.nu's
+						// `main check`.
+						if t.taskfile.incremental && t.cache.full && len(_taskCmds) == 1 {
+							if: "\(_baytPath) cache check --manifest '{{.TASKFILE_DIR}}/bayt.\(t.name).json' --stamp-file .task/bayt/\(t.name).hash; [ $? -ne 10 ]"
+						}
+
 						if len(_taskCmds) == 1 {
 							let _c = _taskCmds[0]
 							if t.taskfile.incremental {
@@ -250,9 +257,7 @@ import (
 							}
 						}
 
-						if t.taskfile.run != _|_ && t.taskfile.run == "always" {
-							run: "always"
-						}
+						run: t.taskfile.run
 						if len(t.taskfile.preconditions) > 0 {
 							preconditions: t.taskfile.preconditions
 						}
@@ -282,9 +287,7 @@ import (
 								{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": t, mode: "stamp"}).out){{end}}"},
 							]
 						}
-						if t.taskfile.run != _|_ && t.taskfile.run == "always" {
-							run: "always"
-						}
+						run: t.taskfile.run
 						if len(t.taskfile.preconditions) > 0 {
 							preconditions: t.taskfile.preconditions
 						}
@@ -345,15 +348,15 @@ import (
 		// (`../../<dep>/.task/bayt/<t>.hash`); containers materialize
 		// them via COPY --from, but on the host only these runners
 		// produce and refresh them. One runner per cross-project
-		// chainedDep, union over all targets: living here (not in the
-		// per-target files) lets `run: once` dedupe a dep shared by
-		// build and deps within one graph walk. `task -t` into the
-		// dep's own launch root sidesteps the nested-include `::`
-		// limitation; `{{.TASK_EXE}}` pins the running task binary.
-		// The workspace-root `.git` probe skips runners in containers
-		// (images COPY no .git; the COPY chain is the stamp authority
-		// there). Recursion terminates at projects without cross deps;
-		// bayt's cycle checks forbid dep cycles.
+		// chainedDep, union over all targets, each a dep on the target
+		// through the dep project's include below — so the whole
+		// monorepo is one go-task process, and `run: once` runs a target
+		// reached through several dependents once. A runner is skipped
+		// where its dep project has no Taskfile.yml (a container COPYs
+		// siblings' outs, never their Taskfile.yml); cache.nu refuses to run a
+		// target whose cross deps left no outs, so a runner skipped
+		// where it should not have been fails rather than building on
+		// nothing.
 		let _rootRelFromProject = strings.Repeat("../", G._m._depth)
 		let _crossChain = {
 			for _, t in _emit
@@ -368,11 +371,12 @@ import (
 			tasks: {
 				for k, d in _crossChain {
 					let _depPath = [if d.dir != "" {"\(d.dir)/"}, ""][0]
+					let _depName = [if d.dir == "" {"workspaceroot"}, strings.Replace(d.dir, "/", "_", -1)][0]
 					(k): {
 						internal: true
 						run:      "once"
-						status: ["test ! -e \(_rootRelFromProject).git"]
-						cmds: ["{{.TASK_EXE}} -t \(_rootRelFromProject)\(_depPath).bayt/Taskfile.yml bayt:\(d.name)"]
+						if:       "test -f \(_rootRelFromProject)\(_depPath)Taskfile.yml"
+						deps: ["\(_depName):bayt:\(d.name)"]
 					}
 				}
 			}

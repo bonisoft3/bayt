@@ -30,8 +30,8 @@
 # See plugins/bayt/README.md for design rationale and the two-layer
 # cache story (cache.nu per-target + tool-native per-task).
 
-use ./fingerprint.nu [compute-fingerprint, resolve-manifest]
-use ./tools.nu [run-oras]
+use ./fingerprint.nu [manifest-fingerprint, manifest-root, outs-present, resolve-manifest, write-stamp]
+use ./tools.nu [run-curl, run-oras]
 
 # ============================================================================
 # Similarity scoring (used by every backend's lookup path)
@@ -127,9 +127,21 @@ def glob-pat [base: path, pat: string]: nothing -> string {
 	($base | path join $pat) | str replace -a '\' '/'
 }
 
+# Excludes are project-relative, but nu's `glob --exclude` matches relative to
+# the pattern's literal prefix (`build/` in `build/**/*`). Each is rebased onto
+# that prefix; one rooted elsewhere cannot match under it and is dropped, and a
+# wildcard-led one stands as written.
+def rebase-excludes [g: string, excludes: list<string>]: nothing -> list<string> {
+	let lit = ($g | split row "/" | take while { |s| not ($s =~ '[*?\[{]') })
+	let prefix = ($lit | each { |s| $s + "/" } | str join)
+	$excludes | each { |e|
+		if ($prefix | is-empty) or ($e =~ '^[*?\[{]') { $e } else if ($e | str starts-with $prefix) { $e | str substring ($prefix | str length).. } else { null }
+	} | compact
+}
+
 def expand-globs [globs: list<string>, excludes: list<string>]: nothing -> list<string> {
 	$globs
-	| each { |g| try { glob $g --no-dir --exclude $excludes } catch { [] } }
+	| each { |g| try { glob $g --no-dir --exclude (rebase-excludes $g $excludes) } catch { [] } }
 	| flatten
 	| where { |p| ($p | path type) == "file" }
 }
@@ -368,17 +380,74 @@ def is-exec [f: path]: nothing -> bool {
 	(ls -l $f | first | get mode | str substring 0..<3 | str contains "x")
 }
 
-def bazel-blob-present [digest: string]: nothing -> bool {
-	try {
-		http head --headers (bazel-headers) $"(bazel-url)/cas/($digest)" | ignore
-		true
-	} catch { false }
+# The messages at the leaves of an error tree. par-each wraps a failure
+# in "Eval block failed with pipeline input", which names no cause.
+def error-leaves [d: record]: nothing -> string {
+	let inner = ($d.inner? | default [])
+	if ($inner | is-empty) { $d.msg } else { $inner | each { |i| error-leaves $i } | str join "; " }
+}
+
+# A value in curl's config syntax.
+def curl-quote [v: string]: nothing -> string {
+	$"\"($v | str replace -a '\' '\\' | str replace -a '"' '\"')\""
+}
+
+# One curl run for many transfers, multiplexed over HTTP/2. The config file
+# keeps the token out of argv, and curl does not forward it across a redirect
+# to another host.
+def bazel-curl [flags: list<string>, lines: list<string>]: nothing -> record {
+	let auth = (bazel-headers | transpose name value | each { |h| $"header = (curl-quote $"($h.name): ($h.value)")" })
+	let dir = (mktemp -d)
+	let cfg = ($dir | path join "curl.cfg")
+	$auth ++ $lines | str join "\n" | save -f $cfg
+	let res = (do { run-curl --parallel --parallel-max 64 --silent --show-error ...$flags --config $cfg } | complete)
+	rm -rf $dir
+	$res
+}
+
+def bazel-fetch [stage: string, rows: list<record>]: nothing -> nothing {
+	if ($rows | is-empty) { return }
+	let lines = ($rows | each { |r| [
+		$"url = (curl-quote $"(bazel-url)/cas/($r.sha256)")"
+		$"output = (curl-quote ($stage | path join $r.path))"
+	] } | flatten)
+	let res = (bazel-curl [--fail --location --create-dirs] $lines)
+	if $res.exit_code != 0 { error make { msg: $"cas fetch: ($res.stderr | str trim)" } }
+}
+
+# Uploads the blobs the CAS lacks: a HEAD pass finds them, since a blob left
+# by an earlier build is the common case, then a PUT pass sends them. HEAD
+# redirects stay unfollowed: a server that fronts object storage (depot)
+# answers a present blob with a 303 to a URL presigned for GET only, where a
+# HEAD draws 403. `upload-file` sends Content-Length, which bazel-remote's CAS
+# handler needs to verify the digest.
+def bazel-upload [cwd: string, rows: list<record>]: nothing -> nothing {
+	let blobs = ($rows | uniq-by sha256)
+	if ($blobs | is-empty) { return }
+	let sink = (if $nu.os-info.name == "windows" { "NUL" } else { "/dev/null" })
+	let probe = (bazel-curl [--head --write-out "%{http_code} %{url}\n"] ($blobs | each { |r| [
+		$"url = (curl-quote $"(bazel-url)/cas/($r.sha256)")"
+		$"output = (curl-quote $sink)"
+	] } | flatten))
+	if $probe.exit_code != 0 { error make { msg: $"cas probe: ($probe.stderr | str trim)" } }
+	let present = ($probe.stdout | lines | parse "{code} {url}"
+		| where { |l| ($l.code | into int) >= 200 and ($l.code | into int) < 400 }
+		| each { |l| $l.url | split row "/" | last })
+	let missing = ($blobs | where { |r| $r.sha256 not-in $present })
+	if ($missing | is-empty) { return }
+	let put = (bazel-curl [--fail] (["header = \"Content-Type: application/octet-stream\""] ++ ($missing | each { |r| [
+		$"url = (curl-quote $"(bazel-url)/cas/($r.sha256)")"
+		$"upload-file = (curl-quote ($cwd | path join $r.path))"
+	] } | flatten)))
+	if $put.exit_code != 0 { error make { msg: $"cas upload: ($put.stderr | str trim)" } }
 }
 
 def bazel-get [key: string]: nothing -> bool {
 	let body = try { http get --headers (bazel-headers) --raw $"(bazel-url)/ac/(bazel-ac-key $key)" } catch { return false }
 	if ($body | is-empty) { return false }
-	let rows = try { $body | decode utf-8 | from json } catch { return false }
+	# `http get --raw` yields a string for a text content-type and binary
+	# otherwise, and depot serves a small entry as text/plain.
+	let rows = try { $body | into binary | decode utf-8 | from json } catch { return false }
 	# nushell describes uniform records as `table<…>` and only the empty
 	# list as `list<any>`; an entry is legitimately either.
 	let shape = ($rows | describe)
@@ -402,14 +471,9 @@ def bazel-get [key: string]: nothing -> bool {
 	# arrived.
 	let stage = (mktemp -d)
 	let ok = try {
+		bazel-fetch $stage $missing
 		$missing | par-each { |r|
 			let tmp = ($stage | path join $r.path)
-			mkdir ($tmp | path dirname)
-			try {
-				http get --headers (bazel-headers) --raw $"(bazel-url)/cas/($r.sha256)" | save --raw -f $tmp
-			} catch { |e|
-				error make { msg: $"cas fetch ($r.sha256) for ($r.path): ($e.msg)" }
-			}
 			# bazel-remote rejects a blob whose stored size disagrees, but it
 			# fronts S3/GCS and proxies to other caches, and a short read from
 			# the chain behind it arrives as a valid response.
@@ -422,7 +486,7 @@ def bazel-get [key: string]: nothing -> bool {
 		} | ignore
 		true
 	} catch { |e|
-		print -e $"BAYT_CACHE warn: restore aborted, workspace untouched: ($e.msg)"
+		print -e $"BAYT_CACHE warn: restore aborted, workspace untouched: (error-leaves $e.details)"
 		false
 	}
 	if not $ok { rm -rf $stage; return false }
@@ -478,23 +542,7 @@ def bazel-put [key: string, outs_globs: list<string>, outs_exclude: list<string>
 	# Every blob before the entry, never the reverse: the entry is what
 	# makes the payload reachable, so publishing it first would expose a
 	# key whose blobs a concurrent reader cannot fetch.
-	#
-	# HEAD before PUT because an already-present blob is the common case
-	# across rebuilds, turning an upload into a round-trip.
-	#
-	# Bodies go positionally, never piped: a piped body streams with
-	# `Transfer-Encoding: chunked`, and bazel-remote's CAS handler needs the
-	# length upfront to verify the digest, answering 400 without it.
-	$rows | par-each { |r|
-		if not (bazel-blob-present $r.sha256) {
-			try {
-				(http put --headers (bazel-headers) --content-type "application/octet-stream"
-					$"(bazel-url)/cas/($r.sha256)" (open --raw ($cwd | path join $r.path)))
-			} catch { |e|
-				error make { msg: $"cas upload ($r.sha256) for ($r.path): ($e.msg)" }
-			}
-		}
-	} | ignore
+	bazel-upload $cwd $rows
 	(http put --headers (bazel-headers) --content-type "application/json"
 		$"(bazel-url)/ac/(bazel-ac-key $key)" ($rows | to json --raw))
 }
@@ -633,18 +681,49 @@ def run-cmd [cmd_args: list<string>]: nothing -> int {
 # Subcommands
 # ============================================================================
 
-# `cache.nu run` — restore on hit, run cmd (or skip if --skip), store
-# outs on success. Errors during restore or store are logged but never
-# fatal — a broken cache shouldn't block the build.
+# A cross-project dep's runner is skipped where that project has no `.bayt`
+# — right in a container, whose Dockerfile COPYs a dep's outs and never its
+# `.bayt`, and wrong anywhere else. Either way the dep's outs must be on disk
+# before this target runs, so a dep skipped where it should have built stops
+# here instead of this target building on nothing. Not a cache concern, so
+# BAYT_CACHE_ENABLED does not turn it off.
+def assert-cross-deps-built [manifest: string]: nothing -> nothing {
+	# An unreadable manifest is the bypass path's to report, not this check's.
+	# Nothing else is read: the case this exists for is a dep whose .bayt, and
+	# so whose manifest, is missing.
+	let m = try { open $manifest } catch { return }
+	let root = (manifest-root $manifest $m.dir)
+	let missing = ($m.chainedDeps? | default []
+		| where { |d| $d.dir != $m.dir and not ($d.name =~ "_(srcs|bayt)$") }
+		| each { |d|
+			let globs = ($d.outs?.globs? | default [] | where { |g| not ($g | str starts-with ".task/") })
+			$d | upsert outs.globs $globs
+		}
+		| where { |d| not ($d.outs.globs | is-empty) }
+		| where { |d|
+			let dir = ($root | path join $d.dir)
+			not (($dir | path exists) and (do { cd $dir; outs-present $d.outs.globs }))
+		})
+	if not ($missing | is-empty) {
+		let names = ($missing | each { |d| $"($d.dir):($d.name)" } | str join ", ")
+		error make { msg: $"cross deps left no outs: ($names). A dep is skipped where its project has no .bayt; if it should build here, that .bayt is missing." }
+	}
+}
+
+# `cache.nu run` — restore on hit, run cmd (or skip it under --full), store
+# outs on success. A failed lookup or restore degrades to a miss; a failed
+# store fails the target.
 export def --wrapped "main run" [
 	--manifest: string                        # path to .bayt/bayt.<verb>.json
 	--cmd: string = ""                        # optional cmd name within manifest's cmds list
 	--full                                    # on EXACT hit, skip cmd entirely (trust the restored outs)
 	--similar                                 # on EXACT miss, restore closest cached entry as warm starting state
-	...cmd_args: string                       # the cmd to execute (everything after `--`)
+	...cmd_args                               # untyped: a typed `...string` rejects a bare keyword arg (`true`/`false`/`null`) at parse time
 ] {
-	if not (cache-enabled) { exit (run-cmd $cmd_args) }
+	let cmd_args = ($cmd_args | each { into string })
 	if ($manifest | is-empty) { error make { msg: "cache.nu run: --manifest required" } }
+	assert-cross-deps-built $manifest
+	if not (cache-enabled) { exit (run-cmd $cmd_args) }
 
 	# Resolving the manifest + computing the key requires every input
 	# in the merkle chain to exist on disk: project srcs, the manifest
@@ -664,7 +743,7 @@ export def --wrapped "main run" [
 	let m_or_err = try {
 		let resolved = (resolve-manifest $manifest $cmd)
 		let m = (open $manifest)
-		let fp = (compute-fingerprint $resolved.paths $resolved.excludes)
+		let fp = (manifest-fingerprint $resolved)
 		{
 			ok: true,
 			key: $fp.hash,
@@ -758,6 +837,48 @@ export def --wrapped "main run" [
 		backend-put $project $target $key {outs: $outs, outs_exclude: $outs_exclude, manifest: $manifest, meta: $meta, inputs: $inputs}
 	}
 	exit 0
+}
+
+# `cache.nu check` — can this target be satisfied without running anything,
+# its deps included? A cache.full target carries it as its task-level `if:`,
+# which go-task evaluates before running the deps, so a yes skips the whole
+# subgraph beneath the target. See docs/2026-09-21-a-hit-skips-its-deps.md.
+#
+# Exit 10 is yes: the outs are in place and the stamp holds the key. Exit 0 is
+# no: go-task runs the deps, then the task. The `if:` tests for 10 alone, so
+# any other exit, a crash included, also runs the task.
+#
+# The key is walked from manifests with no dep stamp trusted: the deps have
+# not run yet, so their stamps may predate an edit.
+export def "main check" [
+	--manifest: string                        # path to .bayt/bayt.<verb>.json
+	--stamp-file: string                      # the target's L0 stamp, cwd-relative
+] {
+	if ($manifest | is-empty) or ($stamp_file | is-empty) {
+		error make { msg: "cache.nu check: --manifest and --stamp-file required" }
+	}
+	let resolved = (resolve-manifest $manifest)
+	let key = (manifest-fingerprint $resolved false false true).hash
+	# resolve-manifest's outs carry state too; a restore brings back outs
+	# only, so a target whose state is missing has to run to rebuild it.
+	let present = { outs-present $resolved.outs }
+	if ($stamp_file | path exists) and ((open $stamp_file | str trim) == $key) and (do $present) {
+		exit 10
+	}
+	if not (cache-enabled) { exit 0 }
+
+	let m = (open $manifest)
+	let hit = try {
+		backend-get $m.project $m.name $key
+	} catch { |e|
+		print -e $"BAYT_CACHE warn: backend GET failed for ($key): ($e.msg) — the task runs"
+		false
+	}
+	if not ($hit and (do $present)) { exit 0 }
+	# A task skipped by `if:` never reaches the defer that stamps it.
+	write-stamp $stamp_file $key
+	print -e $"BAYT_CACHE HIT check ($key)"
+	exit 10
 }
 
 # `cache.nu gc` — local-FS only. Walks entries, sums apparent sizes,

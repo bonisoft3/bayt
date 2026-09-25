@@ -53,9 +53,15 @@ install: {
 // helper) because parameter fields would leak into the target struct
 // when unified.
 build:   _exec & {_sub: "build"}
-test:    _exec & {_sub: "test"}
-testInt: _exec & {_sub: "test:int"}
-testE2E: _exec & {_sub: "test:e2e"}
+test:    _exec & {_sub: "test"} & {
+	env: CI: *"true" | string
+}
+testInt: _exec & {_sub: "test:int"} & {
+	env: CI: *"true" | string
+}
+testE2E: _exec & {_sub: "test:e2e"} & {
+	env: CI: *"true" | string
+}
 
 // pnpm.dev — runtime dev server for a launch target. Bakes `pnpm dev`
 // into the Dockerfile CMD (build-time RUN would hang the builder).
@@ -104,6 +110,9 @@ srcsBuild: {
 		".nuxt/**",
 		".output/**",
 		"dist/**",
+		"out/**",
+		"*.tsbuildinfo",
+		"**/*.tsbuildinfo",
 		"coverage/**",
 		".bayt/**",
 		".task/**",
@@ -137,6 +146,9 @@ srcsTest: {
 		".nuxt/**",
 		".output/**",
 		"dist/**",
+		"out/**",
+		"*.tsbuildinfo",
+		"**/*.tsbuildinfo",
 		"coverage/**",
 	]
 }
@@ -158,6 +170,9 @@ srcsIntegrate: {
 		".nuxt/**",
 		".output/**",
 		"dist/**",
+		"out/**",
+		"*.tsbuildinfo",
+		"**/*.tsbuildinfo",
 		"coverage/**",
 	]
 }

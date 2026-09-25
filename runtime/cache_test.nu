@@ -14,14 +14,25 @@
 use std/assert
 
 const cache_nu = (path self | path dirname | path join "cache.nu")
+const fingerprint_nu = (path self | path dirname | path join "fingerprint.nu")
 
 def main [] {
 	print "Running cache.nu tests...\n"
 
 	test_miss_runs_cmd_and_stores
 	test_outs_exclude_filters_store
+	test_outs_exclude_under_a_glob_prefix
 	test_hit_restores_and_runs_cmd
 	test_hit_full_restores_without_running
+	test_glob_srcs_reach_the_cache
+	test_cross_dep_without_outs_refuses
+	test_cross_dep_ignores_internal_task_stamps
+	test_check_hit_restores_and_stamps
+	test_check_miss_runs
+	test_check_failure_runs
+	test_check_missing_state_runs
+	test_check_walks_past_stale_dep_stamp
+	test_check_trusts_stamp_of_dep_without_bayt
 	test_corrupt_entry_degrades_to_miss
 	test_disabled_bypasses_entirely
 	test_failed_cmd_does_not_pollute_cache
@@ -153,6 +164,32 @@ def test_outs_exclude_filters_store [] {
 	print "  ok\n"
 }
 
+# Excludes are project-relative, like the globs. `build/distributions/**`
+# under `build/**/*` is the shape the gradle stack declares.
+def test_outs_exclude_under_a_glob_prefix [] {
+	print "test outs exclude under a glob prefix..."
+	let fix = (make-fixture)
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["build/**/*"], exclude: ["build/distributions/**"]}
+		state: {globs: []}
+		chainedDeps: []
+		cmds: []
+	} | to json | save -f $fix.manifest
+
+	let r = (run-cache $fix [sh -c "mkdir -p build/libs build/distributions && echo j > build/libs/a.jar && echo t > build/distributions/a.tar"])
+	assert ($r.exit == 0) $"unexpected exit: ($r.exit)"
+
+	let entries = (glob (cache-pat $fix.cache "*/*") | where { |p| ($p | path type) == "dir" and not ($p | str contains "_tmp") })
+	let stored = (open (($entries | first) | path join "outs.manifest.json") | get path)
+	assert ("build/libs/a.jar" in $stored) $"the jar should be stored: ($stored)"
+	assert (not ("build/distributions/a.tar" in $stored)) $"the excluded archive must not be stored: ($stored)"
+	print "  ok\n"
+}
+
 # (2) warm cache → cmd runs again, but cache pre-restored outs first.
 # Verified by deleting output.txt before the second invocation: if
 # cache.nu didn't restore it, the cmd would either fail or have
@@ -214,6 +251,232 @@ def test_hit_full_restores_without_running [] {
 	assert ($r.exit == 0) $"--full should short-circuit success regardless of cmd: ($r.exit)"
 	assert (not ($r.stdout | str contains "SHOULD_NOT_RUN")) "cmd should never have run"
 	assert ((open $fix.output | str trim) == "from-cache") "output should come from cache, not cmd"
+	print "  ok\n"
+}
+
+# A glob in srcs must reach the cache. Every real manifest has one
+# (`src/**/*.kt`), while the fixture above names its src as a literal,
+# which never enters the globbing branch — the branch where a relative
+# root cut the head off an absolute project path, so every host
+# invocation bypassed and every test here still passed.
+def test_glob_srcs_reach_the_cache [] {
+	print "test glob srcs reach the cache..."
+	let fix = (make-fixture)
+	mkdir ($fix.project | path join "src")
+	"hello\n" | save -f ($fix.project | path join "src" "a.txt")
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["src/**/*.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: []
+		cmds: []
+	} | to json | save -f $fix.manifest
+
+	run-cache $fix [sh -c "echo from-cache > output.txt"]
+	rm $fix.output
+
+	# A bypass stores nothing, so this --full run would miss and execute.
+	let r = (run-cache $fix [sh -c "echo SHOULD_NOT_RUN; exit 99"] --full)
+	assert ($r.exit == 0) $"a glob-keyed entry should hit: exit ($r.exit)"
+	assert (not ($r.stdout | str contains "SHOULD_NOT_RUN")) "cmd should never have run"
+	assert ((open $fix.output | str trim) == "from-cache") "output should come from the cache"
+	print "  ok\n"
+}
+
+# A cross-project dep must leave its outs before its dependent runs. Its
+# runner is skipped where the dep project has no `.bayt`, so a dep skipped
+# where it should have built would otherwise let this target build on nothing.
+def test_cross_dep_without_outs_refuses [] {
+	print "test cross dep without outs refuses..."
+	let fix = (make-fixture)
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "build", project: "libs_dep", dir: "libs/dep", outs: {globs: ["out/lib.txt"], exclude: []}}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+
+	let r = (run-cache $fix [sh -c "echo SHOULD_NOT_RUN; echo built > output.txt"])
+	assert ($r.exit != 0) "a cross dep with no outs should stop the target"
+	assert (not ($r.stdout | str contains "SHOULD_NOT_RUN")) "the cmd should never have run"
+	assert (not ($fix.output | path exists)) "nothing should have been built"
+
+	mkdir ($fix.project | path join "libs" "dep" "out")
+	"lib\n" | save -f ($fix.project | path join "libs" "dep" "out" "lib.txt")
+	let ok = (run-cache $fix [sh -c "echo built > output.txt"])
+	assert ($ok.exit == 0) $"with the dep's outs present the target should run: exit ($ok.exit)"
+	assert ($fix.output | path exists) "output should have been built"
+	print "  ok\n"
+}
+
+# Internal task stamps (.task/bayt/*.hash) are not runtime build artifacts and
+# must not cause a cross-dep check failure in containers where task did not run.
+def test_cross_dep_ignores_internal_task_stamps [] {
+	print "test cross dep ignores internal task stamps..."
+	let fix = (make-fixture)
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "build", project: "libs_dep", dir: "libs/dep", outs: {globs: ["out/lib.txt", ".task/bayt/build.hash"], exclude: []}}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+
+	mkdir ($fix.project | path join "libs" "dep" "out")
+	"lib\n" | save -f ($fix.project | path join "libs" "dep" "out" "lib.txt")
+	# Notice: .task/bayt/build.hash is intentionally NOT created on disk.
+	let ok = (run-cache $fix [sh -c "echo built > output.txt"])
+	assert ($ok.exit == 0) $"target should run despite missing .task stamp: exit ($ok.exit)"
+	assert ($fix.output | path exists) "output should have been built"
+	print "  ok\n"
+}
+
+# `cache.nu check` against the fixture, as a cache.full target's `if:` runs it.
+def run-check [fix: record, --manifest: string = ""]: nothing -> record {
+	let m = (if ($manifest | is-empty) { $fix.manifest } else { $manifest })
+	let result = with-env { BAYT_CACHE_DIR: $fix.cache } {
+		do { cd $fix.project; ^nu $cache_nu check --manifest $m --stamp-file .task/bayt/test.hash } | complete
+	}
+	{exit: $result.exit_code, stderr: $result.stderr}
+}
+
+# A hit answers yes and leaves the target as its own run would have: outs
+# restored and the stamp written, since a task skipped by `if:` never reaches
+# its stamping defer. The next check answers from the stamp alone.
+def test_check_hit_restores_and_stamps [] {
+	print "test check hit restores and stamps..."
+	let fix = (make-fixture)
+	run-cache $fix [sh -c "echo from-cache > output.txt"] --full
+	rm $fix.output
+
+	let r = (run-check $fix)
+	assert ($r.exit == 10) $"a hit should answer 10: ($r.exit) ($r.stderr)"
+	assert ((open $fix.output | str trim) == "from-cache") "the hit should restore the outs"
+	let stamp = ($fix.project | path join ".task" "bayt" "test.hash")
+	assert ($stamp | path exists) "the hit should write the stamp"
+
+	rm -rf $fix.cache
+	let again = (run-check $fix)
+	assert ($again.exit == 10) $"a matching stamp should answer 10 without the cache: ($again.exit)"
+	print "  ok\n"
+}
+
+def test_check_miss_runs [] {
+	print "test check miss runs..."
+	let fix = (make-fixture)
+	let r = (run-check $fix)
+	assert ($r.exit == 0) $"a miss should answer 0: ($r.exit) ($r.stderr)"
+	assert (not ($fix.output | path exists)) "a miss should restore nothing"
+	print "  ok\n"
+}
+
+# The `if:` skips on 10 alone, so a check that cannot run must not answer 10.
+def test_check_failure_runs [] {
+	print "test check failure runs..."
+	let fix = (make-fixture)
+	let r = (run-check $fix --manifest ($fix.project | path join "missing.json"))
+	assert ($r.exit != 10) "a failing check must not answer 10"
+	print "  ok\n"
+}
+
+# A restore brings back outs, not state; a target whose state is gone has to
+# run to rebuild it.
+def test_check_missing_state_runs [] {
+	print "test check missing state runs..."
+	let fix = (make-fixture)
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: ["tool_state"]}
+		chainedDeps: []
+		cmds: []
+	} | to json | save -f $fix.manifest
+	run-cache $fix [sh -c "echo from-cache > output.txt"] --full
+	rm $fix.output
+
+	let r = (run-check $fix)
+	assert ($r.exit == 0) $"with state missing the target should run: ($r.exit) ($r.stderr)"
+	print "  ok\n"
+}
+
+# The check runs before the deps, so a dep's stamp can predate an edit to
+# the dep. Trusting it would reproduce the consumer's old key and skip.
+def test_check_walks_past_stale_dep_stamp [] {
+	print "test check walks past a stale dep stamp..."
+	let fix = (make-fixture)
+	let dep = ($fix.project | path join "libs" "dep")
+	mkdir ($dep | path join ".bayt")
+	"v1\n" | save -f ($dep | path join "a.txt")
+	{
+		name: "build"
+		project: "libs_dep"
+		dir: "libs/dep"
+		srcs: {globs: ["a.txt"], exclude: []}
+		outs: {globs: [], exclude: []}
+		state: {globs: []}
+		chainedDeps: []
+		cmds: []
+	} | to json | save -f ($dep | path join ".bayt" "bayt.build.json")
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "build", project: "libs_dep", dir: "libs/dep"}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+
+	# Both built and stamped, as a finished `task` run leaves them.
+	do { cd $dep; ^nu $fingerprint_nu --manifest ($dep | path join ".bayt" "bayt.build.json") --stamp-file .task/bayt/build.hash --update-stamp }
+	"built\n" | save -f $fix.output
+	do { cd $fix.project; ^nu $fingerprint_nu --manifest $fix.manifest --stamp-file .task/bayt/test.hash --update-stamp }
+	assert ((run-check $fix).exit == 10) "a built, unedited tree should answer 10"
+
+	# Edit the dep; its stamp is not refreshed until it runs.
+	"v2\n" | save -f ($dep | path join "a.txt")
+	let r = (run-check $fix)
+	assert ($r.exit == 0) $"an edited dep should make the consumer run: ($r.exit)"
+	print "  ok\n"
+}
+
+# A container COPYs a dep's outs and stamp but never its `.bayt`. With no
+# manifest to walk, the dep cannot run here either, so its stamp stands.
+def test_check_trusts_stamp_of_dep_without_bayt [] {
+	print "test check trusts the stamp of a dep without .bayt..."
+	let fix = (make-fixture)
+	let dep = ($fix.project | path join "libs" "dep")
+	mkdir ($dep | path join ".task" "bayt")
+	"0123abcd" | save -f ($dep | path join ".task" "bayt" "build.hash")
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "build", project: "libs_dep", dir: "libs/dep"}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+	"built\n" | save -f $fix.output
+	do { cd $fix.project; ^nu $fingerprint_nu --manifest $fix.manifest --stamp-file .task/bayt/test.hash --update-stamp }
+
+	let r = (run-check $fix)
+	assert ($r.exit == 10) $"a stamped consumer of a .bayt-less dep should answer 10: ($r.exit) ($r.stderr)"
 	print "  ok\n"
 }
 

@@ -35,6 +35,11 @@ export def --wrapped run-nu [...args] {
 	with-env { MISE_LOCKED: "0" } { $input | ^mise tool-stub (stub-path "nu") ...$args }
 }
 
+export def --wrapped run-curl [...args] {
+	let input = $in
+	with-env { MISE_LOCKED: "0" } { $input | ^mise tool-stub (stub-path "curl") ...$args }
+}
+
 export def --wrapped run-oras [...args] {
 	let input = $in
 	with-env { MISE_LOCKED: "0" } { $input | ^mise tool-stub (stub-path "oras") ...$args }

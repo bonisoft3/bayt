@@ -167,6 +167,9 @@ assemble: bayt.cache.full & {
 			"gradle/wrapper/**/*",
 			"gradle/lib[s].versions.toml",
 		]
+		// The application plugin's distTar/distZip ride assemble; nothing
+		// consumes them from here (release runs its own distTar).
+		exclude: ["build/distributions/**"]
 	}
 	cmd: "builtin": {
 		do: *"./gradlew \(_initFlag) assemble" | string

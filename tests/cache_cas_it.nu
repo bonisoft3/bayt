@@ -28,6 +28,8 @@ def main [] {
 	test_corrupt_blob_aborts_restore_intact
 	test_directory_at_out_path_is_replaced
 	test_nested_paths_roundtrip
+	test_non_utf8_payload_roundtrips
+	test_quoted_path_roundtrips
 	test_empty_outs_roundtrips
 
 	print "\nAll cache CAS integration tests passed!"
@@ -312,6 +314,48 @@ def test_nested_paths_roundtrip [] {
 		assert ($deep | path exists) "nested file should restore"
 		assert ((open --raw $deep | decode utf-8) == "one\n") "nested content should match"
 		assert ((open --raw ($fix.project | path join "out" "top.txt") | decode utf-8) == "two\n") "sibling content should match"
+		print "  ok\n"
+	} catch { |e| stop-remote $rc; error make { msg: $e.msg } }
+	stop-remote $rc
+}
+
+# Build outputs are binary, and bytes that are not UTF-8 must reach the
+# CAS unchanged: a trailing lead byte (Kotlin's `.len` caches) and an
+# invalid byte mid-file (any executable). bazel-remote checks each
+# upload against its digest, so a mangled body fails the store.
+def test_non_utf8_payload_roundtrips [] {
+	print "test non-utf8 payload roundtrips..."
+	let rc = (start-remote)
+	try {
+		let fix = (make-fixture)
+		let r1 = (run-cache $rc $fix [sh -c "mkdir -p out && printf '\\000\\000\\340' > out/tail.bin && printf 'a\\377b' > out/mid.bin"])
+		assert ($r1.exit == 0) $"first run exit: ($r1.exit) ($r1.stderr)"
+
+		rm -rf ($fix.project | path join "out")
+		let r2 = (run-cache $rc $fix [sh -c "exit 0"] --full)
+		assert ($r2.stderr | str contains "HIT") $"should HIT: ($r2.stderr)"
+		assert ((open --raw ($fix.project | path join "out" "tail.bin") | into binary) == 0x[00 00 e0]) "trailing lead byte should survive"
+		assert ((open --raw ($fix.project | path join "out" "mid.bin") | into binary) == 0x[61 ff 62]) "invalid mid-file byte should survive"
+		print "  ok\n"
+	} catch { |e| stop-remote $rc; error make { msg: $e.msg } }
+	stop-remote $rc
+}
+
+# The fetch names each blob's destination in a curl config file, where a
+# double quote or a backslash in a path has to be escaped.
+def test_quoted_path_roundtrips [] {
+	print "test quoted path roundtrips..."
+	let rc = (start-remote)
+	try {
+		let fix = (make-fixture)
+		let r1 = (run-cache $rc $fix [sh -c "mkdir -p 'out/a b' && echo q > 'out/a b/say \"hi\".txt'"])
+		assert ($r1.exit == 0) $"first run exit: ($r1.exit) ($r1.stderr)"
+
+		rm -rf ($fix.project | path join "out")
+		let r2 = (run-cache $rc $fix [sh -c "exit 0"] --full)
+		assert ($r2.stderr | str contains "HIT") $"should HIT: ($r2.stderr)"
+		let f = ($fix.project | path join "out" "a b" 'say "hi".txt')
+		assert ((open --raw $f | decode utf-8) == "q\n") "quoted path should restore"
 		print "  ok\n"
 	} catch { |e| stop-remote $rc; error make { msg: $e.msg } }
 	stop-remote $rc

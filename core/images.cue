@@ -51,7 +51,7 @@ nubox: {
 	defaultPreamble: _lazyboxOverlay & {
 		"mise-trusted":  {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
 		"gnu-shell-utils": {priority: -7} & (zypper.#install & {
-			pkgs: ["findutils=4.10.0-160000.2.2", "which=2.23-160000.2.2"]
+			pkgs: ["findutils=4.10.0-160000.2.2", "which=2.23-160000.2.2", "git-core=2.51.0-160000.1.2"]
 		}).out
 	}
 }

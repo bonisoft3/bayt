@@ -223,8 +223,9 @@ _t9_tf: files: doctor: tasks: default: cmds: [
 ]
 
 // --- T10: cross-project chainedDeps become `cross_*` runner tasks in
-// bayt_root (union over targets, `run: once`, container-skipped via the
-// workspace-root .git probe) plus `::bayt:cross_*` deps on the
+// bayt_root (union over targets, `run: once`, each a dep on the target
+// through the dep project's include, skipped where that project has no
+// `.bayt`) plus `::bayt:cross_*` deps on the
 // per-target default. Depth-aware paths: dir "apps/t10" → `../../`; a
 // workspaceroot dep (dir "") drops the dir segment. Synthetic views and
 // same-project entries never produce runners (t1–t9 stay runner-free —
@@ -260,17 +261,38 @@ _t10_tf: (#taskfileGen & {project: _t10, depManifests: {
 _t10_tf: bayt_root: tasks: cross_libs_x_build: {
 	internal: true
 	run:      "once"
-	status: ["test ! -e ../../.git"]
-	cmds: ["{{.TASK_EXE}} -t ../../libs/x/.bayt/Taskfile.yml bayt:build"]
+	if:       "test -f ../../libs/x/Taskfile.yml"
+	deps: ["libs_x:bayt:build"]
 }
 _t10_tf: bayt_root: tasks: cross_workspaceroot_setup: {
 	internal: true
 	run:      "once"
-	status: ["test ! -e ../../.git"]
-	cmds: ["{{.TASK_EXE}} -t ../../.bayt/Taskfile.yml bayt:setup"]
+	if:       "test -f ../../Taskfile.yml"
+	deps: ["workspaceroot:bayt:setup"]
 }
 _t10_tf: files: build: tasks: default: deps: ["::bayt:setup", "::bayt:cross_libs_x_build"]
 _t10_tf: files: setup: tasks: default: deps: ["::bayt:cross_workspaceroot_setup"]
+
+// --- T11: a single-cmd cache.full target carries the cache check as its
+// task-level `if:`, which go-task evaluates before the deps; only the check's
+// exit 10 skips. A target that is not full (T1) gets none.
+_t11: #project & {
+	name: "t11"
+	dir:  "t11"
+	targets: {
+		"setup": {taskfile: {}, cmd: "builtin": do: "true"}
+		"build": {
+			taskfile: {}
+			cache: full: true
+			deps: [":setup"]
+			cmd: "builtin": do: "./gradlew assemble"
+		}
+	}
+}
+_t11_tf: (#taskfileGen & {project: _t11, depManifests: {}})
+_t11_tf: files: build: tasks: default: if: =~"^bayt cache check --manifest '\\{\\{\\.TASKFILE_DIR\\}\\}/bayt\\.build\\.json' --stamp-file \\.task/bayt/build\\.hash; \\[ \\$\\? -ne 10 \\]$"
+_t11_tf: files: setup: tasks: default: {[=~"^if$"]: _|_}
+_t1_tf: files: build: tasks: default: {[=~"^if$"]: _|_}
 
 // Public aggregator forces evaluation of the hidden _t* bindings.
 Tests: taskfile: {
@@ -284,4 +306,5 @@ Tests: taskfile: {
 	t8:  _t8_tf
 	t9:  _t9_tf
 	t10: _t10_tf
+	t11: _t11_tf
 }

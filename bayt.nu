@@ -19,14 +19,17 @@ def --wrapped "main cache run" [
 	--cmd: string = ""
 	--full
 	--similar
-	...cmd_args: string
+	...cmd_args                               # untyped: a typed `...string` rejects a bare keyword arg (`true`/`false`/`null`) at parse time
 ] {
 	use runtime/cache.nu
-	# Strip the caller's `--` end-of-flags marker before re-emitting one
-	# for the inner call; otherwise it lands as a positional and `--` runs
-	# as the command instead of the user's cmd.
-	let inner = if ($cmd_args | length) > 0 and ($cmd_args | first) == "--" { $cmd_args | skip 1 } else { $cmd_args }
+	let raw = if ($cmd_args | length) > 0 and ($cmd_args | first) == "--" { $cmd_args | skip 1 } else { $cmd_args }
+	let inner = ($raw | each {|a| $a | into string })
 	cache main run --manifest $manifest --cmd $cmd --full=$full --similar=$similar -- ...$inner
+}
+
+def "main cache check" [--manifest: string, --stamp-file: string] {
+	use runtime/cache.nu
+	cache main check --manifest $manifest --stamp-file $stamp_file
 }
 
 def "main cache gc" [--max-bytes: int = 10737418240] {

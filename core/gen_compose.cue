@@ -1465,14 +1465,14 @@ _copyLine: {
 			// compose.yaml extends this service. `../<glob>` resolves
 			// to the project root in both cases (build context is the
 			if t.hmr != _|_ {
-				let _watches = list.Concat([
+				let _hmrWatch = list.Concat([
 					[for g in t.hmr.code    {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
 					[for g in t.hmr.configs {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
 					[for g in t.hmr.assets  {let b = (_hmrBase & {"g": g}).out, {action: "sync+restart", path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
 					[for g in t.hmr.tools   {let b = (_hmrBase & {"g": g}).out, {action: "rebuild",      path: "../\(b)"}}],
 				])
-				if len(_watches) > 0 {
-					develop: watch: _watches
+				if len(_hmrWatch) > 0 {
+					develop: watch: _hmrWatch
 				}
 			}
 		}
