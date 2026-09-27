@@ -201,7 +201,7 @@ export def ignored? [path: string, is_dir: bool, compiled: list<record>]: nothin
 # Returns null when git cannot answer — no binary, or not a work tree — and the
 # walk takes over. The build container has no `.git` (it is dockerignored), so
 # that path is the one CI actually runs.
-def git-enumerate [root: string, sub: string]: nothing -> any {
+def git-enumerate [root: string, subs: list<string>]: nothing -> any {
   if (which git | is-empty) { return null }
   let top = (do -i { ^git -C $root rev-parse --show-toplevel } | complete)
   if $top.exit_code != 0 { return null }
@@ -209,13 +209,72 @@ def git-enumerate [root: string, sub: string]: nothing -> any {
   # walk treats `root` as the top of the path space. Those agree only when
   # `root` IS the repo root, so anything below it stays on the walk.
   if ($top.stdout | str trim) != $root { return null }
-  let scope = if ($sub | is-empty) { [] } else { ["--" $sub] }
-  let all = (do -i { ^git -C $root ls-files -co --exclude-per-directory=.gitignore ...$scope } | complete)
+  let scope = if ($subs | is-empty) { [] } else { ["--"] ++ $subs }
+  # `-z`: NUL-separated and never quoted. Without it git renders a path holding
+  # a byte outside ASCII as an escaped, double-quoted C string, which the walk
+  # reports raw — so the two would name different files and key a target
+  # differently depending on whether git answered.
+  let all = (do -i { ^git -C $root ls-files -z -co --exclude-per-directory=.gitignore ...$scope } | complete)
   if $all.exit_code != 0 { return null }
-  let ign = (do -i { ^git -C $root ls-files -ci --exclude-per-directory=.gitignore ...$scope } | complete)
+  let ign = (do -i { ^git -C $root ls-files -z -ci --exclude-per-directory=.gitignore ...$scope } | complete)
   if $ign.exit_code != 0 { return null }
-  let drop = ($ign.stdout | lines)
-  $all.stdout | lines | where { |p| not ($p in $drop) }
+  # A record, not a list: `in` over a list is linear, and at repo scope that
+  # turns the subtraction into |tracked| x |ignored| comparisons.
+  let drop = ($ign.stdout | split row (char nul) | where { |p| not ($p | is-empty) }
+    | reduce --fold {} { |p, acc| $acc | insert $p true })
+  # `.git` and `.task` are tool boundaries the walk never descends into. git
+  # knows only ignore files, so in a repo whose .gitignore does not name
+  # `.task/` the two paths would otherwise disagree — the fast path handing
+  # back bayt's own stamps and index, which are rewritten on every run.
+  $all.stdout | split row (char nul)
+    | where { |p| not ($p | is-empty) }
+    | where { |p| ($drop | get -o $p) == null }
+    | where { |p| not (($p | str starts-with ".git/") or ($p | str starts-with ".task/")
+                      or ($p | str contains "/.git/") or ($p | str contains "/.task/")) }
+}
+
+# Enumerate several scopes at once, returning `{scope: [paths]}` in the path
+# space of `root`.
+#
+# The backends want opposite shapes. git's cost is per invocation, not per
+# path, so one call covering every scope beats one call each. The walk's cost is
+# what it descends, so it descends each scope and nothing else. Either way a
+# scope is enumerated once per invocation, which is the point: a deep graph
+# otherwise names the same directory once per dependent.
+export def enumerate-scopes [
+  root: string
+  scopes: list<string>
+  flavor: string = "git"
+]: nothing -> record {
+  # The repo root is not enumerated for either backend. git would walk the
+  # whole tree for it and the walk would descend it; a target scoped there
+  # names literal paths (go.mod and friends) that need no enumeration, and one
+  # that does not still answers through the on-demand path below.
+  let want = ($scopes | uniq | where { |s| not ($s | is-empty) })
+  # Pathspecs: git lists the scopes asked for instead of the repo, so it reads
+  # less of the index and the bucketing below has less to place.
+  let whole = if $flavor == "git" { git-enumerate $root $want } else { null }
+  if $whole != null {
+    # `group-by` with a closure keys the list in one builtin pass. Charging each
+    # path to every ancestor scope instead runs an interpreted closure per path
+    # per level, and flattens a record per pair.
+    let depth = ($want | each { |s| $s | split row "/" | length } | append 1 | math max)
+    let buckets = ($whole | group-by { |p| $p | split row "/" | first $depth | str join "/" })
+    let keys = ($buckets | columns)
+    return ($want | reduce --fold {} { |s, acc|
+      let own = ($buckets | get -o $s)
+      # A scope shallower than the bucket key takes every bucket beneath it,
+      # over keys rather than paths. No bucket at or under it means no files.
+      let hit = if $own != null { $own } else {
+        $keys | where { |k| $k | str starts-with $"($s)/" }
+        | each { |k| $buckets | get $k } | flatten
+      }
+      $acc | insert $s $hit
+    })
+  }
+  $want
+  | par-each --keep-order { |s| {scope: $s, paths: (walk-scope $root $s $flavor)} }
+  | reduce --fold {} { |r, acc| $acc | insert $r.scope $r.paths }
 }
 
 # Enumerate a scope, in the path space of `root`. Rules are seeded from every
@@ -228,7 +287,9 @@ export def walk-scope [
   flavor: string = "git"
   --no-git                          # skip the fast path; the walk is the oracle
 ]: nothing -> list<string> {
-  let fast = if $flavor == "git" and (not $no_git) { git-enumerate $root $sub } else { null }
+  let fast = if $flavor == "git" and (not $no_git) {
+    git-enumerate $root (if ($sub | is-empty) { [] } else { [$sub] })
+  } else { null }
   if $fast != null { return $fast }
 
   let ignore_name = if $flavor == "docker" { ".dockerignore" } else { ".gitignore" }
@@ -274,9 +335,15 @@ def walk [
     compile-rules (($rules | each { |g| $g.rules } | flatten) ++ $here)
   }
 
+  # The same boundary the directory branch applies: in a git worktree `.git`
+  # is a file holding `gitdir: ...`, not a directory, so a type-blind check is
+  # what keeps one commit from fingerprinting differently in a worktree than
+  # in a plain clone.
   let kept = ($entries | where type != dir | each { |f|
-    let p = if ($rel | is-empty) { $f.name } else { $"($rel)/($f.name)" }
-    if (ignored? $p false $rules) { null } else { $p }
+    if $f.name == ".git" or $f.name == ".task" { null } else {
+      let p = if ($rel | is-empty) { $f.name } else { $"($rel)/($f.name)" }
+      if (ignored? $p false $rules) { null } else { $p }
+    }
   } | where { |x| $x != null })
 
   let descended = ($entries | where type == dir | each { |d|

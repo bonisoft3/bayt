@@ -302,7 +302,54 @@ Bazel is a foundational engineering achievement — much of Bayt's core model is
   - *Native host execution*: Zero-overhead, sub-second turnaround for local inner-loop iteration. Developers get immediate feedback without fighting sandbox permissions or IDE wrappers.
   - *OCI container isolation (`bayt.nubox` / BuildKit)*: Full Linux kernel namespace, cgroup, network (`network: "none"`), and rootfs isolation for CI and integration testing. This provides strictly stronger isolation than user-space sandboxing, paired with BuildKit cache mounts (`/root/.cache/bayt`, `/root/.cache/go-build`, pnpm store) for fast warm builds.
 
-### 3. Pragmatic fit
+### 3. Measured on a Bazel-native codebase
+Sourcegraph's public snapshot was ported to Bayt the way Gazelle ports a repo to
+Bazel: a generator reads `go list -deps -json` and emits one project per package
+group. Consecutive upstream commits were then replayed through both tools on one
+laptop, running the **whole Go unit-test suite** at each — the 286 packages whose
+tests need neither postgres nor the network, chosen from Sourcegraph's own Bazel
+tags so both tools run the same set. Bazel ran with Sourcegraph's CI remote-cache
+settings and the host module cache; the shared remote cache is
+[depot](https://depot.dev).
+
+| | Bazel | Bayt (host) | Bayt (container) |
+|---|---|---|---|
+| cold — nothing cached anywhere | 776s | **161s** | 336s |
+| fresh runner, warm remote cache — nothing to re-run | 227s | **2.2s** | — |
+| fresh runner, warm remote cache — tests to re-run | 1651s | **159s** | — |
+| incremental — nothing to re-run | **0.8s** | 1.1s | 27.5s |
+| incremental — tests to re-run | 263s | **14.1s** | 22.2s |
+
+Incremental rows are medians over 20 replayed commits (12 that change nothing for
+the suite, 7 that re-run tests); remote rows over 5. Bazel's cold figure keeps its
+repository cache, so dependency downloads are free and only actions are cold. The
+container tier has no remote row: its remote story is a registry-backed BuildKit
+cache, a different mechanism from Bayt's own, and a number from it would not
+compare like with like.
+
+Two shapes produce this. One `go test` invocation covering every package lets the
+toolchain's own result cache supply per-package granularity, where Bazel drives a
+sandboxed action per test target; and a target's inputs are proved unchanged by one
+enumeration per directory against a stat memo, not by a graph held in a resident
+daemon — which is why a no-op commit costs a stateless CLI about what it costs a
+server. The fresh-runner rows are that argument carried over a network: with every
+result already cached, Bazel still spends 227s reconstructing its graph and
+materialising 322 test results and their inputs, while Bayt asks one question about
+one target.
+
+Bazel keeps the no-op commit on a warm machine, and it is unmatched where a build
+really is a graph of a hundred thousand fine-grained actions. What the table shows
+is that a test suite is not that graph, and paying per action to treat it as one
+costs more than it returns.
+
+The container tier is the same suite in a hermetic stage, ~1.5x the host tier on an
+incremental commit. It is also the only tier that fails when a declaration is
+incomplete: porting Sourcegraph it caught assembly and cgo sources missing from
+`stacks/go`, fixtures the tests read, a package reached only from a test file, and
+a `git` the suite shells out to — each of which the host tier built green with a
+cache key that was quietly wrong.
+
+### 4. Pragmatic fit
 - **Where Bazel is unmatched**: Giant homogeneous monorepos (hundreds of thousands of targets), massive C++/Java codebases requiring cross-package action granularity, and organizations with dedicated build-infrastructure teams to maintain custom Starlark rules and remote execution farms.
 - **Where Bayt fits best**: Teams maintaining mixed modern stacks (Go, TypeScript/pnpm, Kotlin/Gradle, Rust) who want instant single-afternoon onboarding, transparent IDE support, and sub-second developer inner loops without replacing their existing tools.
 

@@ -3,7 +3,7 @@
 # Run with: nu ignore_test.nu (from plugins/bayt/runtime)
 
 use std/assert
-use ./ignore.nu [parse-file, ignored?, to-regex, compile-rules, walk-scope]
+use ./ignore.nu [parse-file, ignored?, to-regex, compile-rules, walk-scope, enumerate-scopes]
 
 def main [] {
 	print "Running bayt/ignore tests...\n"
@@ -38,6 +38,10 @@ def main [] {
 		test_walk_honours_parent_exclusion
 		test_walk_stops_at_a_repository_boundary
 		test_walk_scope_without_git_still_enumerates
+	test_tool_boundaries_hold_whatever_their_type
+	test_enumerate_scopes_agrees_with_walking_each
+	test_enumerate_scopes_omits_the_root
+	test_non_ascii_paths_agree_between_backends
 		test_docker_flavor_does_not_nest
 	}
 
@@ -261,6 +265,81 @@ def test_walk_scope_without_git_still_enumerates [] {
 	let got = (walk-scope $fx "" | sort)
 	assert ("a.txt" in $got) "fast path declines, walk answers"
 	assert (not ("b.log" in $got)) "and the rules were applied"
+	rm -rf $fx
+}
+
+# `.git` is a directory in a clone and a `gitdir:` pointer FILE in a worktree.
+# A dir-only boundary check let that file through, so one commit enumerated
+# differently in a worktree than in a clone.
+def test_tool_boundaries_hold_whatever_their_type [] {
+	print "test .git and .task are boundaries as file or directory..."
+	let fx = (fixture {
+		".gitignore": "", ".git": "gitdir: elsewhere", ".task": "x",
+		"src/.task": "y", "keep.txt": "x",
+	})
+	let got = (walk-scope $fx "" "git" --no-git | sort)
+	assert ("keep.txt" in $got) "ordinary files still enumerate"
+	for b in [".git" ".task" "src/.task"] {
+		assert (not ($b in $got)) $"($b) is a tool boundary, got ($got | to json --raw)"
+	}
+	rm -rf $fx
+}
+
+# enumerate-scopes exists to answer for many scopes at once, and the fingerprint
+# is only unchanged by that if each answer equals the scope's own walk. The two
+# backends fill it differently, so both are pinned, including a scope nested
+# under another and one that holds no files.
+def test_enumerate_scopes_agrees_with_walking_each [] {
+	print "test enumerate-scopes answers what walk-scope answers, per backend..."
+	let fx = (fixture {
+		".gitignore": "*.log\n", "a/one.rs": "x", "a/skip.log": "x",
+		"a/deep/two.rs": "x", "b/three.rs": "x", "empty/.keep": "x",
+	})
+	rm ($fx | path join "empty/.keep")
+	let scopes = ["a" "a/deep" "b" "empty"]
+	# Once outside a work tree, where the walk fills the memo, and once inside
+	# one, where git fills it in a single call and the result is bucketed by
+	# scope. A fixture that is not a repository exercises only the first, which
+	# is how the bucketing went untested.
+	for repo in [false true] {
+		if $repo { ^git -C $fx init -q }
+		# git's own toplevel, not the fixture path: on macOS a temp dir reaches it
+		# through a symlink, and git-enumerate declines when the two differ — which
+		# is how a fixture inside a repository still exercised only the walk.
+		let root = if $repo { ^git -C $fx rev-parse --show-toplevel | str trim } else { $fx }
+		for flavor in ["git" "docker"] {
+			let got = (enumerate-scopes $root $scopes $flavor)
+			for s in $scopes {
+				let direct = (walk-scope $root $s $flavor --no-git | sort)
+				assert (($got | get $s | sort) == $direct) $"repo=($repo) ($flavor)/($s): ($got | get $s | to json --raw) vs ($direct | to json --raw)"
+			}
+		}
+	}
+	rm -rf $fx
+}
+
+# The repo root is deliberately absent: enumerating it would descend the whole
+# tree for a caller that usually wants literal paths, and compute-fingerprint
+# walks it on demand instead.
+# git renders a path holding a non-ASCII byte as an escaped, quoted C string
+# unless asked otherwise; the walk reports it raw. Both name the same file now.
+def test_non_ascii_paths_agree_between_backends [] {
+	print "test a non-ascii path enumerates the same either way..."
+	let fx = (fixture {".gitignore": "", "a/café.go": "x", "a/plain.go": "y"})
+	^git -C $fx init -q
+	let root = (^git -C $fx rev-parse --show-toplevel | str trim)
+	let fast = (walk-scope $root "a" "git" | sort)
+	let walked = (walk-scope $root "a" "git" --no-git | sort)
+	assert ($fast == $walked) $"($fast | to json --raw) vs ($walked | to json --raw)"
+	assert ("a/café.go" in $fast) $"expected the raw path, got ($fast | to json --raw)"
+	rm -rf $fx
+}
+
+def test_enumerate_scopes_omits_the_root [] {
+	print "test enumerate-scopes leaves the repo root to the caller..."
+	let fx = (fixture {".gitignore": "", "a/one.rs": "x", "top.rs": "x"})
+	let got = (enumerate-scopes $fx ["" "a"] "git")
+	assert (($got | columns) == ["a"]) $"expected only a, got ($got | columns | to json --raw)"
 	rm -rf $fx
 }
 

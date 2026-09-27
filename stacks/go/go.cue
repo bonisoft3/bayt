@@ -77,8 +77,15 @@ modDownload: _twoPhase & {
 // srcs excludes earn their keep. Leaves outs to the leaf (the
 // artifact name is the module's).
 build: {
+	// go compiles more than .go: a package can implement a go declaration in
+	// assembly, and a cgo package carries c and h beside it. Leaving them out
+	// builds on a host that has them on disk while keying the target without
+	// them, so the miss only surfaces in a container.
 	srcs: defaultGlobs: {
 		"go-src": *{glob: "**/*.go"} | null
+		"go-asm": *{glob: "**/*.[sS]"} | null
+		"go-c":   *{glob: "**/*.c"} | null
+		"go-h":   *{glob: "**/*.h"} | null
 		"go-mod": *{glob: "go.mod"} | null
 		"go-sum": *{glob: "go.sum"} | null
 	}
@@ -92,9 +99,13 @@ build: {
 // test — `go test ./...`. it/ is its own module, so the walk never
 // descends into it.
 test: {
+	// `**/testdata/**`: a project is a module and its fixtures sit beside
+	// each package, not at the module root. The shallow glob staged none of
+	// them, and only a container notices — on a host the files are there
+	// whether or not the target declares them.
 	srcs: defaultGlobs: {
 		"go-test":     *{glob: "**/*_test.go"} | null
-		"go-testdata": *{glob: "testdata/**"} | null
+		"go-testdata": *{glob: "**/testdata/**"} | null
 	}
 	cmd: "builtin": {
 		do: *"go test ./..." | string

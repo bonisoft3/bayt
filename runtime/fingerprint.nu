@@ -36,7 +36,7 @@ def is-glob [p: string]: nothing -> bool {
 }
 
 use ./tools.nu [libc-flavor]
-use ./ignore.nu [to-regex, walk-scope]
+use ./ignore.nu [to-regex, walk-scope, enumerate-scopes]
 
 # Platform identity folded into every hash. Stops an arm64-mac stamp
 # from being trusted on an amd64-linux host when a worktree is cross-
@@ -150,6 +150,7 @@ export def compute-fingerprint [
   project: string = "."
   dep_hashes: list<string> = []
   index: record = {}
+  trees: record = {}            # scope -> enumeration, built once per invocation
 ]: nothing -> record {
   let gpaths = $paths
   let globs = ($gpaths | where { |p| is-glob $p })
@@ -180,7 +181,12 @@ export def compute-fingerprint [
     let scope = if $here == $root { "" } else { $here | str substring (($root | str length) + 1).. }
     let res = (if ($globs | is-empty) { "" } else { $globs | each { |g| to-regex $g } | str join "|" })
     let exres = (if ($excludes | is-empty) { "" } else { $excludes | each { |g| to-regex ($g | str trim --left --char '/') } | str join "|" })
-    let entries = (walk-scope $root $scope
+    # Enumerated once per scope per invocation (see enumerate-scopes); a scope
+    # the plan did not foresee is walked here. `default` would not do: its
+    # argument is evaluated eagerly, so it would walk every scope regardless.
+    let planned = ($trees | get -o $scope)
+    let scoped = (if $planned == null { walk-scope $root $scope } else { $planned })
+    let entries = ($scoped
     | each { |p| if ($scope | is-empty) { $p } else { $p | str substring (($scope | str length) + 1).. } })
     let after_inc = (if ($res | is-empty) { $entries } else { $entries | where { |p| $p =~ $res } })
     if ($exres | is-empty) { $after_inc } else { $after_inc | where { |p| not ($p =~ $exres) } }
@@ -302,6 +308,19 @@ export def outs-present [pats: list<string>]: nothing -> bool {
 # `:X:<view>` dep is one of these, and never a file on disk.
 const synthetic_views = ["srcs" "outs" "bayt"]
 
+# Every scope the closure will name — the target's own project, its context
+# directories, and each dep's project — enumerated once before the fan-out.
+# par-each hands each branch a copy of what it closes over, so a memo filled
+# inside the fan-out would be filled once per branch; this is filled before it.
+def plan-scopes [r: record]: nothing -> record {
+  let rel = { |d| if ($d | path expand) == $r.root { "" } else {
+    $d | path expand | str substring (($r.root | str length) + 1).. } }
+  let own = [(do $rel $r.project)]
+  let ctxs = (($r.contexts? | default []) | each { |d| do $rel ($r.root | path join $d) })
+  let deps = (($r.deps? | default []) | each { |d| $d.dir })
+  enumerate-scopes $r.root (($own ++ $ctxs ++ $deps) | uniq)
+}
+
 # A target's fingerprint folds its deps' — see dep-hashes for where those come
 # from.
 #
@@ -318,6 +337,7 @@ def closure-hash [
   all_cmds: bool = false
   walk: bool = false
   index: record = {}
+  trees: record = {}
 ]: nothing -> record {
   let base = if ($view | is-empty) { $manifest } else { $"($manifest)!($view)" }
   let base = if $all_cmds { $"($base)+cmds" } else { $base }
@@ -326,10 +346,11 @@ def closure-hash [
 
   let r = (resolve-manifest $manifest $cmd $view $all_cmds)
   let idx = if ($index | is-empty) { load-index $r.root } else { $index }
-  let dr = (dep-hashes $r.deps $docker $memo $all_cmds $walk $idx)
+  let tr = if ($trees | is-empty) { plan-scopes $r } else { $trees }
+  let dr = (dep-hashes $r.deps $docker $memo $all_cmds $walk $idx $tr)
   let deps = $dr.hashes
-  let ctx = (context-hashes $r.contexts $docker $r.root $idx)
-  let own = (compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx) $idx)
+  let ctx = (context-hashes $r.contexts $docker $r.root $idx $tr)
+  let own = (compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx) $idx $tr)
   {hash: $own.hash, memo: ($dr.memo | upsert $key $own.hash)}
 }
 
@@ -341,19 +362,21 @@ def closure-hash [
 # caller that runs before go-task has run the deps needs it: a dep's stamp is
 # only refreshed when the dep runs, so until then it can hold a hash from
 # before an edit.
-export def manifest-fingerprint [r: record, docker: bool = false, all_cmds: bool = false, walk: bool = false, index: record = {}]: nothing -> record {
+export def manifest-fingerprint [r: record, docker: bool = false, all_cmds: bool = false, walk: bool = false, index: record = {}, trees: record = {}]: nothing -> record {
   let idx = if ($index | is-empty) { load-index $r.root } else { $index }
-  let deps = (dep-hashes ($r.deps? | default []) $docker {} $all_cmds $walk $idx).hashes
-  let ctx = (context-hashes ($r.contexts? | default []) $docker $r.root $idx)
-  compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx) $idx
+  # Once per invocation, above the fan-out: every dep below reads this.
+  let tr = if ($trees | is-empty) { plan-scopes $r } else { $trees }
+  let deps = (dep-hashes ($r.deps? | default []) $docker {} $all_cmds $walk $idx $tr).hashes
+  let ctx = (context-hashes ($r.contexts? | default []) $docker $r.root $idx $tr)
+  compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx) $idx $tr
 }
 
 # Hash each context directory over its own contents. Rooted AT the directory so
 # the walk covers it and nothing else, while ignore rules still compose from the
 # repo root.
-def context-hashes [dirs: list<string>, docker: bool, root: string, index: record = {}]: nothing -> list<string> {
+def context-hashes [dirs: list<string>, docker: bool, root: string, index: record = {}, trees: record = {}]: nothing -> list<string> {
   $dirs | each { |d|
-    (compute-fingerprint ["**/*"] [] $docker $root ($root | path join $d) [] $index).hash
+    (compute-fingerprint ["**/*"] [] $docker $root ($root | path join $d) [] $index $trees).hash
   }
 }
 
@@ -365,7 +388,7 @@ def context-hashes [dirs: list<string>, docker: bool, root: string, index: recor
 # Only the narrow content flavor is memoized: a stamp records whichever scope
 # wrote it, and every stamped call the generated Taskfiles emit is content-only
 # and cmd-scoped.
-def dep-hashes [nodes: list<record>, docker: bool, memo: record, all_cmds: bool = false, walk: bool = false, index: record = {}]: nothing -> record {
+def dep-hashes [nodes: list<record>, docker: bool, memo: record, all_cmds: bool = false, walk: bool = false, index: record = {}, trees: record = {}]: nothing -> record {
   if ($nodes | is-empty) { return {hashes: [], memo: $memo} }
 
   let results = ($nodes | par-each --keep-order { |d|
@@ -379,7 +402,7 @@ def dep-hashes [nodes: list<record>, docker: bool, memo: record, all_cmds: bool 
       if not ($d.manifest | path exists) {
         error make { msg: $"fingerprint: dep manifest not found: ($d.manifest)" }
       }
-      closure-hash $d.manifest "" $docker $memo $d.view $all_cmds $walk $index
+      closure-hash $d.manifest "" $docker $memo $d.view $all_cmds $walk $index $trees
     }
   })
 
@@ -480,6 +503,9 @@ export def resolve-manifest [manifest: string, cmd: string = "", view: string = 
     {
       manifest: $"($base)/.bayt/bayt.($owner).json"
       view:     $view
+      # The dep's own scope, root-relative: plan-scopes enumerates each one
+      # once for the whole invocation.
+      dir:      $d.dir
       # The stamp keeps the dep's own name: it is a memo of this node, and the
       # parent's stamp is a different value.
       stamp:    $"($base)/.task/bayt/($d.name).hash"

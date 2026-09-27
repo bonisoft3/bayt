@@ -69,6 +69,9 @@ installFiles: globs: [
 	"[m]ise.toml",
 	"[.]mise.toml",
 	"[m]ise.lock",
+	// mise reads .tool-versions too, and a project that pins its toolchains
+	// there gets a stage with mise and nothing installed without it.
+	"[.]tool-versions",
 ]
 
 // exec — sets `activate: "mise x --"` so emitted command lines
