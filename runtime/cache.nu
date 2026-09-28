@@ -27,8 +27,8 @@
 #                        with the cache decision (for tests + debugging)
 #   BAYT_CACHE_BRANCH    used by --similar's metadata scoring
 #
-# See plugins/bayt/README.md for design rationale and the two-layer
-# cache story (cache.nu per-target + tool-native per-task).
+# The contract, and how this per-target cache composes with a tool's own
+# per-task cache: SPEC.md#the-cache.
 
 use ./fingerprint.nu [manifest-fingerprint, manifest-root, outs-present, resolve-manifest, write-stamp]
 use ./tools.nu [run-curl, run-oras]
@@ -340,9 +340,12 @@ def local-similar [current: record]: nothing -> any {
 }
 
 # ============================================================================
-# buchgr/bazel-remote HTTP cache backend (pure nushell, no curl/tar)
+# buchgr/bazel-remote HTTP cache backend
 #
-# Split storage; the rationale is docs/2026-04-20-three-tier-cache.md.
+# Split storage. Addressing payload by content stores and transfers a file
+# shared by two entries once, the common case since most outs survive a
+# rebuild, and keeps raw bytes where a single-blob entry would need an
+# encoding wrapper.
 #   /cas/<sha256>  one blob per payload file, addressed by its content
 #   /ac/<key>      the entry: JSON [{path, size, sha256, exec}]
 #
@@ -842,14 +845,15 @@ export def --wrapped "main run" [
 # `cache.nu check` — can this target be satisfied without running anything,
 # its deps included? A cache.full target carries it as its task-level `if:`,
 # which go-task evaluates before running the deps, so a yes skips the whole
-# subgraph beneath the target. See docs/2026-09-21-a-hit-skips-its-deps.md.
+# subgraph beneath the target. See CONTRIBUTING.md#the-cache-check.
 #
 # Exit 10 is yes: the outs are in place and the stamp holds the key. Exit 0 is
 # no: go-task runs the deps, then the task. The `if:` tests for 10 alone, so
 # any other exit, a crash included, also runs the task.
 #
-# The key is walked from manifests with no dep stamp trusted: the deps have
-# not run yet, so their stamps may predate an edit.
+# The key is walked from manifests, trusting only the stamp of a dep with no
+# manifest on disk: the deps have not run yet, so a stamp may predate an edit,
+# and a dep with no manifest cannot run.
 export def "main check" [
 	--manifest: string                        # path to .bayt/bayt.<verb>.json
 	--stamp-file: string                      # the target's L0 stamp, cwd-relative

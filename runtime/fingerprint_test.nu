@@ -5,7 +5,7 @@
 # Each test uses a fresh tempdir. Most tests run in no-git mode
 # (compute-fingerprint falls back to glob + per-file sha256), which
 # keeps fixtures minimal. One test git-init's its tempdir to exercise
-# the git-mode path (ls-files + hash-object).
+# the git-mode path (ls-files).
 
 use std/assert
 
@@ -586,7 +586,7 @@ def test_no_paths_errors [] {
 
 # --- git mode -------------------------------------------------------
 
-# A tracked file in a git work tree hashes via git hash-object.
+# A tracked file in a git work tree is listed by git ls-files.
 # This exercises the git branch of compute-fingerprint (vs. the
 # glob+sha256 fallback every other test runs).
 # Bracket-class pattern must resolve to its file (no-git mode) — a

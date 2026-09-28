@@ -1,4 +1,12 @@
-# What onboarding taught
+---
+type: decision
+title: Project onboarding
+description: Three projects put on bayt, and what each cost against its hand-maintained files.
+status: superseded
+superseded_by: ../../README.md
+---
+
+# Project onboarding
 
 Written from putting real projects on bayt. The project list is the one that
 existed when it was written; what holds is what each onboarding cost.

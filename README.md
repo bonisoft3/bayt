@@ -17,6 +17,8 @@ Bayt also keeps operational concerns next to the asset that needs them: portable
 - **Composed caching.** Bayt's content-addressed cache avoids unnecessary target work while Gradle, pnpm, Go, and other tools retain their native incremental caches. Use local disk by default, or attach a remote cache for ephemeral runners and remote builders.
 - **Gradual adoption.** Start with one target. Add more when the hand-maintained files get painful. No all-in moment.
 
+Every document about bayt, with its type and status, is listed in [docs/index.md](docs/index.md).
+
 ## Install
 
 Pin the release in your project's `.mise.toml`:
@@ -34,13 +36,13 @@ bayt generate --recursive
 
 In a workspace with many projects, `bayt generate --all` regenerates every project in dependency order with maximum parallelism — much faster than per-project invocations. The CLI also exposes the supporting tools: `bayt fingerprint`, `bayt cache gc|status|clear` for the content-addressed cache, and `bayt where root|runtime` to print bayt's own install location.
 
-**Sayt pairing (optional).** If the project uses sayt, add bayt to the generate rulemap so `sayt generate` re-emits bayt's outputs alongside the rest of the pipeline:
+**Sayt pairing (optional).** If the project uses sayt, its built-in `auto-bayt` generate rule already makes `sayt generate` re-emit bayt's outputs alongside the rest of the pipeline; to opt out:
 
 ```yaml
 say:
   generate:
     rulemap:
-      bayt: null
+      auto-bayt: null
 ```
 
 ## Getting started
@@ -191,7 +193,7 @@ A *stack* captures what a language toolchain needs. Bayt ships toolchain stacks 
 - **`stacks/go`** — go concept fragments: `modDownload` (the module closure as a `deps` layer), `build`, `test`, `integrationTest` (a nested `it/` module keeps daemon-needing testcontainers off the service graph), `vet`, `run`. A stage preamble points `GOMODCACHE` at a project-local closure in-container; the host keeps go's shared modcache.
 - **`stacks/gradle`** — kotlin/java/gradle concept fragments: `depsResolve` (the dependency closure as a read-only dep-cache layer), `assemble`, `test`, `integrationTest`, `jibBuildTar`, `check`, `run`. Default srcs scoped to `src/main/` for `assemble` (so test edits don't invalidate build); `bayt.cache.full` on `assemble` and `integrationTest` (gradle's daemon cold-start is too costly to pay on every cache hit). Emits `.bayt/init.gradle.kts` per project pointing gradle's local build cache at `$BAYT_CACHE_DIR/gradle` — gradle's per-task cache and bayt's per-target cache share the same on-disk store and complement each other (per-task hits when only some inputs changed, per-target full skips when nothing changed).
 - **`stacks/pnpm`** — pnpm/node/vite/vitest concept fragments: `install` (the dependency closure as a layer), `build`, `test`, `dev`, `testInt`, `testE2E`, `lint`. Test srcs split between `srcsTest` (`*.test.ts(x)`) and `srcsIntegrate` (`*.spec.ts(x)`) matching the repo's vitest convention. pnpm store cache mount.
-- **`stacks/bun`** — bun/Node.js concept fragments: `install` (the dependency closure as a layer), `dev`, and the `srcsBuild`/`srcsTest`/`srcsIntegrate` source sets. `installFlags` pins `--frozen-lockfile --ignore-scripts`: the lockfile stays authoritative, and lifecycle scripts defer downstream because they need source the deps layer does not carry. bun store cache mount.
+- **`stacks/bun`** — bun/Node.js concept fragments: `install` (the dependency closure as a layer), `build`, `test`, `testInt`, `testE2E`, `dev`, and the `srcsBuild`/`srcsTest`/`srcsIntegrate` source sets. `installFlags` pins `--frozen-lockfile --ignore-scripts`: the lockfile stays authoritative, and lifecycle scripts defer downstream because they need source the deps layer does not carry. bun store cache mount.
 - **`stacks/uv`** — python/uv concept fragments: `sync` (the locked environment as a `deps` layer), `build` (`compileall`, python's nearest thing to a link step), `test`, `integrationTest`, and an opt-in `bytecode`. uv owns the environment and mise owns the interpreter, so every fragment carries `toolEnv`. The venv is presence-gated through `state` rather than declared as `outs` — it is not relocatable in either direction, and the host CAS drops the interpreter symlinks — so stages reach it by FROM-chaining the `deps` stage. Layout is a parameter, not a pair of overrides: `(sayt.#uv & {srcDir: "app", unitDir: "tests"}).out` reaches both the source globs and the commands that walk them, so a project on a different tree states each directory once. Source globs sit in the framework-side `defaultGlobs` and are `| null`, so a project with no such tree deletes the key outright.
 - **`stacks/mise`** — toolchain installer. `install` (provisions the project's `.mise.toml`), `exec` (sets `activate: "mise x --"` so cmds resolve through mise's shim layer), `doctor`. Used as a building block by other stacks.
 - **`stacks/sayt`** — umbrella that maps the 10 sayt verbs (setup/build/test/launch/integrate/release/verify/generate/lint/doctor) onto stack fragments. `sayt.go`, `sayt.gradle`, `sayt.pnpm`, `sayt.pnpmWorkspace`, `sayt.uv` are the standard mappings projects compose against. `sayt.pnpmWorkspace`'s setup provisions the shared toolchain layer: it runs the workspace root's `mise install`, so consumer setups FROM-chaining it install only their project's tool delta. `sayt.inject` adds the dind plumbing for ci-cascade flows; `sayt.ci` is a one-line recipe combining inject + the standard bake-and-up-the-integrate-closure RUN body + FROM `:dindbox`; `sayt.dindbox` is the matching dindbox-target preset.
@@ -435,17 +437,7 @@ release-proxy) to targets. Overlays must not define `bayt`.
 5. **Fragments via unification, not inheritance.** Verbs (`setup`, `build`, …) and base presets (`nubox`, `busybox`, …) are plain structs, not closed `#`-prefixed definitions — CUE's closed conjunction rejects cross-def fields. See the closedness note in `core/bayt.cue`.
 6. **Version intent vs. version lock.** Base image tags go in `bayt.cue`; digests live in `images.lock.cue`, bumped as ordinary dependency changes.
 7. **Pin what the archive can honor.** OS-package installs go through `distros/*` (`(zypper.#install & {pkgs: ["findutils=4.10.0-160000.2.2"]}).out`). The policy follows archive retention rather than being uniform: zypper requires a `name=version` pin and rejects a bare name at evaluation, because leap retains versions for the life of a release; apt and apk take bare names, because Debian/Ubuntu keep one revision per package in `-updates` and Alpine prunes, so a hard pin there encodes a dated build failure rather than reproducibility. Where a build genuinely needs reproducible packages, prefer a leap base, or point apt at `snapshot.ubuntu.com`/`snapshot.debian.org`, which fixes resolution at a timestamp and makes the pin redundant. The base image is always digest-pinned, so reproducibility holds across registry-side base updates regardless — but the pin and the archive are two clocks, and they drift: a digest-pinned base eventually meets packages rebuilt against a libc it does not ship. Refresh the base pin when that happens. Nothing catches it until something forces a cold build, so a layer can stay broken for as long as its cache key holds.
-8. **Never swallow errors.** fingerprint.nu and cache.nu fail fast on missing inputs, malformed manifests, git-hash-object errors. A misconfigured target surfaces immediately instead of poisoning the cache with silent defaults.
-
-## Claude Code plugin
-
-Bayt ships as a [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code/plugins) with skills that teach Claude how to write and edit `bayt.cue`, add new stacks, and debug the generated output.
-
-| Skill | What Claude learns |
-|-------|--------------------|
-| **bayt-target** | How to write a `bayt.cue` — the seven `#target` fields, cmd rulemap, dep references, skaffold/bake blocks. Auto-invoked when editing `bayt.cue`. |
-| **bayt-stack** | How to author a new language stack — workspace prefix, verb defaults, cache mounts, what belongs in the stack vs. the consumer. |
-| **bayt-debug** | How to diagnose fingerprint mismatches, missing-src errors, cross-project stamp resolution. |
+8. **Never swallow errors.** fingerprint.nu fails fast on a malformed manifest, a missing dep manifest or srcs that match no file, and cache.nu on a failed PUT. A misconfigured target surfaces immediately instead of poisoning the cache with silent defaults.
 
 ## Layout
 
@@ -485,6 +477,10 @@ plugins/bayt/
 │   ├── gradle/gradle.cue   (gradle concept fragments: depsResolve, assemble,
 │   │                        test, integrationTest, jibBuildTar, check, run)
 │   ├── pnpm/pnpm.cue       (pnpm concept fragments + pnpmWorkspace)
+│   ├── bun/bun.cue         (bun concept fragments: install, build,
+│   │                        test, testInt, testE2E, dev)
+│   ├── uv/uv.cue           (uv concept fragments: sync, build, test,
+│   │                        integrationTest, bytecode)
 │   ├── mise/mise.cue       (install / exec / doctor — used by other stacks)
 │   └── sayt/               (umbrella — maps 10 sayt verbs onto stack
 │       ├── sayt.cue         fragments; sayt.gradle, sayt.pnpm, …

@@ -26,7 +26,7 @@ lock: images: {
 	bayt:         "bonitao/bayt-runtime:1.0.1@sha256:e0f405ae5b1fdbb915ceeb114d79ea425a0955b2acd562edcfb92a15469dc8df"
 	lazybox:      "bonitao/lazybox:0.8.3@sha256:c896a6836673d8fd217f6021a2522351fd82d580ed985159feb2f10373018e73"
 	busybox:      "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
-	// The visual battery runs a real browser against a served app, so the
+	// Visual lint runs a real browser against a served app, so the
 	// browsers are the image's and their revisions are playwright's: the tag
 	// must track the version check-visual.ts imports, or the client refuses
 	// the browsers it finds. Deno arrives as a binary because the playwright

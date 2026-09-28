@@ -1,4 +1,12 @@
-# One target, every format
+---
+type: decision
+title: Target projection
+description: The thesis bayt rests on — one typed declaration per target, projected into every tool's file — and its first design principles.
+status: superseded
+superseded_by: ../../SPEC.md
+---
+
+# Target projection
 
 The claim bayt rests on, and the principles that follow from it.
 

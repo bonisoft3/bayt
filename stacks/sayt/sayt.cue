@@ -310,7 +310,7 @@ ci: C={
 		// Hidden (non-emitted) so a target can override one for a phase without
 		// the field leaking into bayt.*.json. Generation-time → distinct phases
 		// emit distinct RUN bodies → distinct RUN-layer cache keys (see
-		// depot/DESIGN-phases.md):
+		// plugins/sayt/.github/actions/sayt/depot/action.yml):
 		//   _build && _run  → bake-load + up   (dev/local, default)
 		//   !_build && _run → up only, pulls   (run phase)
 		// The build-only phase (push a closure, no up) is a host `depot bake`

@@ -113,14 +113,8 @@ def format-xattrs [x: record]: nothing -> string {
 #                 The xattr sub-record is structured so JSON dumps
 #                 emit nested objects rather than serialized strings.
 #
-# Path handling in git mode:
-#   - Globs expand via `git ls-files -co --exclude-standard`
-#     (respects .gitignore, fast on large trees).
-#   - Literal paths bypass ls-files and hash via `git hash-object` —
-#     matters for gitignored Merkle-chain dep stamps that ls-files
-#     would silently drop. Missing literals print a warning, not
-#     error: host invocations have no cross-project dep stamps until
-#     docker COPY chains land them.
+# Missing literal paths print a warning, not an error: host invocations have
+# no cross-project dep stamps until docker COPY chains land them.
 # Load the on-disk stat memo from .task/bayt/index (JSON format).
 def load-index [root: string]: nothing -> record {
   let f = ($root | path expand | path join ".task/bayt/index")

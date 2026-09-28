@@ -1,3 +1,11 @@
+---
+type: decision
+title: The pure/impure split
+description: CUE generates and nushell runs; the boundary is the emitted per-target manifest.
+status: done
+moved_to: ../../CONTRIBUTING.md
+---
+
 # The pure/impure split
 
 Why CUE generates and nushell runs, and where the boundary is drawn.
