@@ -107,9 +107,9 @@ healthcheck: {
 	}
 
 	// postgres — pg_isready, in the postgres upstream image. Defaults
-	// give postgres extra cold-start grace (5m) for first-boot wal2json
-	// + initdb migrations. Inputs accept compose-spec shell-var defaults
-	// like "${POSTGRES_DB:-appdb}" — passed through verbatim.
+	// give postgres extra cold-start grace (5m) for a first boot's initdb
+	// migrations. Inputs accept compose-spec shell-var defaults like
+	// "${POSTGRES_DB:-appdb}" — passed through verbatim.
 	postgres: T={
 		healthcheck: {
 			db:    *"postgres"  | string
