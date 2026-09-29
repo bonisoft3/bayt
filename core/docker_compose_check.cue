@@ -705,6 +705,11 @@ Tests: docker_compose: {
 	d20_no_outs_copy:  _d20_no_outs_copy
 	d20_no_bulk_copy:  _d20_no_bulk_copy
 	d20_inc:           _d20_inc
+	d26_dot_inc:       _d26_dot_inc
+	d26_dot_depth:     _d26_dot_depth
+	d26_dot_prefix:    _d26_dot_prefix
+	d26_empty_inc:     _d26_empty_inc
+	d26_nested_inc:    _d26_nested_inc
 }
 
 // --- D23: `_copyLine`'s `--link` predicate, pinned shape by shape. See
@@ -795,3 +800,44 @@ _d25: #project & {
 }
 _d25_dc: (#dockerComposeGen & {project: _d25, depManifests: {}})
 _d25_dc: compose: files: launch: services: "d25-launch": develop?: _|_
+
+// --- D26: "." is a workspace-root project, so a closure in .bayt/ walks
+// back one level. Empty root and nested projects retain their paths.
+_d26_dot: #project & {
+	name: "d26"
+	dir:  "."
+	targets: "launch": {
+		cmd: "builtin": do: "true"
+		dockerfile: busybox
+		compose: up: true
+	}
+}
+_d26_empty: #project & {
+	name: "d26"
+	dir:  ""
+	targets: "launch": {
+		cmd: "builtin": do: "true"
+		dockerfile: busybox
+		compose: up: true
+	}
+}
+_d26_nested: #project & {
+	name: "d26"
+	dir:  "apps/demo"
+	targets: "launch": {
+		cmd: "builtin": do: "true"
+		dockerfile: busybox
+		compose: up: true
+	}
+}
+_d26_dot_inc: (#dockerComposeGen & {project: _d26_dot, depManifests: {}}).compose.files."launch.closure".include & [
+	{path: ".././.bayt/compose.launch.yaml", required: false},
+]
+_d26_dot_depth:  (#manifestGen & {project: _d26_dot, depManifests: {}})._depth & 0
+_d26_dot_prefix: (#manifestGen & {project: _d26_dot, depManifests: {}})._dirPath & ""
+_d26_empty_inc: (#dockerComposeGen & {project: _d26_empty, depManifests: {}}).compose.files."launch.closure".include & [
+	{path: "../.bayt/compose.launch.yaml", required: false},
+]
+_d26_nested_inc: (#dockerComposeGen & {project: _d26_nested, depManifests: {}}).compose.files."launch.closure".include & [
+	{path: "../../../apps/demo/.bayt/compose.launch.yaml", required: false},
+]

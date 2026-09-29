@@ -66,21 +66,21 @@ def bake-hcl [reg: string]: nothing -> string {
 target "proja_srcs" {
   dockerfile = "Dockerfile.proja_srcs"
   target     = "proja_srcs"
-  cache-from = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-proja-srcs"}"]
-  cache-to   = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-proja-srcs"},mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
+  cache-from = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-proja-srcs"},registry.insecure=true"]
+  cache-to   = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-proja-srcs"},registry.insecure=true,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 }
 target "projb_srcs" {
   dockerfile = "Dockerfile.projb_srcs"
   target     = "projb_srcs"
-  cache-from = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-projb-srcs"}"]
-  cache-to   = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-projb-srcs"},mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
+  cache-from = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-projb-srcs"},registry.insecure=true"]
+  cache-to   = ["type=registry,ref=__REG__:${SCHEME == "bare" ? "shared-srcs" : "shared-projb-srcs"},registry.insecure=true,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 }
 target "C" {
   dockerfile = "Dockerfile.C"
   target     = "C"
   contexts   = { proja_srcs = "target:proja_srcs", projb_srcs = "target:projb_srcs" }
-  cache-from = ["type=registry,ref=__REG__:proj-C"]
-  cache-to   = ["type=registry,ref=__REG__:proj-C,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
+  cache-from = ["type=registry,ref=__REG__:proj-C,registry.insecure=true"]
+  cache-to   = ["type=registry,ref=__REG__:proj-C,registry.insecure=true,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 }
 group "default" { targets = ["C"] }
 '#
@@ -165,7 +165,11 @@ def main [] {
   # registry on a random host port (discovered, so parallel runs don't collide)
   ^docker run -d --name $reg_name -p "127.0.0.1::5000" registry:2 o> /dev/null e> /dev/null
   let port = ((^docker port $reg_name "5000/tcp") | lines | first | parse "{ip}:{port}" | get port.0 | str trim)
-  (bake-hcl $"localhost:($port)/cache") | save -f $"($work)/bake.hcl"
+  # Docker Desktop's host network is inside its VM, so BuildKit needs the host gateway.
+  let registry_host = if ((^docker info --format "{{.OperatingSystem}}") | str contains "Docker Desktop") {
+    "host.docker.internal"
+  } else { "localhost" }
+  (bake-hcl $"($registry_host):($port)/cache") | save -f $"($work)/bake.hcl"
   sleep 1sec
 
   # Seed the two synthetics on TWO SEPARATE buildkits — the cross-bake the

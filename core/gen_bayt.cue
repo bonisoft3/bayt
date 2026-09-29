@@ -80,23 +80,16 @@ _expandCopy: {
 	// injection; any string key returns _ (unconstrained) rather than _|_.
 	depManifests: {[string]: _}
 
-	// Project depth from monorepo root. dir="" means workspace-root —
-	// strings.Split("", "/") returns [""] (len 1), which would emit one
-	// spurious `../` hop and double-slash COPY paths. The conditional
-	// keeps depth=0 the canonical workspace-root signal so every path
-	// helper (relRoot, rootFromBayt, COPY destinations, taskfile cross-
-	// includes) lands cleanly without bespoke per-site special-casing.
+	// Empty and dot name the workspace root, at depth zero.
 	_depth: [
-		if G.project.dir == "" {0},
-		if G.project.dir != "" {len(strings.Split(G.project.dir, "/"))},
+		if G.project.dir == "" || G.project.dir == "." {0},
+		if G.project.dir != "" && G.project.dir != "." {len(strings.Split(G.project.dir, "/"))},
 	][0]
 
-	// Project dir as a path-prefix segment: "" or "<dir>/". Used wherever
-	// emitters concatenate `<prefix><file>` and a workspace-root project
-	// (dir="") would otherwise produce a leading `/`.
+	// Prefix for emitted paths; a root project has no directory segment.
 	_dirPath: [
-		if G.project.dir == "" {""},
-		if G.project.dir != "" {"\(G.project.dir)/"},
+		if G.project.dir == "" || G.project.dir == "." {""},
+		if G.project.dir != "" && G.project.dir != "." {"\(G.project.dir)/"},
 	][0]
 
 	projectManifest: {

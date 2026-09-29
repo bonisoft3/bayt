@@ -20,6 +20,11 @@ through a generated driver, `.bayt/render.cue`. Projects never import each
 other's CUE: cross-project facts travel as emitted manifests, which keeps every
 project relocatable.
 
+`project.dir` is relative to the workspace root. At the root, both `""` and
+`"."` mean depth zero: a closure inside `.bayt/` needs one `../` to reach its
+project files. The manifest retains the declared spelling; the manifest
+generator treats both root spellings alike when calculating depth and prefixes.
+
 Verbs, presets and capabilities (`sayt.build`, `bayt.nubox`, `bayt.cache.full`)
 are plain struct values unified into a target, not closed definitions:
 composition is unification, never inheritance, so a fragment is declared far
