@@ -44,6 +44,8 @@
 #
 # Names are randomized per invocation so concurrent runs don't collide.
 
+use mirror.nu [buildkitd-config]
+
 const FE = "docker/dockerfile:1.26@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32"
 const BB = "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
 
@@ -115,7 +117,7 @@ def bldr-exists [bld: string]: nothing -> bool {
 
 def fresh-builder [bld: string]: nothing -> nothing {
   if (bldr-exists $bld) { ^docker buildx rm $bld o> /dev/null e> /dev/null }
-  ^docker buildx create --name $bld --driver docker-container --driver-opt network=host o> /dev/null e> /dev/null
+  ^docker buildx create --name $bld --driver docker-container --buildkitd-config (buildkitd-config) --driver-opt network=host o> /dev/null e> /dev/null
   ^docker buildx inspect --bootstrap $bld o> /dev/null e> /dev/null
 }
 

@@ -14,8 +14,8 @@
 # The volume is named rather than anonymous so `in-storage` can attach to it.
 
 # Multiplatform index (linux/amd64 + linux/arm64).
-const BR = "buchgr/bazel-remote-cache:latest@sha256:730699ebe2a203dec68af34656f07e2fceedc3c6f8814642a73f231e0c8357be"
-const BB = "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
+const BR = "mirror.gcr.io/buchgr/bazel-remote-cache:latest@sha256:730699ebe2a203dec68af34656f07e2fceedc3c6f8814642a73f231e0c8357be"
+const BB = "mirror.gcr.io/library/busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
 
 # Retry on a fresh port: the port is picked at random, and a taken one fails
 # the container start.

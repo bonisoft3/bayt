@@ -14,6 +14,10 @@
 # A probe is a new untracked file where one can be placed — enumeration is
 # `git ls-files -co`, so an untracked file counts. Where the input under test
 # IS a tracked file, the probe appends and restores the saved bytes.
+#
+# The probes go into a private copy of the tree, never the shared one: another
+# test fingerprinting the repository beside this one would list a probe and
+# find it gone, or hash it between two of its own reads.
 
 use std/assert
 
@@ -21,14 +25,25 @@ def repo-root []: nothing -> string {
   (^git rev-parse --show-toplevel | str trim)
 }
 
+# Every file git would list, uncommitted work included, in a fresh repository
+# of its own, so enumeration there answers as it does here.
+def private-copy [root: string]: nothing -> string {
+  let dir = (mktemp -d)
+  # -C before -T: GNU tar applies a directory only to the names after it.
+  do { cd $root; ^git ls-files -co --exclude-standard -z } | ^tar -C $root --null -T - -cf - | ^tar -xf - -C $dir
+  do { cd $dir; ^git init -q }
+  $dir
+}
+
 def main [] {
   print "Running bayt/fingerprint observation tests...\n"
 
-  let root = (repo-root)
+  let source = (repo-root)
   # No skip arm: the image scope and the context walk have no other coverage,
   # so a missing fixture must fail rather than silently disarm the only guard.
-  let depot = ($root | path join "guis/iris/.bayt/depot.json")
+  let depot = ($source | path join "guis/iris/.bayt/depot.json")
   assert ($depot | path exists) "guis/iris/.bayt/depot.json is missing - this suite is the only coverage for the image scope"
+  let root = (private-copy $source)
 
   # manifest, the file a change lands in, and what reaches it.
   let cases = [
@@ -69,7 +84,8 @@ def main [] {
     }
   ]
 
-  for c in $cases { test_probe_moves_the_hash $root $c }
+  try { for c in $cases { test_probe_moves_the_hash $root $c } } catch { |e| rm -rf $root; error make $e.rawvalue }
+  rm -rf $root
 
   print "\nAll bayt/fingerprint observation tests passed!"
 }

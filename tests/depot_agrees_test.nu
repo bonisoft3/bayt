@@ -104,7 +104,11 @@ def test_depot_plan_runs [root: string, dir: string, name: string] {
 
   # Every leaf's in-process fingerprint must match the standalone fingerprint CLI
   for t in $plan.targets {
-    let expected = (do { cd $root; ^$nu.current-exe $fp_nu --manifest $t.manifest --all-cmds --quiet } | complete | get stdout | str trim)
+    # The CLI's own failure is the finding: compared as an empty fingerprint it
+    # read as a divergence on a Windows runner, with the cause discarded.
+    let cli = (do { cd $root; ^$nu.current-exe $fp_nu --manifest $t.manifest --all-cmds --quiet } | complete)
+    assert equal $cli.exit_code 0 $"fingerprint CLI failed for ($t.target): ($cli.stderr)"
+    let expected = ($cli.stdout | str trim)
     let actual = ($leaves | where target == $t.target | first | get fingerprint)
     assert equal $actual $expected $"leaf ($t.target) in-process fingerprint ($actual) diverged from CLI ($expected)"
   }
