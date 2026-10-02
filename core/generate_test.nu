@@ -4,7 +4,7 @@
 # Run with: nu generate_test.nu (from this directory).
 
 use std/assert
-use ./generate.nu [repo-of, scan-dir, _inject-runtime]
+use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat]
 
 def main [] {
 	print "Running generate.nu tests...\n"
@@ -17,6 +17,9 @@ def main [] {
 	test_scan_dir_answers_the_scan_s_spelling
 	test_scan_dir_answers_dot_at_the_root
 	test_scan_dir_leaves_a_posix_dir_alone
+	test_relative_flat_on_windows
+	test_relative_flat_leaves_other_backslashes
+	test_relative_flat_on_posix
 	test_inject_runtime_rewrites_the_published_image
 	test_inject_runtime_climbs_out_of_a_nested_project
 	test_inject_runtime_is_a_noop_without_the_env
@@ -108,6 +111,27 @@ def test_inject_runtime_is_a_noop_without_the_env [] {
 	print "test an unset BAYT_RUNTIME_DIR leaves the image ref alone..."
 	let got = (with-env {BAYT_RUNTIME_DIR: ""} { _inject-runtime (_svc $IMG) "." })
 	assert equal $got.services.a.build.additional_contexts.bayt $IMG
+}
+
+# On Windows compose spells the flattened contexts with backslashes, and the
+# prefix strip missed them: depot.json named `.\apps\primer/.bayt/...` and
+# depot.yaml `.\apps\primer`, so the cross job's stale-tree check failed.
+def test_relative_flat_on_windows [] {
+	print "test a Windows context comes out repo-relative with forward slashes..."
+	let flat = "services:\n  a:\n    build:\n      context: D:\\a\\trash\\trash\\apps\\primer\n"
+	assert equal (relative-flat $flat 'D:\a\trash\trash') "services:\n  a:\n    build:\n      context: apps/primer\n"
+}
+
+def test_relative_flat_leaves_other_backslashes [] {
+	print "test a backslash outside a workspace path is content..."
+	let flat = "      command: echo a\\nb\n"
+	assert equal (relative-flat $flat 'D:\a\trash\trash') $flat
+}
+
+def test_relative_flat_on_posix [] {
+	print "test a POSIX context loses the workspace prefix..."
+	let flat = "      context: /home/r/trash/apps/primer\n      root: /home/r/trash\n"
+	assert equal (relative-flat $flat '/home/r/trash') "      context: apps/primer\n      root: .\n"
 }
 
 # The record is rebuilt service by service, so order is not free. Emitted

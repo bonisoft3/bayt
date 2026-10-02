@@ -353,14 +353,31 @@ def emit-depot-yaml [proj_dir: string, ws: string, --required, --group: record =
 		print -e $detail
 		return
 	}
-	let flat = ($r.stdout
-		| str replace --all $"($ws)/" ""
-		| str replace --all $ws "."
-		| str replace --all "service:" "target:")
+	let flat = (relative-flat $r.stdout $ws | str replace --all "service:" "target:")
 	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header (_dedup-x-bake $flat))
 	if not ($group | is-empty) {
 		atomic-write $"($dir)/.bayt/depot.json" (depot-plan $flat $group | to json --indent 2)
 	}
+}
+
+# relative-flat — the flattened compose with the workspace's absolute paths made
+# repo-root-relative. On Windows compose spells them with backslashes, so only
+# the lines that carry the workspace path are rewritten to forward slashes; a
+# backslash anywhere else is content and stays.
+export def relative-flat [flat: string, ws: string]: nothing -> string {
+	let fwd = ($ws | str replace --all '\' '/')
+	let native = ($ws | str replace --all '/' '\')
+	$flat
+	| lines
+	| each { |l|
+		if ($native != $fwd) and ($l | str contains $native) {
+			$l | str replace --all $native $fwd | str replace --all '\' '/'
+		} else { $l }
+	}
+	| str join "\n"
+	| $"($in)\n"
+	| str replace --all $"($fwd)/" ""
+	| str replace --all $fwd "."
 }
 
 # repo-of — a compose `image:` minus its tag. A tag cannot contain '/', so only
