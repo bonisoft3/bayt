@@ -116,7 +116,7 @@ def format-xattrs [x: record]: nothing -> string {
 # Missing literal paths print a warning, not an error: host invocations have
 # no cross-project dep stamps until docker COPY chains land them.
 # Load the on-disk stat memo from .task/bayt/index (JSON format).
-def load-index [root: string]: nothing -> record {
+export def load-index [root: string]: nothing -> record {
   let f = ($root | path expand | path join ".task/bayt/index")
   if ($f | path exists) {
     try { open $f | from json } catch { {} }
@@ -322,7 +322,7 @@ def plan-scopes [r: record]: nothing -> record {
 # mutate an outer binding. Keyed by manifest plus view, cmd and scope flavor —
 # each selects a different file set from the same file, so a shared key would
 # hand one scope another's hash. A diamond within one key is walked once.
-def closure-hash [
+export def closure-hash [
   manifest: string
   cmd: string
   docker: bool

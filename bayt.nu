@@ -71,25 +71,42 @@ def "main depot-plan" [
 	if ($manifest | is-empty) {
 		error make { msg: "bayt depot-plan: --manifest is required" }
 	}
-	# Out of process, through this same interpreter: fingerprint --quiet prints
-	# its hash rather than returning it, and a per-leaf failure has to stay a
-	# per-leaf empty rather than aborting the walk.
-	let fp_nu = ($env.FILE_PWD | path join "runtime" "fingerprint.nu")
-	open $manifest | get targets | each { |t|
-		let r = (do { ^$nu.current-exe $fp_nu --manifest $t.manifest --all-cmds --quiet } | complete)
-		if $r.exit_code != 0 {
-			print -e $"bayt depot-plan: ($t.target) will not fingerprint: ($r.stderr)"
-		}
-		{
+	use runtime/fingerprint.nu [closure-hash, load-index]
+	let targets = (open $manifest | get targets)
+	# All targets in one depot manifest share the repo root; load the stat index once.
+	let root = ("." | path expand)
+	let index = (load-index $root)
+
+	# Arguments for closure-hash:
+	# cmd="", docker=false, view="", all_cmds=true (image scope), walk=false (trust stamps)
+	mut memo = {}
+	mut results = []
+	for t in $targets {
+		let cur_memo = $memo
+		let res = (try {
+			closure-hash $t.manifest "" false $cur_memo "" true false $index
+		} catch { |err|
+			# Fail open: a per-leaf failure must stay a per-leaf empty hash so sayt/plan
+			# builds it, rather than aborting the walk for the whole group.
+			let rendered = ($err.rendered? | default $err.msg)
+			print -e $"bayt depot-plan: ($t.target) will not fingerprint: ($rendered)"
+			{hash: "", memo: $cur_memo}
+		})
+		$memo = $res.memo
+		$results ++= [{
 			target: $t.target
 			repo:   $t.repo
-			fingerprint: (if $r.exit_code == 0 { $r.stdout | str trim } else { "" })
-		}
-	} | to json --raw | if ($out | is-empty) { print $in } else {
+			fingerprint: $res.hash
+		}]
+	}
+	let out_json = ($results | to json --raw)
+	if ($out | is-empty) {
+		print $out_json
+	} else {
 		# --out because stdout is shared: a launcher that prints its own line
 		# before this one turns the result into something no caller can parse,
 		# and the caller cannot tell that from a leaf set.
-		$in | save -f $out
+		$out_json | save -f $out
 	}
 }
 

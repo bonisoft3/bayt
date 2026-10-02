@@ -30,6 +30,7 @@ def main [] {
     test_manifests_exist $root $d $name
     test_repos_are_distinct_and_tagless $d $name
     test_repo_matches_what_the_bake_pushes $root $d $name
+    test_depot_plan_runs $root $d $name
   }
 
   print "\nAll bayt/depot agreement tests passed!"
@@ -89,4 +90,23 @@ def test_repo_matches_what_the_bake_pushes [root: string, dir: string, name: str
   } | compact)
   assert equal $wrong []
   print $"  PASS  ($name): every repo matches the flattened compose"
+}
+
+def test_depot_plan_runs [root: string, dir: string, name: string] {
+  let bayt_nu = ($root | path join "plugins/bayt/bayt.nu")
+  let fp_nu = ($root | path join "plugins/bayt/runtime/fingerprint.nu")
+  let r = (do { cd $root; ^$nu.current-exe $bayt_nu depot-plan --manifest ($dir | path join "depot.json") } | complete)
+  assert equal $r.exit_code 0 $"depot-plan failed: ($r.stderr)"
+  let leaves = ($r.stdout | from json)
+  let plan = (open ($dir | path join "depot.json"))
+  assert equal ($leaves | length) ($plan.targets | length)
+  assert equal ($leaves | get target) ($plan.targets | get target)
+
+  # Every leaf's in-process fingerprint must match the standalone fingerprint CLI
+  for t in $plan.targets {
+    let expected = (do { cd $root; ^$nu.current-exe $fp_nu --manifest $t.manifest --all-cmds --quiet } | complete | get stdout | str trim)
+    let actual = ($leaves | where target == $t.target | first | get fingerprint)
+    assert equal $actual $expected $"leaf ($t.target) in-process fingerprint ($actual) diverged from CLI ($expected)"
+  }
+  print $"  PASS  ($name): depot-plan fingerprints match standalone fingerprint CLI for all targets"
 }
