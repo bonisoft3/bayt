@@ -1,6 +1,7 @@
 #!/usr/bin/env -S mise tool-stub
 # Static builds; the musl ones run on glibc and musl hosts alike.
 bin = "curl"
+version = "8.22.0"
 
 [platforms.darwin-arm64]
 url = "https://github.com/stunnel/static-curl/releases/download/8.22.0/curl-macos-arm64-8.22.0.tar.xz"

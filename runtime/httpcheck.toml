@@ -1,5 +1,6 @@
 #!/usr/bin/env -S mise tool-stub
 bin = "httpcheck"
+version = "1.4.0"
 
 [platforms.darwin-arm64]
 url = "https://github.com/tarampampam/microcheck/releases/download/v1.4.0/macos-arm64.tar.gz"
