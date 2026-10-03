@@ -57,6 +57,7 @@
 # leave stale per-target files behind.
 
 use ../runtime/tools.nu [run-cue, run-nu]
+use ../runtime/ignore.nu [walk-scope]
 
 # Data file holding the render.cue core-package import, so copybara can
 # rewrite the mirror identity on the .nuon (not in this source). See it.
@@ -69,18 +70,35 @@ def print-timing [label: string, start: datetime] {
 	}
 }
 
+# The workspace's files, as git sees them in a work tree: tracked and
+# untracked-but-not-ignored, under every exclude git honours. Where there is
+# no work tree — a build context leaves .git out — the walk that honours the
+# .gitignore files stands in. Any other git failure is fatal.
+def workspace-files [workspace_root: string]: nothing -> list<string> {
+	let in_repo = if (which git | is-empty) { false } else {
+		let r = (do { cd $workspace_root; ^git rev-parse --is-inside-work-tree } | complete)
+		if $r.exit_code == 0 { true } else if ($r.stderr | str contains "not a git repository") { false } else {
+			error make {msg: $"bayt: git cannot read the workspace at ($workspace_root): ($r.stderr | str trim)"}
+		}
+	}
+	if not $in_repo { return (walk-scope ($workspace_root | path expand) --no-git) }
+	let listed = (do { cd $workspace_root; ^git ls-files --cached --others --exclude-standard } | complete)
+	if $listed.exit_code != 0 {
+		error make {msg: $"bayt: cannot list the workspace's files at ($workspace_root): ($listed.stderr | str trim)"}
+	}
+	$listed.stdout | lines
+}
+
 # scan-projects runs ONE parallel `cue export` per bayt.cue and returns
 # [{path, name, dir_rel, targets}] — the single CUE read behind the
 # project index (name → dir), the topo schedule, and regen's pass 1.
 # One read, not one per consumer: `cue export` costs ~40 ms here but the
 # pass-2 render costs seconds, so keep work out of pass 2, not out of here.
-def scan-projects [workspace_root: string] {
-	# Enumerate bayt.cue files via `git ls-files`. Drop bayt's own
-	# package + stacks files: they share the bayt.cue name but
-	# define schemas, not projects. Anchor repo-relative paths to
+export def scan-projects [workspace_root: string] {
+	# Drop bayt's own package + stacks files: they share the bayt.cue name
+	# but define schemas, not projects. Anchor repo-relative paths to
 	# workspace_root so the downstream `cue export` works from any cwd.
-	let rel_paths = (do { cd $workspace_root; ^git ls-files --cached --others --exclude-standard }
-		| lines
+	let rel_paths = (workspace-files $workspace_root
 		| where ($it | str ends-with "/bayt.cue") or $it == "bayt.cue"
 		| where not ($it | str starts-with "plugins/bayt/core/")
 		| where not ($it | str starts-with "plugins/bayt/stacks/")
@@ -731,7 +749,7 @@ export def main [--recursive (-r), --all, --runtime: string = "", --depot] {
 	with-env { BAYT_RUNTIME_DIR: $effective } { _main --recursive=$recursive --all=$all --depot=$depot }
 }
 
-# A workspace-relative dir spelled the way the scan spells it: `git ls-files`
+# A workspace-relative dir spelled the way the scan spells it: its listing
 # and a bayt.json's `dir` both answer in forward slashes, where the `path
 # relative-to` this is given answers in the platform's own. Without it a
 # project on Windows never matches its own scanned row, and the pass-1
@@ -773,7 +791,7 @@ def _main [--recursive (-r), --all, --depot] {
 		let bayt_cue = if $project_rel == "." { $"($workspace_root)/bayt.cue" } else { $"($workspace_root)/($project_rel)/bayt.cue" }
 		cd $workspace_root
 		# The row can be missing here (e.g. a gitignored dir escapes the
-		# scan's `git ls-files`); regen-project's pass 1 covers it.
+		# scan's listing); regen-project's pass 1 covers it.
 		let row = ($scan | where dir_rel == $project_rel | get --optional 0)
 		let tgts = if $row == null { null } else { $row.targets }
 		regen-project $bayt_cue $project_rel $index $workspace_root $tgts --depot=$depot

@@ -4,7 +4,7 @@
 # Run with: nu generate_test.nu (from this directory).
 
 use std/assert
-use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat]
+use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects]
 
 def main [] {
 	print "Running generate.nu tests...\n"
@@ -20,6 +20,8 @@ def main [] {
 	test_relative_flat_on_windows
 	test_relative_flat_leaves_other_backslashes
 	test_relative_flat_on_posix
+	test_scan_finds_projects_outside_a_repository
+	test_scan_honours_git_excludes_in_a_work_tree
 	test_inject_runtime_rewrites_the_published_image
 	test_inject_runtime_climbs_out_of_a_nested_project
 	test_inject_runtime_is_a_noop_without_the_env
@@ -132,6 +134,45 @@ def test_relative_flat_on_posix [] {
 	print "test a POSIX context loses the workspace prefix..."
 	let flat = "      context: /home/r/trash/apps/primer\n      root: /home/r/trash\n"
 	assert equal (relative-flat $flat '/home/r/trash') "      context: apps/primer\n      root: .\n"
+}
+
+# A scan that asked git alone came back empty outside a work tree, and every
+# cross-project ref then failed as an unknown project naming no cause; the act
+# replay's build context, which leaves .git out, was such a place.
+def test_scan_finds_projects_outside_a_repository [] {
+	print "test the scan walks a workspace that is no work tree..."
+	let dir = (mktemp -d)
+	mkdir ($dir | path join app) ($dir | path join dist/app)
+	"dist/\n" | save ($dir | path join .gitignore)
+	for d in [app, dist/app] { _project $dir $d }
+	let got = (_scanned $dir)
+	assert equal $got ["app"]
+}
+
+# In a work tree the scan is git's own listing, so every exclude git honours
+# still holds: a scratch copy of a project under .git/info/exclude would
+# otherwise join the index under a name another project already has.
+def test_scan_honours_git_excludes_in_a_work_tree [] {
+	print "test the scan keeps git's excludes in a work tree..."
+	let dir = (mktemp -d)
+	^git -C $dir init -q
+	mkdir ($dir | path join app) ($dir | path join scratch/app)
+	"scratch/\n" | save --append ($dir | path join .git/info/exclude)
+	for d in [app, scratch/app] { _project $dir $d }
+	let got = (_scanned $dir)
+	assert equal $got ["app"]
+}
+
+def _project [root: string, d: string] {
+	"" | save ($root | path join $d bayt.cue)
+	{name: ($d | str replace "/" "_"), dir: $d, targets: {}} | to json | save ($root | path join $d bayt.json)
+}
+
+# The scan's project names, with the workspace removed whether it answers or throws.
+def _scanned [dir: string]: nothing -> list<string> {
+	let got = (try { scan-projects $dir | get name } catch {|e| rm -rf $dir; error make {msg: $e.msg} })
+	rm -rf $dir
+	$got
 }
 
 # The record is rebuilt service by service, so order is not free. Emitted
