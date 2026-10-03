@@ -52,7 +52,7 @@ _cap2: #project & {
 				entrypoint:   ["/monorepo/scripts/wrap.sh"]
 				network_mode: "host"
 				volumes: [
-					"/var/run/docker.sock:/var/run/docker.sock",
+					"//var/run/docker.sock:/var/run/docker.sock",
 				]
 			}
 		}
