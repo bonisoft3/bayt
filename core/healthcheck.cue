@@ -21,6 +21,11 @@
 //     healthcheck: { url: "http://127.0.0.1:8081/health" }
 //   }
 //
+// A target without an image takes the check alone, which the host probe
+// is derived from:
+//
+//   targets: ollama: {healthcheck: bayt.healthcheck.#http & {url: "..."}}
+//
 // Override defaults inline:
 //
 //   ... & bayt.healthcheck.postgres & {
@@ -33,15 +38,19 @@ package bayt
 
 healthcheck: {
 	// http — HTTP GET status check via microcheck httpcheck.
+	#http: {
+		// Which check this is, for gen_process_compose's host probe.
+		template: "http"
+		url: string
+		start_interval: *"200ms" | string
+		interval:       *"1s"    | string
+		timeout:        *"5s"    | string
+		retries:        *30      | int
+		start_period:   *"30s"   | string
+		...
+	}
 	http: T={
-		healthcheck: {
-			url: string
-			start_interval: *"200ms" | string
-			interval:       *"1s"    | string
-			timeout:        *"5s"    | string
-			retries:        *30      | int
-			start_period:   *"30s"   | string
-		}
+		healthcheck: #http
 
 		dockerfile: {
 			// defaultCopy, not copy, so a consumer's own `copy` coexists —
@@ -71,15 +80,19 @@ healthcheck: {
 	}
 
 	// tcp — TCP port liveness via microcheck portcheck.
+	#tcp: {
+		// Which check this is, for gen_process_compose's host probe.
+		template: "tcp"
+		port: int
+		start_interval: *"200ms" | string
+		interval:       *"1s"    | string
+		timeout:        *"5s"    | string
+		retries:        *30      | int
+		start_period:   *"30s"   | string
+		...
+	}
 	tcp: T={
-		healthcheck: {
-			port: int
-			start_interval: *"200ms" | string
-			interval:       *"1s"    | string
-			timeout:        *"5s"    | string
-			retries:        *30      | int
-			start_period:   *"30s"   | string
-		}
+		healthcheck: #tcp
 
 		dockerfile: {
 			defaultCopy: portcheck: {
@@ -110,19 +123,23 @@ healthcheck: {
 	// give postgres extra cold-start grace (5m) for a first boot's initdb
 	// migrations. Inputs accept compose-spec shell-var defaults like
 	// "${POSTGRES_DB:-appdb}" — passed through verbatim.
-	postgres: T={
-		healthcheck: {
-			db:    *"postgres"  | string
-			user:  *"postgres"  | string
-			port:  *5432        | int
-			host:  *"localhost" | string
+	#postgres: {
+		// Which check this is, for gen_process_compose's host probe.
+		template: "postgres"
+		db:    *"postgres"  | string
+		user:  *"postgres"  | string
+		port:  *5432        | int
+		host:  *"localhost" | string
 
-			start_interval: *"200ms" | string
-			interval:       *"1s"    | string
-			timeout:        *"5s"    | string
-			retries:        *30      | int
-			start_period:   *"5m"    | string
-		}
+		start_interval: *"200ms" | string
+		interval:       *"1s"    | string
+		timeout:        *"5s"    | string
+		retries:        *30      | int
+		start_period:   *"5m"    | string
+		...
+	}
+	postgres: T={
+		healthcheck: #postgres
 
 		dockerfile: healthcheck: {
 			test:         ["CMD", "pg_isready", "-h", T.healthcheck.host, "-p", "\(T.healthcheck.port)", "-d", T.healthcheck.db, "-U", T.healthcheck.user]
@@ -142,14 +159,18 @@ healthcheck: {
 	}
 
 	// redis — redis-cli, in the redis upstream image.
+	#redis: {
+		// Which check this is, for gen_process_compose's host probe.
+		template: "redis"
+		start_interval: *"200ms" | string
+		interval:       *"1s"    | string
+		timeout:        *"5s"    | string
+		retries:        *30      | int
+		start_period:   *"30s"   | string
+		...
+	}
 	redis: T={
-		healthcheck: {
-			start_interval: *"200ms" | string
-			interval:       *"1s"    | string
-			timeout:        *"5s"    | string
-			retries:        *30      | int
-			start_period:   *"30s"   | string
-		}
+		healthcheck: #redis
 
 		dockerfile: healthcheck: {
 			test:         ["CMD-SHELL", "redis-cli ping | grep PONG"]
@@ -172,16 +193,20 @@ healthcheck: {
 	// listener answers HTTP before the model is ready, so dependent
 	// services connect and time out on first inference. Default
 	// start_period is 2m for cold model load.
-	ollama: T={
-		healthcheck: {
-			model: string
+	#ollama: {
+		// Which check this is, for gen_process_compose's host probe.
+		template: "ollama"
+		model: string
 
-			start_interval: *"200ms" | string
-			interval:       *"1s"    | string
-			timeout:        *"5s"    | string
-			retries:        *30      | int
-			start_period:   *"120s"  | string
-		}
+		start_interval: *"200ms" | string
+		interval:       *"1s"    | string
+		timeout:        *"5s"    | string
+		retries:        *30      | int
+		start_period:   *"120s"  | string
+		...
+	}
+	ollama: T={
+		healthcheck: #ollama
 
 		dockerfile: healthcheck: {
 			test:         ["CMD-SHELL", "ollama list | grep -q \(T.healthcheck.model)"]

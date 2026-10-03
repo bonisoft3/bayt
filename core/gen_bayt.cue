@@ -714,6 +714,32 @@ _expandCopy: {
 
 				// Output blocks (optional — only present if target emits them).
 				if t.taskfile != _|_ {taskfile: t.taskfile}
+
+				// Only a target with an entrypoint has a host process, so only its
+				// manifest records what the host projection reads, field by field:
+				// the #cmd it embeds, copied whole, costs every generator reading
+				// the manifest its evaluation again.
+				if t.entrypoint != _|_ {
+					let _e = t.entrypoint
+					entrypoint: {
+						do:    _e.do
+						shell: _e.shell
+						env:   _e.env
+						after: _e.after
+						host:  _e.host
+						for os in ["windows", "linux", "darwin"] if _e[os] != _|_ {(os): _e[os]}
+						if _e.dockerfile != _|_ {
+							dockerfile: {
+								if _e.dockerfile.do != _|_ {do: _e.dockerfile.do}
+								if _e.dockerfile.shell != _|_ {shell: _e.dockerfile.shell}
+							}
+						}
+					}
+					if t["process-compose"] != _|_ {"process-compose": t["process-compose"]}
+					// The host probe derives from it (gen_process_compose).
+					if t.healthcheck != _|_ {healthcheck: t.healthcheck}
+				}
+				if t.expose != _|_ if len(t.expose) > 0 {expose: t.expose}
 				if t.dockerfile != _|_ {
 					// Merge defaultPreamble (framework #MapAsList, keyed)
 					// + preamble (project-leaf list) at manifest emit

@@ -106,6 +106,24 @@ def main [] {
 	let neg_unpinned_lock = ["./tests/_negative_unpinned_lock/"]
 	let neg_reserved = ["./tests/_negative_reserved_name/"]
 	let neg_nonascii = ["./tests/_negative_nonascii_scope/"]
+	let neg_undeclared_port = ["./tests/_negative_undeclared_port/"]
+	let neg_entrypoint_cmd = ["./tests/_negative_entrypoint_cmd/"]
+	let neg_port_var_clash = ["./tests/_negative_port_var_clash/"]
+	let neg_container_waits_host = ["./tests/_negative_container_waits_host/"]
+	let neg_healthy_no_probe = ["./tests/_negative_healthy_no_probe/"]
+	let neg_entrypoint_mismatch = ["./tests/_negative_entrypoint_mismatch/"]
+	let neg_port_default_clash = ["./tests/_negative_port_default_clash/"]
+	let neg_command_names_peer = ["./tests/_negative_command_names_peer/"]
+	let neg_compose_command = ["./tests/_negative_compose_command/"]
+	let neg_fixed_port_clash = ["./tests/_negative_fixed_port_clash/"]
+	let neg_bare_host_moving = ["./tests/_negative_bare_host_moving/"]
+	let neg_env_names_container_peer = ["./tests/_negative_env_names_container_peer/"]
+	let neg_bare_names_container = ["./tests/_negative_bare_names_container/"]
+	let neg_unreadable_duration = ["./tests/_negative_unreadable_duration/"]
+	let neg_wait_without_dep = ["./tests/_negative_wait_without_dep/"]
+	let neg_url_without_port = ["./tests/_negative_url_without_port/"]
+	let neg_compose_entrypoint_string = ["./tests/_negative_compose_entrypoint_string/"]
+	let neg_command_names_port = ["./tests/_negative_command_names_port/"]
 	let pos_ci_srcs = ["./tests/_positive_ci_srcs/"]
 	# Consumer-side proof that a distros fragment unifies into both the
 	# preamble arm and #cmd.dockerfile, the way a project composes it.
@@ -133,6 +151,24 @@ def main [] {
 	$failed = $failed + (eval-fail "an unpinned zypper lock entry must fail" $neg_unpinned_lock)
 	$failed = $failed + (eval-fail-msg "a target name colliding with a synthetic must fail, naming the key" $neg_reserved "_reservedNames.thing_srcs")
 	$failed = $failed + (eval-fail-msg "a scope outside the tag charset must hit the budget bound, not SliceRunes" $neg_nonascii "out of bound >=18")
+	$failed = $failed + (eval-fail-msg "a peer port the peer does not expose has no host spelling" $neg_undeclared_port "names a port of crud that crud does not expose")
+	$failed = $failed + (eval-fail-msg "an entrypoint beside a Dockerfile CMD would take the CMD as arguments" $neg_entrypoint_cmd "entrypoint and dockerfile.cmd together")
+	$failed = $failed + (eval-fail-msg "two ports collapsing to one host variable must fail, naming both" $neg_port_var_clash "web.expose.admin_http and web-admin.expose.http both map to WEB_ADMIN_HTTP_PORT")
+	$failed = $failed + (eval-fail-msg "a container waiting on a host-only process must fail" $neg_container_waits_host "waits on migrate, which has no container to wait on")
+	$failed = $failed + (eval-fail-msg "a health wait on a process with no probe would hang, so it must fail" $neg_healthy_no_probe "waits for worker to be healthy, but worker has no readiness probe")
+	$failed = $failed + (eval-fail-msg "a Dockerfile entrypoint other than the sugar's must fail" $neg_entrypoint_mismatch "dockerfile.entrypoint and entrypoint name different processes")
+	$failed = $failed + (eval-fail-msg "two ports on one default must fail, naming both" $neg_port_default_clash "both default to port 3300")
+	$failed = $failed + (eval-fail-msg "a command naming a peer must fail, asking for env" $neg_command_names_peer "its command names crud; pass the address through env")
+	$failed = $failed + (eval-fail-msg "a compose command beside the entrypoint must fail" $neg_compose_command "entrypoint and compose.command together")
+	$failed = $failed + (eval-fail-msg "two fixed ports on one number must fail" $neg_fixed_port_clash "auth.expose.http and ticker.expose.http both default to port 9999")
+	$failed = $failed + (eval-fail-msg "a bare host whose peer's ports move must fail" $neg_bare_host_moving "DB_HOST names database alone, whose ports move on the host")
+	$failed = $failed + (eval-fail-msg "a value naming a container-only peer must fail" $neg_env_names_container_peer "PG_URI names a port of database that database does not expose on the host")
+	$failed = $failed + (eval-fail-msg "a bare value naming a container-only service must fail" $neg_bare_names_container "REDIS_HOST names redis, which does not run on the host")
+	$failed = $failed + (eval-fail-msg "an unreadable duration must fail, naming it" $neg_unreadable_duration "30 s is not a duration")
+	$failed = $failed + (eval-fail-msg "a container wait outside the deps must fail, naming the dep" $neg_wait_without_dep "waits on database without depending on it")
+	$failed = $failed + (eval-fail-msg "a peer URL without a port must fail" $neg_url_without_port "URL names web as a host the rewrite cannot place")
+	$failed = $failed + (eval-fail-msg "a string compose entrypoint beside the sugar must fail" $neg_compose_entrypoint_string "write compose.entrypoint as a list")
+	$failed = $failed + (eval-fail-msg "a command naming a peer's exposed port must fail" $neg_command_names_port "its command names redis by a port it exposes")
 
 	if $failed > 0 {
 		print $"($failed) failure\(s\)"

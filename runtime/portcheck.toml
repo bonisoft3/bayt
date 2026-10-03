@@ -1,0 +1,22 @@
+#!/usr/bin/env -S mise tool-stub
+bin = "portcheck"
+
+[platforms.darwin-arm64]
+url = "https://github.com/tarampampam/microcheck/releases/download/v1.4.0/macos-arm64.tar.gz"
+checksum = "sha256:89828294a8ba8f609fdc9cc790f9e3e45be03df76f5eaea26d92f74c2f9dc518"
+size = 274063
+
+[platforms.darwin-amd64]
+url = "https://github.com/tarampampam/microcheck/releases/download/v1.4.0/macos-x86-64.tar.gz"
+checksum = "sha256:941e4aca58de95848358a0f75624ee673e8180453aff083b3aea24013a5ed630"
+size = 277264
+
+[platforms.linux-amd64]
+url = "https://github.com/tarampampam/microcheck/releases/download/v1.4.0/linux-amd64.tar.gz"
+checksum = "sha256:f94dc1606045a8992bae774cc94f81ba7c704032f9b960007f5d796b872a63eb"
+size = 365802
+
+[platforms.linux-arm64]
+url = "https://github.com/tarampampam/microcheck/releases/download/v1.4.0/linux-arm64-v8.tar.gz"
+checksum = "sha256:5994f3e13c9b0a5be72587efd4649b5c90fcd90a3ae1b35ff8e5549222ba3e85"
+size = 375671

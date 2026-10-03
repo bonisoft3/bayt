@@ -44,3 +44,10 @@ export def --wrapped run-oras [...args] {
 	let input = $in
 	with-env { MISE_LOCKED: "0" } { $input | ^mise tool-stub (stub-path "oras") ...$args }
 }
+
+# The checkers the healthcheck templates copy into images, for host probes.
+export def --wrapped run-microcheck [checker: string, ...args] {
+	if $checker not-in [httpcheck portcheck] { error make {msg: $"microcheck: no stub for ($checker)"} }
+	let input = $in
+	with-env { MISE_LOCKED: "0" } { $input | ^mise tool-stub (stub-path $checker) ...$args }
+}

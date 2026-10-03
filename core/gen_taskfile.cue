@@ -27,8 +27,8 @@ import (
 	// mise tool-stub pair on Windows (a sh script Windows cannot exec);
 	// go-task templates the OS branch at run time. Workspaceroot
 	// (depth 0) prefixes `./` for argv unambiguity.
-	let _prefix = [if G._m._depth == 0 {"./"}, strings.Repeat("../", G._m._depth)][0]
-	let _rt = "\(_prefix)\(G.runtime)/runtime"
+	let _prefix = (_relPrefix & {depth: G._m._depth}).out
+	let _rt = (_runtimeDir & {runtime: G.runtime, depth: G._m._depth}).out
 	_baytPath: [
 		if G.runtime != "" {"{{if eq OS \"windows\"}}mise tool-stub \(_rt)/nu.toml \(_rt)/bayt.nu{{else}}\(_rt)/bayt{{end}}"},
 		"bayt",

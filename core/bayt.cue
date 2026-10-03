@@ -1104,6 +1104,9 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 	skaffold?:   #skaffold
 	vscode?:     #vscode
 	bake?:       #bake
+	// The host projection's control and passthrough, for a target with an
+	// entrypoint.
+	"process-compose"?: #processCompose
 
 	// healthcheck — parameter holder for the bayt.healthcheck.<template>
 	// fragments. The fragments unify into the target, reading their
@@ -1111,6 +1114,14 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 	// dockerfile.healthcheck + compose.healthcheck. Open-typed because
 	// each template defines its own input schema.
 	healthcheck?: _
+
+	// The process this target runs and the ports it listens on, by name.
+	// Like healthcheck, sugar over every projection: Dockerfile ENTRYPOINT and
+	// EXPOSE, the compose service's environment and depends_on, and its
+	// process in .bayt/process-compose.yaml (process_compose.cue).
+	// A field set both here and in a projection block must agree.
+	entrypoint?: #entrypoint
+	expose?: [Name=string]: #port
 
 	// hmr — destination-side classification of srcs entries for the
 	// dev loop. Each kind maps to a compose.develop.watch action:

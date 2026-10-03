@@ -274,6 +274,11 @@ def write-bundle [bundle: record, base: string, --depot] {
 		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" (_hash-header (_inject-runtime $entry.data $base | to yaml))
 	}
 
+	# --- process-compose: one file per project, one process per host process.
+	if ($bundle.processCompose.file.processes | is-not-empty) {
+		atomic-write $"($prefix).bayt/process-compose.yaml" (_hash-header ($bundle.processCompose.file | to yaml))
+	}
+
 	# --- skaffold
 	# No project-root .bayt/skaffold.yaml is emitted. Cross-project graph
 	# composition is user-owned: hand-write <project>/skaffold.yaml and

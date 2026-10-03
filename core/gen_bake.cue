@@ -45,12 +45,15 @@ import (
 	// mirrors every depends_on key into `additional_contexts: target:<key>`.
 	_rtEdges: {
 		for n, _ in _svc {
-			("\(G.project.name)-\(n)"): [
-				for k, _ in [
+			("\(G.project.name)-\(n)"): list.Concat([
+				[for k, _ in [
 					if G.project.targets[n].compose != _|_ {G.project.targets[n].compose.depends_on},
 					{},
-				][0] {k},
-			]
+				][0] {k}],
+				// The entrypoint's waits join the service's depends_on (gen_compose);
+				// a repeat of a declared key is folded by _rtClosure.
+				[if G.project.targets[n].compose != _|_ if G.project.targets[n].entrypoint != _|_ for k, _ in G.project.targets[n].entrypoint.after {(_serviceName & {project: G.project.name, target: k}).out}],
+			])
 		}
 	}
 

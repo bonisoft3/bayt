@@ -134,6 +134,103 @@ HCL cannot say "leave unset". `.bayt/depot.yaml` is the graph pre-flattened at
 generate time, kept as compose because `buildx bake --print` would resolve the
 `${…}` CI still has to bind.
 
+## The runtime process
+
+`entrypoint` is the process a target runs, whether it serves until stopped or
+runs to completion: a `#cmd` (so `do`, `shell` and the `dockerfile` axis) plus
+`env`, `after` and `host`, without the `windows`/`linux`/`darwin` variants a
+container would ignore and process-compose cannot select. `expose` names the ports it listens on, each
+`{port, env}`. Like `healthcheck`, both are sugar over every projection; a field
+set both ways must agree, or generation fails. `host: false` keeps a process only
+its image can run out of `.bayt/process-compose.yaml` and every host rule below.
+
+| | container | host |
+|---|---|---|
+| process | Dockerfile `ENTRYPOINT`, exec form | a process in `.bayt/process-compose.yaml` |
+| `env` | compose `environment` | process `environment`, peers rewritten |
+| `after` | compose `depends_on`, `service_*` | process `depends_on`, `process_*` |
+| `expose` | `EXPOSE`; `env` set to the canonical port | `env` set to the port's variable |
+
+**The process.** An image whose own entrypoint does work, as postgres's initdb
+and user switch, has that wrapper lifted into `do` (`docker-entrypoint.sh
+postgres`), so both sides run it. `ENTRYPOINT` resets only the `CMD` a base image
+carries, so `dockerfile.cmd` or `compose.command` beside the sugar fails
+generation rather than becoming its arguments, and a `dockerfile.entrypoint` or
+`compose.entrypoint` must be the same argv, as a list. A container's process
+starts from what its image baked in; an image whose process needs a wrapper
+says so in `dockerfile.do`. On the host the target's `activate` wraps the
+entrypoint and its probes, whole command and shell included, and
+`process-compose.activate` replaces it where the process's toolchain differs from
+the one the target's build cmds run under. The file sets `MISE_LOCKED=0` for
+every process and probe: host toolchains are pinned by version in `activate`,
+which no lockfile lists.
+
+**Containers.** The compose side lowers only into a target with a `compose`
+block, which is what runs a container. A container's `after` names only peers
+that have one, and that its `deps` name, since a compose file includes only what
+its target depends on.
+
+**Ports.** A port reaches its process only through `env`, read directly or by
+the entrypoint's shell (`-p "$PORT"`), which expands at run time on both sides.
+On the host it is `${<TARGET>_<NAME>_PORT:-<n>}`, where `<n>` is the port's
+`host`, or else a hash of project, target and port into 10000–32767, below the
+Linux and macOS ephemeral ranges: two projects differ, and two checkouts of one
+collide loudly on the bind. Two host processes' ports on one variable or one
+default fail generation; containers each have their own network. A port without
+`env` keeps its number on the host, where no caller can move it either.
+
+**Addresses.** A value names a peer as compose does, `<target>:<port>` or
+`<project>-<target>:<port>`, and the host projection rewrites it to `127.0.0.1`
+and the peer's variable; a process's own loopback references
+(`http://localhost:3000`) move with its ports. A port ends where a port ends, so
+`redis:7-alpine` is an image, `user:1234@` a password, `tcp(db:3306)` an address
+and `mirror.database:5432` another host; a whole value such as `postgres:18`
+beside a target named `postgres` still reads as an address. Under a key naming a
+host (a `_HOST`, `_HOSTNAME`, `_ADDR` or `_SERVER` suffix, or libpq's `PGHOST`), a
+whole value naming a peer becomes `127.0.0.1`. When the peer's ports move, a host
+key's port key (`DB_HOST`'s `DB_PORT`) must hold a port the peer exposes, and is
+rewritten with it; other host keys name such a peer as `<peer>:<port>`. Elsewhere a target's name
+is just a word, as a `POSTGRES_USER` of `postgres`. Only `env` is rewritten:
+generation fails on a value naming a port the peer does not expose, a peer as a
+URL host the rewrite cannot place, a service the host does not run, or an
+entrypoint command naming a peer. These rules read the project's own targets: a
+process-compose file runs one project, so another project's services are not
+peers.
+
+**Expansion and probes.** process-compose expands `${…}` at load, from the
+launching environment, and reads `$$` as `$`; it renders a probe's command as a
+Go template too. Environment values and probes use that, as compose does; the
+entrypoint has every `$` doubled, so its own shell expands it at run time, as in
+a container. A host process using a `healthcheck` template gets the container's
+check as its readiness probe, on the host's spelling of each own port. A target
+with no image takes the check alone, `healthcheck: bayt.healthcheck.#<kind> &
+{…}`, since the template also writes the Dockerfile and compose checks.
+microcheck's run through `bayt microcheck`, from checksum-pinned stubs that a
+`bayt:<checker>` one-shot installs before the process probing with them starts,
+and need a Linux or macOS host, microcheck publishing no Windows build. process-compose
+terminates a process that misses `failure_threshold` and skips what waits on it,
+so the threshold covers `start_period` as well as the retries; a duration compose
+would refuse fails generation. It waits forever for health a process has no probe
+to report, so `after: X: "healthy"` fails generation when X has none. A
+`process-compose.readiness_probe` beside a template's must agree with it.
+
+**Running.** process-compose runs the file from the project directory, which
+`working_dir` and the in-tree paths resolve against: `process-compose -f
+.bayt/process-compose.yaml up <n>` keeps the stack running, and `run <n>` exits
+with the process's code and stops what it started, as compose's `up` and `run`
+do. Its HTTP server defaults to TCP 8080, so a caller passes `--no-server` or
+`--use-uds`. A host process whose target has a `taskfile` block waits on a
+`<n>:build` one-shot, `task -t .bayt/Taskfile.yml bayt:<n>`, so a stack builds
+what it starts, as `compose up --build` does, and `default` stays the build
+every dependent reaches. A caller moves the stack by setting its port variables
+before load; process-compose's `env_cmds` reach only the processes, never the
+`${…}` the file expands. Every process sets `exit_on_skipped`, or a stack that
+cannot start would pass its check, and the stack stops in reverse dependency
+order. The `process-compose` block passes
+`availability` (restart policies), the probes, `shutdown` and `working_dir`
+through; a one-shot that exits 0 is a success, and what needs it finished waits
+on `"completed"`.
+
 ## Transitive walking
 
 The manifest carries `chainedDeps` (`{name, project, dir, outs}` per direct

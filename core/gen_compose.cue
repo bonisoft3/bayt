@@ -186,7 +186,7 @@ _copyLine: {
 	_svcName: {
 		pn: string
 		tn: string
-		out: "\(pn)-\(tn)"
+		out: (_serviceName & {project: pn, target: tn}).out
 	}
 
 	// Helper: strip the common trailing glob suffix from an hmr entry
@@ -716,8 +716,9 @@ _copyLine: {
 			if t.dockerfile.incremental {[]},
 		])
 
+		let _sugarPorts = [if t.expose != _|_ for _, e in t.expose if !list.Contains(t.dockerfile.expose, e.port) {e.port}]
 		_exposes: [
-			for p in t.dockerfile.expose {"EXPOSE \(p)"},
+			for p in list.Concat([t.dockerfile.expose, _sugarPorts]) {"EXPOSE \(p)"},
 		]
 
 		// ENTRYPOINT — three-form schema (null | list | string). Type-
@@ -738,6 +739,7 @@ _copyLine: {
 			if _ep != null && (_ep & [...string]) != _|_ && (_ep & string) == _|_ {_ep},
 			[],
 		][0]
+		let _sugarArgv = [if t.entrypoint != _|_ {(_containerArgv & {"t": t}).out}, []][0]
 		_entrypoint: [
 			if len(_epStr) > 0 {
 				"ENTRYPOINT \(_epStr)"
@@ -745,6 +747,26 @@ _copyLine: {
 			if len(_epList) > 0 {
 				let quoted = [for a in _epList {"\"\(a)\""}]
 				"ENTRYPOINT [\(strings.Join(quoted, ", "))]"
+			},
+			// The entrypoint sugar. The block's own entrypoint must be the same
+			// argv, written as a list, or the container and the host would run
+			// different processes; a CMD in the same Dockerfile would become its
+			// arguments, since Docker resets only the CMD a base image carries.
+			// "" and [] emit no instruction, so neither is a second process.
+			if t.entrypoint != _|_ if t.entrypoint.windows != _|_ || t.entrypoint.linux != _|_ || t.entrypoint.darwin != _|_ {
+				error("\(t.name): an entrypoint carries no windows/linux/darwin variants: a container selects none, and process-compose cannot")
+			},
+			if t.entrypoint != _|_ if len(_epStr) > 0 {
+				error("\(t.name): beside entrypoint, write dockerfile.entrypoint as a list")
+			},
+			if t.entrypoint != _|_ if len(_epList) > 0 if json.Marshal(_ep) != json.Marshal(_sugarArgv) {
+				error("\(t.name): dockerfile.entrypoint and entrypoint name different processes")
+			},
+			if t.entrypoint != _|_ if len(_cmStr) > 0 || len(_cmList) > 0 {
+				error("\(t.name): entrypoint and dockerfile.cmd together would run the CMD as the entrypoint's arguments")
+			},
+			if t.entrypoint != _|_ if len(_epStr) == 0 if len(_epList) == 0 {
+				"ENTRYPOINT \(json.Marshal(_sugarArgv))"
 			},
 		]
 
@@ -1128,6 +1150,23 @@ _copyLine: {
 		}
 	}
 
+	// A dependency waited on for health is one the dependent is bound to:
+	// recreated inside the `up` that recreates it, so `--wait` waits on the
+	// dependent's new health rather than the health it had. An explicit
+	// `restart` on the entry wins.
+	_restartOnHealthy: R={
+		in: {[string]: _}
+		out: {
+			for k, v in R.in {
+				// Nested guards, not `&&` (CUE doesn't short-circuit).
+				(k): [
+					if v.condition != _|_ if v.condition == "service_healthy" if v.restart == _|_ {v & {restart: true}},
+					v,
+				][0]
+			}
+		}
+	}
+
 	// Helper: one service entry inside a per-target compose file.
 	// Service key = qualified name; Dockerfile stage name stays bare
 	// (stage names are local to one Dockerfile).
@@ -1137,6 +1176,8 @@ _copyLine: {
 		svc: (_svcName & {pn: t.project, tn: n}).out
 
 		out: {
+			// The entrypoint's waits, built once for the build tree and the run tree.
+			let _waits = (_containerWaits & {"t": t, files: G._m.files}).out
 			let _imagesPull = [
 				if G.project.bake != _|_ if G.project.bake.images != _|_ {G.project.bake.images.pull},
 				false,
@@ -1224,7 +1265,7 @@ _copyLine: {
 				// pull_policy=missing.
 				let _runtimeDeps = [
 					if t.compose == _|_ {[]},
-					if t.compose != _|_ {[for k, _ in t.compose.depends_on {k}]},
+					if t.compose != _|_ {[for k, _ in t.compose.depends_on & _waits {k}]},
 				][0]
 				// Preamble copy arms feed the same collector as
 				// `dockerfile.copy`: they render at a different position but
@@ -1390,30 +1431,36 @@ _copyLine: {
 			if _imagesPull && (t.compose == _|_ || t.compose.pull_policy == _|_) {
 				pull_policy: "${BAYT_PULL_POLICY:-build}"
 			}
+			// A compose block is what runs a container, so the sugar's
+			// environment and waits join it there, and only there; a key both
+			// set must agree, or generation fails.
 			if t.compose != _|_ {
+				let _environment = t.compose.environment & (_containerEnv & {"t": t}).out
+				let _dependsOn = t.compose.depends_on & _waits
 				let r = t.compose
+				// The image's ENTRYPOINT is the sugar's: a compose command would
+				// become its arguments, and a compose entrypoint another process.
+				if t.entrypoint != _|_ {
+					if r.command != _|_ if r.command != null if json.Marshal(r.command) != "\"\"" if json.Marshal(r.command) != "[]" {
+						error("\(t.name): entrypoint and compose.command together would run the command as the entrypoint's arguments")
+					}
+					// Compose splits a string by shell words, which no comparison here
+					// can repeat; a list is compared as written.
+					if r.entrypoint != _|_ if (r.entrypoint & string) != _|_ {
+						error("\(t.name): beside entrypoint, write compose.entrypoint as a list")
+					}
+					if r.entrypoint != _|_ if r.entrypoint != null if (r.entrypoint & string) == _|_ if json.Marshal(r.entrypoint) != json.Marshal((_containerArgv & {"t": t}).out) {
+						error("\(t.name): compose.entrypoint and entrypoint name different processes")
+					}
+				}
 				if r.image != _|_ {image:   r.image}
 				if r.command != _|_ {command: r.command}
 				if r.entrypoint != _|_ {entrypoint: r.entrypoint}
-				if len(r.environment) > 0 {environment: r.environment}
+				if len(_environment) > 0 {environment: _environment}
 				if r.env_file != _|_ {env_file: r.env_file}
 				if len(r.ports) > 0 {ports: r.ports}
 				if len(r.volumes) > 0 {volumes: r.volumes}
-				// A dependency waited on for health is one the dependent is bound to:
-				// recreated inside the `up` that recreates it, so `--wait` waits on
-				// the dependent's new health rather than the health it had. An
-				// explicit `restart` on the entry wins.
-				if len(r.depends_on) > 0 {
-					depends_on: {
-						for k, v in r.depends_on {
-							// Nested guards, not `&&` (CUE doesn't short-circuit).
-							(k): [
-								if v.condition != _|_ if v.condition == "service_healthy" if v.restart == _|_ {v & {restart: true}},
-								v,
-							][0]
-						}
-					}
-				}
+				if len(_dependsOn) > 0 {depends_on: (_restartOnHealthy & {in: _dependsOn}).out}
 				if r.network_mode != _|_ {network_mode: r.network_mode}
 				if r.networks != _|_ {networks: r.networks}
 				if r.extra_hosts != _|_ {extra_hosts: r.extra_hosts}

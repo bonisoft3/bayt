@@ -12,6 +12,10 @@ record under `docs/decisions/` refuses it.
 - **Taskfile `<name>:watch`.** A pseudo-task that re-runs the target on source
   change through go-task's `watch: true`, giving the host loop what compose
   `develop.watch` (emitted from `hmr`) already gives the container loop.
+- **`entrypoint.after` deriving `deps`.** A container's wait must be one of its
+  `deps` today, or generation fails; mecha's `#Runtime` adds them by hand.
+  `deps` is a concrete user list a dozen generators read, so derived edges need
+  a manifest-level merge rather than unification.
 - **`bayt watch`.** Re-run the generator when `bayt.cue`, `images.lock.cue` or an
   imported CUE file changes, so an edit regenerates `.bayt/*` and a running task
   picks up the change; today you run `sayt generate` by hand.

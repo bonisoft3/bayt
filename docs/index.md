@@ -16,3 +16,4 @@
 * [Core target schema](archive/2026-09-09-spec-core-schema.md) - decision, superseded: The first normative target shape — list-typed srcs, extraInputs, closed output blocks, bases.lock.cue, a verb library and per-language projects.
 * [Cache check before deps](archive/2026-09-21-a-hit-skips-its-deps.md) - decision, done: A cache.full target is checked in its task's `if:`, before go-task runs its deps, so an exact hit restores the target and skips its whole subgraph.
 * [Bazel comparison](archive/2026-09-27-why-not-bazel.md) - decision, done: Bayt subsumes the toolchain at package-sized targets instead of inverting it into sandboxed micro-actions, and keeps native host runs beside OCI isolation.
+* [Host isolation without a daemon](archive/2026-09-27-without-a-daemon.md) - decision, rejected: A frozen, sandboxed copy of the host task graph, built and measured on a pronto app, and not pursued — isolation tracks the environment, not the speed.

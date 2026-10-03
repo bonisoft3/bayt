@@ -27,6 +27,11 @@ def --wrapped "main cache run" [
 	cache main run --manifest $manifest --cmd $cmd --full=$full --similar=$similar -- ...$inner
 }
 
+def --wrapped "main microcheck" [checker: string, ...args] {
+	use runtime/tools.nu [run-microcheck]
+	run-microcheck $checker ...$args
+}
+
 def "main cache check" [--manifest: string, --stamp-file: string] {
 	use runtime/cache.nu
 	cache main check --manifest $manifest --stamp-file $stamp_file

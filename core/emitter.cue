@@ -20,4 +20,5 @@ package bayt
 	skaffold: (#skaffoldGen & {"project":      G.project, "depManifests": G.depManifests})
 	vscode:   (#vscodeGen & {"project":        G.project, "depManifests": G.depManifests})
 	bake:     (#bakeGen & {"project":          G.project, "depManifests": G.depManifests})
+	processCompose: (#processComposeGen & {"project": G.project, "depManifests": G.depManifests, "runtime": G.runtime})
 }
