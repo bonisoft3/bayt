@@ -104,6 +104,10 @@ export def scan-projects [workspace_root: string] {
 		| where not ($it | str starts-with "plugins/bayt/stacks/")
 		| each { |p| $"($workspace_root)/($p)" }
 	)
+	# The cue stub installs on its first run; concurrent first runs race that
+	# install and find it half-written ("http:cue.toml does not have an
+	# executable named cue"), so one run comes before the par-each.
+	run-cue version | ignore
 	$rel_paths | par-each { |path|
 		# A sibling bayt.json is the project value itself (pronto's build
 		# seat exports it; the bayt.cue stub only embeds it) — read it
