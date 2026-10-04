@@ -797,11 +797,12 @@ def test_file_index_caching_and_invalidation [] {
 # not one segment that would land a level up.
 def test_a_rooted_project_is_its_own_root [] {
 	print "test a rooted project's manifest resolves to its own dir..."
-	assert equal (manifest-root "/w/apps/x/.bayt/bayt.build.json" ".") "/w/apps/x"
-	assert equal (manifest-root "/w/.bayt/bayt.build.json" "") "/w"
+	# Expanded: Windows roots "/w" on the current drive.
+	assert equal (manifest-root "/w/apps/x/.bayt/bayt.build.json" ".") ("/w/apps/x" | path expand)
+	assert equal (manifest-root "/w/.bayt/bayt.build.json" "") ("/w" | path expand)
 }
 
 def test_a_nested_project_climbs_to_its_root [] {
 	print "test a nested project's manifest climbs to the root..."
-	assert equal (manifest-root "/w/apps/x/.bayt/bayt.build.json" "apps/x") "/w"
+	assert equal (manifest-root "/w/apps/x/.bayt/bayt.build.json" "apps/x") ("/w" | path expand)
 }
