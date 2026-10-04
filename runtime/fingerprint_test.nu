@@ -8,11 +8,16 @@
 # the git-mode path (ls-files).
 
 use std/assert
+use ./fingerprint.nu [manifest-root]
 
 const fp_nu = (path self | path dirname | path join "fingerprint.nu")
 
 def main [] {
 	print "Running fingerprint.nu tests...\n"
+
+	# roots
+	test_a_rooted_project_is_its_own_root
+	test_a_nested_project_climbs_to_its_root
 
 	# determinism + sensitivity
 	test_a_synthetic_dep_resolves_from_its_parent
@@ -788,3 +793,15 @@ def test_file_index_caching_and_invalidation [] {
 	print "  ok\n"
 }
 
+# dir "." roots a project at itself: depth 0, as the generator counts it,
+# not one segment that would land a level up.
+def test_a_rooted_project_is_its_own_root [] {
+	print "test a rooted project's manifest resolves to its own dir..."
+	assert equal (manifest-root "/w/apps/x/.bayt/bayt.build.json" ".") "/w/apps/x"
+	assert equal (manifest-root "/w/.bayt/bayt.build.json" "") "/w"
+}
+
+def test_a_nested_project_climbs_to_its_root [] {
+	print "test a nested project's manifest climbs to the root..."
+	assert equal (manifest-root "/w/apps/x/.bayt/bayt.build.json" "apps/x") "/w"
+}

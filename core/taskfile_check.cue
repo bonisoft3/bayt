@@ -226,8 +226,10 @@ _t9_tf: files: doctor: tasks: default: cmds: [
 // bayt_root (union over targets, `run: once`, each a dep on the target
 // through the dep project's include, skipped where that project has no
 // `.bayt`) plus `::bayt:cross_*` deps on the
-// per-target default. Depth-aware paths: dir "apps/t10" → `../../`; a
-// workspaceroot dep (dir "") drops the dir segment. Synthetic views and
+// per-target default. Runners and includes are keyed by the dep's project
+// name, not its dir: a project keeps its name when a mirror relocates it.
+// Depth-aware paths: dir "apps/t10" → `../../`; a workspaceroot dep (dir "")
+// drops the dir segment. Synthetic views and
 // same-project entries never produce runners (t1–t9 stay runner-free —
 // see T7's includes-only pin).
 _t10: #project & {
@@ -258,11 +260,23 @@ _t10_tf: (#taskfileGen & {project: _t10, depManifests: {
 		outs: {globs: [], exclude: []}
 	}
 }})
-_t10_tf: bayt_root: tasks: cross_libs_x_build: {
+_t10_tf: bayt_root: tasks: cross_libx_build: {
 	internal: true
 	run:      "once"
 	if:       "test -f ../../libs/x/Taskfile.yml"
-	deps: ["libs_x:bayt:build"]
+	deps: ["libx:bayt:build"]
+}
+_t10_tf: bayt_root: tasks: cross_libs_x_build?: _|_
+_t10_tf: bayt_root: includes: libx: {
+	taskfile: "../../../libs/x/Taskfile.yml"
+	dir:      "../../../libs/x/"
+	optional: true
+}
+_t10_tf: bayt_root: includes: libs_x?: _|_
+_t10_tf: bayt_root: includes: workspaceroot: {
+	taskfile: "../../../Taskfile.yml"
+	dir:      "../../../"
+	optional: true
 }
 _t10_tf: bayt_root: tasks: cross_workspaceroot_setup: {
 	internal: true
@@ -270,7 +284,7 @@ _t10_tf: bayt_root: tasks: cross_workspaceroot_setup: {
 	if:       "test -f ../../Taskfile.yml"
 	deps: ["workspaceroot:bayt:setup"]
 }
-_t10_tf: files: build: tasks: default: deps: ["::bayt:setup", "::bayt:cross_libs_x_build"]
+_t10_tf: files: build: tasks: default: deps: ["::bayt:setup", "::bayt:cross_libx_build"]
 _t10_tf: files: setup: tasks: default: deps: ["::bayt:cross_workspaceroot_setup"]
 
 // --- T11: a single-cmd cache.full target carries the cache check as its
@@ -308,3 +322,29 @@ Tests: taskfile: {
 	t10: _t10_tf
 	t11: _t11_tf
 }
+
+// --- T12: a dep that states a discriminator is keyed by it, so a local
+// target of its name does not collide: a target `libx` and a dep project
+// `libx` (discriminator k4wz) include side by side. Without one, the two
+// would conflict, telling the dep's author to mint it.
+_t12: #project & {
+	name: "t12"
+	dir:  "apps/t12"
+	targets: {
+		"libx": {taskfile: {}, cmd: "builtin": do: "true"}
+		"build": {taskfile: {}, deps: [":libx", "libx:build"], cmd: "builtin": do: "true"}
+	}
+}
+_t12_tf: (#taskfileGen & {project: _t12, depManifests: {
+	"libx:build": {
+		visibility:    "public"
+		name:          "build"
+		project:       "libx"
+		discriminator: "k4wz"
+		dir:           "libs/x"
+		outs: {globs: [], exclude: []}
+	}
+}})
+_t12_tf: bayt_root: includes: libx: taskfile: "./Taskfile.libx.yaml"
+_t12_tf: bayt_root: includes: "libx-k4wz": taskfile: "../../../libs/x/Taskfile.yml"
+_t12_tf: bayt_root: tasks: cross_libx_build: deps: ["libx-k4wz:bayt:build"]

@@ -4,7 +4,7 @@
 # Run with: nu generate_test.nu (from this directory).
 
 use std/assert
-use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects]
+use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects, clear-bayt-dir, find-workspace-root, root-for, partition-scan, topo-schedule, check-dirs]
 
 def main [] {
 	print "Running generate.nu tests...\n"
@@ -26,6 +26,19 @@ def main [] {
 	test_inject_runtime_climbs_out_of_a_nested_project
 	test_inject_runtime_is_a_noop_without_the_env
 	test_inject_runtime_keeps_service_order
+	test_clear_keeps_the_env_file
+	test_scan_places_a_nested_rooted_project_where_it_sits
+	test_scan_reads_a_rooted_project_from_its_bayt_cue
+	test_root_walk_stops_at_cue_mod
+	test_a_rooted_project_containing_here_is_the_root
+	test_a_plain_project_runs_from_the_cue_mod_root
+	test_a_rooted_cue_mod_root_is_rooted
+	test_a_dir_where_the_project_sits_passes
+	test_a_dir_elsewhere_fails_naming_both
+	test_partition_keeps_a_nested_root_s_subtree_to_it
+	test_partition_marks_a_nested_root_in_the_index
+	test_a_ref_to_a_nested_root_is_refused
+	test_partition_passes_only_outermost_roots
 
 	print "\nAll generate.nu tests passed!"
 }
@@ -182,4 +195,147 @@ def test_inject_runtime_keeps_service_order [] {
 	let d = {services: {zeta: {build: {additional_contexts: {bayt: $IMG}}}, alpha: {image: "x"}, mid: {build: {additional_contexts: {bayt: $IMG}}}}}
 	let got = (with-env {BAYT_RUNTIME_DIR: "plugins/bayt"} { _inject-runtime $d "." })
 	assert equal ($got.services | columns) ["zeta", "alpha", "mid"]
+}
+
+# .bayt/.env is the monorepo's own file (MONOREPO=service): regeneration
+# rebuilds everything around it and never touches it.
+def test_clear_keeps_the_env_file [] {
+	print "test clearing .bayt keeps .env and drops the rest..."
+	let dir = (mktemp -d | path join .bayt)
+	mkdir ($dir | path join sub)
+	"MONOREPO=service\n" | save ($dir | path join .env)
+	"x" | save ($dir | path join compose.yaml)
+	"x" | save ($dir | path join sub/stale.json)
+	clear-bayt-dir $dir
+	let left = (ls -a $dir | get name | path basename | sort)
+	rm -rf ($dir | path dirname)
+	assert equal $left [".env"]
+}
+
+def _rooted [root: string, d: string] {
+	mkdir ($root | path join $d)
+	"" | save ($root | path join $d bayt.cue)
+	{name: ($d | str replace -a "/" "_"), dir: ".", targets: {}} | to json | save ($root | path join $d bayt.json)
+}
+
+# Nested in the monorepo, a project rooted at itself declares dir "."; the
+# outer scan places it where it sits, so nothing of it is written at the
+# root's .bayt/.
+def test_scan_places_a_nested_rooted_project_where_it_sits [] {
+	print "test the outer scan places a nested rooted project by location..."
+	let dir = (mktemp -d)
+	mkdir ($dir | path join app)
+	_project $dir app
+	_rooted $dir apps/ws
+	let rows = (try { scan-projects $dir } catch {|e| rm -rf $dir; error make {msg: $e.msg} })
+	rm -rf $dir
+	assert equal ($rows | sort-by name | select name dir_rel rooted) [
+		{name: app, dir_rel: app, rooted: false}
+		{name: apps_ws, dir_rel: apps/ws, rooted: true}
+	]
+}
+
+# A project with no bayt.json is read by file-mode export; its dir roots it.
+def test_scan_reads_a_rooted_project_from_its_bayt_cue [] {
+	print "test the scan reads a rooted project from its bayt.cue..."
+	let dir = (mktemp -d)
+	mkdir ($dir | path join apps/ws)
+	'project: {name: "apps_ws", dir: ".", targets: {}}' | save ($dir | path join apps/ws bayt.cue)
+	let rows = (try { scan-projects $dir } catch {|e| rm -rf $dir; error make {msg: $e.msg} })
+	rm -rf $dir
+	assert equal ($rows | select name dir_rel rooted) [{name: apps_ws, dir_rel: apps/ws, rooted: true}]
+}
+
+
+
+
+
+
+# A scan row; `at` is where its bayt.cue sits, which a project below a nested
+# root does not declare (its dir is relative to that root).
+def _row [name: string, dir_rel: string, rooted: bool, at?: string] {
+	{path: $"/w/($at | default $dir_rel)/bayt.cue", name: $name, dir_rel: $dir_rel, targets: {}, rooted: $rooted}
+}
+
+# A project below a nested root belongs to that root: generated against this
+# one, its paths would be the monorepo's, not its own checkout's.
+def test_partition_keeps_a_nested_root_s_subtree_to_it [] {
+	print "test a nested root's subtree stays out of this root's schedule..."
+	let got = (partition-scan [(_row root "." false) (_row ws apps/ws true) (_row svc svc false apps/ws/svc) (_row lib libs/x false)])
+	assert equal ($got.local | get name) [root lib]
+	assert equal ($got.nested | get dir_rel) [apps/ws]
+}
+
+# The index marks a nested root, so a ref to it is refused by name rather
+# than reported as unknown.
+def test_partition_marks_a_nested_root_in_the_index [] {
+	print "test the index marks a nested root..."
+	let got = (partition-scan [(_row root "." false) (_row ws apps/ws true) (_row svc svc false apps/ws/svc)])
+	assert equal $got.index {root: ".", ws: {rooted: apps/ws}}
+}
+
+# A project rooted at itself has no siblings: its manifests state dir ".",
+# its own root, which a dependent here would read as this root.
+def test_a_ref_to_a_nested_root_is_refused [] {
+	print "test a ref to a nested root is refused..."
+	let app = {path: "/w/app/bayt.cue", name: app, dir_rel: app, targets: {build: {deps: ["ws:build"]}}, rooted: false}
+	let parts = (partition-scan [$app (_row ws apps/ws true)])
+	let got = (try { topo-schedule [app] $parts.local $parts.index; "scheduled" } catch {|e| $e.rendered | ansi strip })
+	assert str contains $got "ws:build names ws, rooted at itself in apps/ws"
+}
+
+# A root nested in a nested root is generated by the outer one's pass; this
+# root starts only the outermost, or the inner would be generated twice.
+def test_partition_passes_only_outermost_roots [] {
+	print "test only the outermost nested roots get a pass..."
+	let got = (partition-scan [(_row root "." false) (_row ws apps/ws true) (_row inner apps/ws/inner true)])
+	assert equal ($got.nested | get name) [ws]
+	assert equal ($got.local | get name) [root]
+}
+
+# The walk reads no bayt.cue: it stops at the nearest cue.mod, and the scan
+# from there says which root a run belongs to.
+def test_root_walk_stops_at_cue_mod [] {
+	print "test the root walk stops at the nearest cue.mod..."
+	let dir = (mktemp -d)
+	mkdir ($dir | path join cue.mod) ($dir | path join plugins/bayt/core)
+	"package bayt\n#x: #MapAsList\n" | save ($dir | path join plugins/bayt/core bayt.cue)
+	let got = (find-workspace-root ($dir | path join plugins/bayt/core))
+	rm -rf $dir
+	assert equal $got $dir
+}
+
+# Run from inside a project rooted at itself, under an outer cue.mod, the run
+# is that project's own root.
+def test_a_rooted_project_containing_here_is_the_root [] {
+	print "test a rooted project containing here is the root..."
+	let scanned = [(_row root "." false) (_row ws apps/ws true) (_row inner apps/ws/inner true)]
+	assert equal (root-for $scanned /w /w/apps/ws/src) {root: /w/apps/ws, rooted: true}
+	assert equal (root-for $scanned /w /w/apps/ws/inner) {root: /w/apps/ws/inner, rooted: true}
+}
+
+def test_a_plain_project_runs_from_the_cue_mod_root [] {
+	print "test a plain project runs from the cue.mod root..."
+	let scanned = [(_row root "." false) (_row ws apps/ws true) (_row lib libs/x false)]
+	assert equal (root-for $scanned /w /w/libs/x) {root: /w, rooted: false}
+}
+
+# A mirror's root: the cue.mod and the rooted project in one directory.
+def test_a_rooted_cue_mod_root_is_rooted [] {
+	print "test a cue.mod root holding a rooted project is rooted..."
+	let scanned = [{path: "/w/bayt.cue", name: app, dir_rel: ".", targets: {}, rooted: true}]
+	assert equal (root-for $scanned /w /w) {root: /w, rooted: true}
+}
+
+# A dir is authored, never inferred; checked against where its bayt.cue sits,
+# so a stale one fails here instead of writing a .bayt/ somewhere else.
+def test_a_dir_where_the_project_sits_passes [] {
+	print "test declared dirs matching their places pass..."
+	check-dirs [(_row root "." false) (_row lib libs/x false) (_row ws apps/ws true)] /w
+}
+
+def test_a_dir_elsewhere_fails_naming_both [] {
+	print "test a declared dir elsewhere fails, naming both..."
+	let got = (try { check-dirs [(_row sub apps/ws/sub false sub)] /w; "passed" } catch {|e| $e.rendered | ansi strip })
+	assert str contains $got "sub declares dir apps/ws/sub but its bayt.cue sits at sub"
 }

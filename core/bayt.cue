@@ -1189,16 +1189,28 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 
 #project: P={
-	// Relative to monorepo root; copybara-friendly. Primary identity
-	// — `name` defaults from `dir` via slash→underscore (with the
-	// empty-dir workspace-root case mapping to "workspaceroot",
-	// matching what generate-bayt.nu prints). Override only when the
-	// project's conventional name diverges from its directory.
+	// "." roots the project at its own directory, wherever it sits: an
+	// installed app, or a mirror's root, has no sibling projects, and bayt
+	// computes its paths from there in every checkout.
+	//
+	// Where the project sits, relative to its root; copybara-friendly.
+	// `name` is its identity, the key dependents address it by, and
+	// defaults from `dir` via slash→underscore (with the empty-dir
+	// workspace-root case mapping to "workspaceroot", matching what
+	// generate-bayt.nu prints). Override only when the project's
+	// conventional name diverges from its directory. A project
+	// rooted at itself has no dir to name it after, so it states its name.
 	dir:  string
-	name: *[
-		if dir == "" {"workspaceroot"},
-		if dir != "" {strings.Replace(dir, "/", "_", -1)},
-	][0] | string
+	name: string
+	if dir == "" {name: *"workspaceroot" | string}
+	if dir != "" && dir != "." {name: *strings.Replace(dir, "/", "_", -1) | string}
+
+	// Four random characters the author mints once, when the project is
+	// created, and never changes, like a proto field's tag. Opt-in: a
+	// dependent keys the project's Taskfile include as `<name>-<discriminator>`
+	// instead of its bare name, so the key cannot collide with a local
+	// target's. A collision without one fails as a CUE conflict.
+	discriminator?: =~"^[a-z0-9]{4}$"
 
 	// Toolchain activator; prefixes every emitted command. Emitters read
 	// it from here; targets don't carry it unless they need to override.

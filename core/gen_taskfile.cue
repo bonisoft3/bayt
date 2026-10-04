@@ -100,11 +100,18 @@ import (
 	// _taskCmdLine — a (do, shell) pair as a go-task cmd string, prefixed
 	// by `bw` (the BAYTW cache-run prefix, "" for raw cmds). A non-exec
 	// shell gets `<shell> -c "…"` so the whole do reaches it as one arg.
+	// _depKey — a dep project's include key: its name, plus its
+	// discriminator when it states one (#project.discriminator).
+	_depKey: K={
+		d: _
+		out: [if K.d.discriminator != _|_ {"\(K.d.project)-\(K.d.discriminator)"}, K.d.project][0]
+	}
+
 	// _crossName — runner-task name for a cross-project chainedDep
-	// (`cross_<proj-slug>_<target>`; workspaceroot when dir is "").
+	// (`cross_<project>_<target>`).
 	_crossName: N={
 		d: _
-		out: "cross_\([if N.d.dir == "" {"workspaceroot"}, strings.Replace(N.d.dir, "/", "_", -1)][0])_\(N.d.name)"
+		out: "cross_\(N.d.project)_\(N.d.name)"
 	}
 
 	// No {{.CLI_ARGS}} forwarding: the variable is run-global in
@@ -199,7 +206,7 @@ import (
 					for d in t.chainedDeps
 					if d.dir != G.project.dir
 					if !(d.name =~ "_(srcs|bayt)$") {
-						"::bayt:\((_crossName & {"d": {dir: d.dir, name: strings.TrimSuffix(d.name, "_outs")}}).out)"
+						"::bayt:\((_crossName & {"d": {project: d.project, name: strings.TrimSuffix(d.name, "_outs")}}).out)"
 					},
 				]
 				let _crossDeps = [for i, r in _crossRefs if !list.Contains(list.Slice(_crossRefs, 0, i), r) {r}]
@@ -363,7 +370,7 @@ import (
 			for d in t.chainedDeps
 			if d.dir != G.project.dir
 			if !(d.name =~ "_(srcs|bayt)$") {
-				let _b = {dir: d.dir, name: strings.TrimSuffix(d.name, "_outs")}
+				let _b = {dir: d.dir, project: d.project, name: strings.TrimSuffix(d.name, "_outs"), if d.discriminator != _|_ {discriminator: d.discriminator}}
 				((_crossName & {"d": _b}).out): _b
 			}
 		}
@@ -371,12 +378,11 @@ import (
 			tasks: {
 				for k, d in _crossChain {
 					let _depPath = [if d.dir != "" {"\(d.dir)/"}, ""][0]
-					let _depName = [if d.dir == "" {"workspaceroot"}, strings.Replace(d.dir, "/", "_", -1)][0]
 					(k): {
 						internal: true
 						run:      "once"
 						if:       "test -f \(_rootRelFromProject)\(_depPath)Taskfile.yml"
-						deps: ["\(_depName):bayt:\(d.name)"]
+						deps: ["\((_depKey & {"d": d}).out):bayt:\(d.name)"]
 					}
 				}
 			}
@@ -390,10 +396,10 @@ import (
 					optional: true
 				}
 			}
-			for dep in G._m.projectManifest.crossProjectDirs {
-				let _depName = [if dep == "" {"workspaceroot"}, strings.Replace(dep, "/", "_", -1)][0]
-				let _depPath = [if dep != "" {"\(dep)/"}, ""][0]
-				(_depName): {
+			// Two dirs under one name collide on the key.
+			for p in G._m.projectManifest.crossProjects {
+				let _depPath = [if p.dir != "" {"\(p.dir)/"}, ""][0]
+				((_depKey & {"d": p}).out): {
 					taskfile: "\(_relRootFromBayt)\(_depPath)Taskfile.yml"
 					dir:      "\(_relRootFromBayt)\(_depPath)"
 					optional: true

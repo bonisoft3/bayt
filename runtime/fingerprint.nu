@@ -416,9 +416,10 @@ def dep-hashes [nodes: list<record>, docker: bool, memo: record, all_cmds: bool 
 # --cmd selects a per-cmd entry: its srcs feed in and the stamp name
 # picks up `.<cmd>`. The `stamp` field is informational only; callers
 # pick the stamp path via --stamp-file.
-# `../` hops from a project dir to the repo root: one per path segment.
+# `../` hops from a project dir to the repo root: one per path segment. A
+# "." segment is none: dir "." roots a project at itself.
 def dir-hops [dir: string]: nothing -> int {
-  $dir | path split | where { |s| not ($s | is-empty) } | length
+  $dir | path split | where { |s| not ($s | is-empty) and $s != "." } | length
 }
 
 # The project a manifest belongs to, anchored on the manifest rather than the

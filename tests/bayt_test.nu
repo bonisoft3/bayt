@@ -44,6 +44,18 @@ def export-fail [label: string, files: list<string>]: nothing -> int {
 	}
 }
 
+def export-fail-msg [label: string, files: list<string>, msg: string]: nothing -> int {
+	let r = (do { ^cue export ...$files } | complete)
+	if $r.exit_code != 0 and ($r.stderr | str contains $msg) {
+		print $"  PASS  ($label)"
+		0
+	} else {
+		print $"  FAIL  ($label) exit=($r.exit_code), expected a failure naming: ($msg)"
+		print $r.stderr
+		1
+	}
+}
+
 # _dedup-x-bake guards: dedup only inside x-bake and only for pure
 # scalar items (a dropped mapping-item head re-attaches its continuation
 # to the previous item); blank lines and cross-field duplicates survive.
@@ -124,6 +136,8 @@ def main [] {
 	let neg_url_without_port = ["./tests/_negative_url_without_port/"]
 	let neg_compose_entrypoint_string = ["./tests/_negative_compose_entrypoint_string/"]
 	let neg_command_names_port = ["./tests/_negative_command_names_port/"]
+	let neg_rooted_unnamed = ["./tests/_negative_rooted_unnamed/"]
+	let neg_discriminator = ["./tests/_negative_discriminator/"]
 	let pos_ci_srcs = ["./tests/_positive_ci_srcs/"]
 	# Consumer-side proof that a distros fragment unifies into both the
 	# preamble arm and #cmd.dockerfile, the way a project composes it.
@@ -169,6 +183,8 @@ def main [] {
 	$failed = $failed + (eval-fail-msg "a peer URL without a port must fail" $neg_url_without_port "URL names web as a host the rewrite cannot place")
 	$failed = $failed + (eval-fail-msg "a string compose entrypoint beside the sugar must fail" $neg_compose_entrypoint_string "write compose.entrypoint as a list")
 	$failed = $failed + (eval-fail-msg "a command naming a peer's exposed port must fail" $neg_command_names_port "its command names redis by a port it exposes")
+	$failed = $failed + (export-fail-msg "a project rooted at itself must name itself" $neg_rooted_unnamed "out.name: incomplete value string")
+	$failed = $failed + (eval-fail-msg "a malformed discriminator must fail" $neg_discriminator "out.discriminator")
 
 	if $failed > 0 {
 		print $"($failed) failure\(s\)"

@@ -109,11 +109,12 @@ _expandCopy: {
 		// same-project deps)" — derived, not hand-listed. Used by the
 		// emitters (compose, taskfile bayt namespace) to wire
 		// cross-project includes / requires automatically.
-		crossProjectDirs: (_uniqStrings & {in: list.Concat([
-			[for n, t in G.project.targets if t != null
-			for d in _transitiveCrossDeps[n] {d.dir}],
-			_copyFedDirs,
-		])}).out
+		crossProjectDirs: [for p in crossProjects {p.dir}]
+		// The same deps with the project name each answers to, in the same
+		// order: a dep is addressed by name, which a mirror that relocates
+		// its dir leaves alone.
+		crossProjects: [for i, p in _crossProjectsAll
+			if !list.Contains(list.Slice(_crossProjectDirsAll, 0, i), p.dir) {p}]
 
 		// Gradle-stack targets pass `--init-script .bayt/init.gradle.kts`
 		// (stacks/gradle _initFlag). Emitters gate the file and its COPY
@@ -134,6 +135,7 @@ _expandCopy: {
 			_visibility: G.depManifests[ref].visibility & "public"
 			name:    G.depManifests[ref].name
 			project: G.depManifests[ref].project
+			if G.depManifests[ref].discriminator != _|_ {discriminator: G.depManifests[ref].discriminator}
 			dir:     G.depManifests[ref].dir
 			outs: {
 				globs:   G.depManifests[ref].outs.globs
@@ -309,6 +311,7 @@ _expandCopy: {
 		out: {
 			name:    N.name
 			project: G.project.name
+			if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
 			dir:     G.project.dir
 			outs:    _sameProjectOutsByName[N.name]
 		}
@@ -326,6 +329,7 @@ _expandCopy: {
 		out: {
 			name:     "\(L.n)_\(L.view)"
 			project:  G.project.name
+			if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
 			dir:      G.project.dir
 			activate: ""
 			srcs: {globs: [], exclude: []}
@@ -468,19 +472,36 @@ _expandCopy: {
 		}
 	}
 
-	// _copyFedDirs — cross-project dirs pulled in via typed copy.from.ref, so
+	// _copyFedProjects — cross-project deps pulled in via typed copy.from.ref, so
 	// the producer's compose is federated and its service: context resolves.
 	// Kept OUT of _targetCrossDeps by design: that list renders COPY edges, and
 	// a copy-ref there would duplicate the COPY the user already wrote.
-	_copyFedDirs: [
+	_crossProjectDirsAll: [for p in _crossProjectsAll {p.dir}]
+	_crossProjectsAll: list.Concat([
+		[for n, t in G.project.targets if t != null
+		for d in _transitiveCrossDeps[n] {(_projectOf & {in: d}).out}],
+		_copyFedProjects,
+	])
+
+	_copyFedProjects: [
 		for n, t in G.project.targets if t != null
 		if t.dockerfile != _|_
 		for c in list.Concat([t.dockerfile.copy, (_expandCopy & {in: t.dockerfile.defaultCopy}).out])
 		if c.from != null if c.from.ref != _|_
 		if strings.Contains(c.from.ref, ":") if !strings.HasPrefix(c.from.ref, ":")
 		let _m = G.depManifests[c.from.ref]
-		for _d in list.Concat([[_m.dir], [for x in _m.transitiveCrossDeps {x.dir}]]) {_d},
+		for _p in list.Concat([[_m], _m.transitiveCrossDeps]) {(_projectOf & {in: _p}).out},
 	]
+
+	// A dep's project identity: name, discriminator when it has one, dir.
+	_projectOf: P={
+		in: _
+		out: {
+			project: P.in.project
+			if P.in.discriminator != _|_ {discriminator: P.in.discriminator}
+			dir: P.in.dir
+		}
+	}
 
 	// Repo-root-relative compose-fragment path for a dep at (dir, name).
 	// Synthetic names map to their parent fragment — the `_srcs`/`_outs`
@@ -581,6 +602,7 @@ _expandCopy: {
 				// chainedDeps entry below.
 				name:    t.name
 				project: G.project.name
+				if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
 				dir:     G.project.dir
 				// Target-level activate overrides project-level when
 				// explicitly set (e.g. setup wants `""` so its mise +
@@ -822,6 +844,7 @@ _expandCopy: {
 				(n): synthetics: srcs: {
 					name:    "\(n)_srcs"
 					project: G.project.name
+					if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
 					dir:     G.project.dir
 					// Synthetic carries no toolchain; activate empty.
 					activate: ""
@@ -857,6 +880,7 @@ _expandCopy: {
 							if len(_sameProjectOutsByName[tn].globs) > 0 {
 								{
 									project: G.project.name
+									if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
 									name:    tn
 									dir:     G.project.dir
 									outs:    _sameProjectOutsByName[tn]

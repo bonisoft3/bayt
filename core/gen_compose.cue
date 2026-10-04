@@ -1064,13 +1064,6 @@ _copyLine: {
 		}).out
 	}
 
-	// Cross-project deps that the project's bayt synthetic must chain
-	// through. Walks G._m.projectManifest.crossProjectDirs (union of
-	// every target's transitive cross-project deps) and derives each
-	// project's name from its dir via the same convention as
-	// #project.name (dir → slash-to-underscore, "" → "workspaceroot").
-	// Unique by project name so two targets that share the same dep
-	// don't duplicate the COPY chain.
 	// Chain targets for a `<n>_bayt` synthetic: every dep entry,
 	// mapped to its PARENT's `_bayt` service (a `:build:srcs` dep
 	// needs build's scaffolding) and deduped. Emission gates mirror
