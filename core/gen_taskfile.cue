@@ -31,7 +31,9 @@ import (
 	let _rt = (_runtimeDir & {runtime: G.runtime, depth: G._m._depth}).out
 	_baytPath: [
 		if G.runtime != "" {"{{if eq OS \"windows\"}}mise tool-stub \(_rt)/nu.toml \(_rt)/bayt.nu{{else}}\(_rt)/bayt{{end}}"},
-		"bayt",
+		// An installed bayt, reached through the project's own toolchain:
+		// a shim is no promise (mise makes none for a `path:` version).
+		"mise x -- bayt",
 	][0]
 	// sayt lives beside bayt (`<parent>/sayt`); its entry is nu source.
 	_saytPath: [

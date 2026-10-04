@@ -51,10 +51,10 @@ _t1_tf: files: build: tasks: default: {
 	// BAYTW invokes the `bayt` CLI (cache subcommand) + activate suffix;
 	// the cmd line reads as `{{.BAYTW}} <do>`. Defer is last so source
 	// order matches the task-exit firing order.
-	vars: BAYTW: =~"^bayt cache run --manifest '.*bayt\\.build\\.json'.* -- mise x --$"
+	vars: BAYTW: =~"^mise x -- bayt cache run --manifest '.*bayt\\.build\\.json'.* -- mise x --$"
 	cmds: [
 		"{{.BAYTW}} cargo build --release",
-		{defer: =~"^{{if not .EXIT_CODE}}bayt fingerprint .* --update-stamp{{end}}$"},
+		{defer: =~"^{{if not .EXIT_CODE}}mise x -- bayt fingerprint .* --update-stamp{{end}}$"},
 	]
 }
 
@@ -101,10 +101,10 @@ _t3_tf: files: build: tasks: builtin: deps:   ["pregen"]
 _t3_tf: files: build: tasks: postcheck: deps: ["builtin"]
 // Per-cmd generates path under .task/bayt/.
 _t3_tf: files: build: tasks: pregen: generates: [".task/bayt/build.pregen.hash"]
-_t3_tf: files: build: tasks: pregen: vars: BAYTW: =~"^bayt cache run --manifest '.*bayt\\.build\\.json' --cmd pregen.* -- mise x --$"
+_t3_tf: files: build: tasks: pregen: vars: BAYTW: =~"^mise x -- bayt cache run --manifest '.*bayt\\.build\\.json' --cmd pregen.* -- mise x --$"
 _t3_tf: files: build: tasks: pregen: cmds: [
 	"{{.BAYTW}} gen-code.nu",
-	{defer: =~"^{{if not .EXIT_CODE}}bayt fingerprint --manifest '.*' --cmd pregen --stamp-file .*build\\.pregen\\.hash --update-stamp{{end}}$"},
+	{defer: =~"^{{if not .EXIT_CODE}}mise x -- bayt fingerprint --manifest '.*' --cmd pregen --stamp-file .*build\\.pregen\\.hash --update-stamp{{end}}$"},
 ]
 
 // --- T4: env map flows through onto the emitted task.
@@ -154,7 +154,7 @@ _t6: #project & {
 	}
 }
 _t6_tf: (#taskfileGen & {project: _t6, depManifests: {}})
-_t6_tf: files: build: tasks: default: vars: BAYTW: =~"^bayt cache run --manifest '.*bayt\\.build\\.json'.* -- devbox run --$"
+_t6_tf: files: build: tasks: default: vars: BAYTW: =~"^mise x -- bayt cache run --manifest '.*bayt\\.build\\.json'.* -- devbox run --$"
 _t6_tf: files: build: tasks: default: cmds: [
 	"{{.BAYTW}} cargo build",
 	{defer: string},
@@ -304,7 +304,7 @@ _t11: #project & {
 	}
 }
 _t11_tf: (#taskfileGen & {project: _t11, depManifests: {}})
-_t11_tf: files: build: tasks: default: if: =~"^bayt cache check --manifest '\\{\\{\\.TASKFILE_DIR\\}\\}/bayt\\.build\\.json' --stamp-file \\.task/bayt/build\\.hash; \\[ \\$\\? -ne 10 \\]$"
+_t11_tf: files: build: tasks: default: if: =~"^mise x -- bayt cache check --manifest '\\{\\{\\.TASKFILE_DIR\\}\\}/bayt\\.build\\.json' --stamp-file \\.task/bayt/build\\.hash; \\[ \\$\\? -ne 10 \\]$"
 _t11_tf: files: setup: tasks: default: {[=~"^if$"]: _|_}
 _t1_tf: files: build: tasks: default: {[=~"^if$"]: _|_}
 
