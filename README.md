@@ -25,7 +25,7 @@ Pin the release in your project's `.mise.toml`:
 
 ```toml
 [tools]
-"github:bonisoft3/bayt" = "0.57.0"
+"github:bonisoft3/bayt" = "0.58.0"
 ```
 
 `bayt` is then on PATH. Run from any directory containing a `bayt.cue` to get the `.bayt` generated dir with all configuration your build needs:
