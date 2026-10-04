@@ -165,6 +165,26 @@ _d7_dc: (#dockerComposeGen & {project: _d7, depManifests: {}})
 _d7_body: _d7_dc.dockerfiles.release
 _d7_has_entrypoint: strings.Contains(_d7_body, #"ENTRYPOINT ["java", "-cp", "@/app/jib-classpath-file", "Main"]"#) & true
 
+// --- D7b: exec-form arguments are JSON strings: a quote or a backslash in
+// one is escaped, or the array is no JSON and Docker runs no such command.
+_d7b: #project & {
+	name: "d7b"
+	dir:  "d7b"
+	targets: {
+		"release": {
+			cmd: "builtin": do: "true"
+			dockerfile: scratch & {
+				entrypoint: ["sh", "-c", #"mkdir -p "/data/$B" && echo a\b"#]
+				cmd: [#"say "hi""#]
+			}
+		}
+	}
+}
+_d7b_body: (#dockerComposeGen & {project: _d7b, depManifests: {}}).dockerfiles.release
+_d7b_has_entrypoint: strings.Contains(_d7b_body, #"ENTRYPOINT ["sh", "-c", "mkdir -p \"/data/$B\" && echo a\\b"]"#) & true
+// CMD carries the project's activate tokens ahead of its own.
+_d7b_has_cmd: strings.Contains(_d7b_body, #"CMD ["mise", "x", "--", "say \"hi\""]"#) & true
+
 // --- D8: compose.runtime.healthcheck passes through verbatim to the
 // per-target service block (bayt doesn't re-validate compose's
 // healthcheck spec).

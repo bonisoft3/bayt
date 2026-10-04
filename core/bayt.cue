@@ -549,8 +549,8 @@ noop: #cmd & {
 	//                  FROM / scratch). Default.
 	//   [...string]  → exec form: ENTRYPOINT ["a", "b", "c"]. Preferred
 	//                  for production images — runs without a shell.
-	//                  Args go through naive `"arg"` quoting; embedded `"`
-	//                  is not escaped (ship a script if you need that).
+	//                  Each argument is emitted as a JSON string, quotes
+	//                  and backslashes escaped.
 	//   string       → shell form: ENTRYPOINT cmd args... Wraps the value
 	//                  in `/bin/sh -c` at runtime. Convenient for env-
 	//                  var substitution but loses signal forwarding.

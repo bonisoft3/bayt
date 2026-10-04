@@ -102,6 +102,15 @@ _mount: {
 // command. Shared by cmd RUNs (_runLine) and preamble RUN entries
 // (gen_bayt's _preambleLine) so shell selection and escaping cannot drift
 // between the two positions.
+// _execArg — one exec-form argument as a JSON string: backslash first, so the
+// quote pass does not re-escape it. Unescaped, a quote in an argument leaves
+// the array no JSON, and Docker runs it as no such command.
+_execArg: A={
+	in: string
+	let _esc1 = strings.Replace(A.in, "\\", "\\\\", -1)
+	out: "\"" + strings.Replace(_esc1, "\"", "\\\"", -1) + "\""
+}
+
 _runForm: F={
 	prefix: string
 	shell:  string
@@ -728,8 +737,8 @@ _copyLine: {
 		// the if-body, so naked `len(t.dockerfile.entrypoint)` errors
 		// when entrypoint is null even with a guarded if).
 		// null / "" / [] all emit no instruction; non-empty string emits
-		// shell form, non-empty list emits exec form (naive `"arg"`
-		// quoting — see #dockerfile.entrypoint docstring).
+		// shell form, non-empty list emits exec form, each argument a JSON
+		// string (_execArg).
 		let _ep = t.dockerfile.entrypoint
 		let _epStr = [
 			if _ep != null && (_ep & string) != _|_ {_ep},
@@ -745,7 +754,7 @@ _copyLine: {
 				"ENTRYPOINT \(_epStr)"
 			},
 			if len(_epList) > 0 {
-				let quoted = [for a in _epList {"\"\(a)\""}]
+				let quoted = [for a in _epList {(_execArg & {in: a}).out}]
 				"ENTRYPOINT [\(strings.Join(quoted, ", "))]"
 			},
 			// The entrypoint sugar. The block's own entrypoint must be the same
@@ -802,7 +811,7 @@ _copyLine: {
 			},
 			if len(_cmList) > 0 {
 				let _activated = list.Concat([_activateTokens, _cmList])
-				let quoted = [for a in _activated {"\"\(a)\""}]
+				let quoted = [for a in _activated {(_execArg & {in: a}).out}]
 				"CMD [\(strings.Join(quoted, ", "))]"
 			},
 		]
