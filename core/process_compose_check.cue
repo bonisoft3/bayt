@@ -225,6 +225,7 @@ _proc_docker: #dockerComposeGen & {project: _proc_project, depManifests: {}}
 _proc_dockerfile:        _proc_docker.dockerfiles.crud
 _proc_dockerfile_ep:     strings.Contains(_proc_dockerfile, "ENTRYPOINT [\"postgrest\"]") & true
 _proc_dockerfile_expose: strings.Contains(_proc_dockerfile, "EXPOSE 3000\nEXPOSE 3001") & true
+_proc_bayt_scope:        strings.Contains(_proc_dockerfile, ".bayt/process-compose.yaml") & true
 _proc_docker: compose: files: crud: services: "native-crud": {
 	environment: {
 		PGRST_DB_URI:            "postgres://u:p@database:5432/app"
@@ -278,7 +279,7 @@ Tests: process_compose: {
 	argv:    _proc_argv
 	container: [_proc_container, _proc_inc, _proc_pinned, _proc_bake]
 	door: _proc_docker.dockerfiles.door
-	dockerfile: [_proc_dockerfile_ep, _proc_dockerfile_expose]
+	dockerfile: [_proc_dockerfile_ep, _proc_dockerfile_expose, _proc_bayt_scope]
 	compose: _proc_docker.compose.files.crud.services."native-crud"
 	bare: [_proc_bare, _proc_bare_image]
 }

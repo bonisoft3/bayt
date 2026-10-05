@@ -265,16 +265,19 @@ _expandCopy: {
 	// up target's build-dep chain. Local-coarse is the overlay trade;
 	// the cross-project scoping (the real cache win) is untouched.
 	// Cross fragments still arrive via the `_bayt` dep chain.
+	_procs: {for n, t in G.project.targets if t != null if t.entrypoint != _|_ if t.entrypoint.host {(n): t}}
 	_baytScaffold: B={
 		n: string
 		t: _
 		// Disjunction-default, not `&&` (CUE doesn't short-circuit).
 		let _isUp = [if B.t.compose != _|_ {B.t.compose.up}, false][0]
 		let _overlay = len(G.project.compose.includes) > 0
+		let _hasProcs = len(G._procs) > 0
 		out: list.Concat([
 			[".bayt/compose.\(B.n).yaml", ".bayt/Dockerfile.\(B.n)", ".bayt/bayt.\(B.n).json", ".bayt/Taskfile.yml", ".bayt/Taskfile.bayt.yml"],
 			[if B.t.taskfile != _|_ {[".bayt/Taskfile.\(B.n).yaml"]}, []][0],
 			[if _isUp {[".bayt/compose.\(B.n).closure.yaml"]}, []][0],
+			[if _hasProcs {[".bayt/process-compose.yaml"]}, []][0],
 			[if _isUp && _overlay {list.Concat([
 				[".bayt/compose.*.yaml", ".bayt/Dockerfile.*", ".bayt/bayt.*.json", ".bayt/Taskfile.*.yaml"],
 				G.project.compose.includes,
