@@ -385,24 +385,25 @@ def context-hashes [dirs: list<string>, docker: bool, root: string, index: recor
 def dep-hashes [nodes: list<record>, docker: bool, memo: record, all_cmds: bool = false, walk: bool = false, index: record = {}, trees: record = {}]: nothing -> record {
   if ($nodes | is-empty) { return {hashes: [], memo: $memo} }
 
-  let results = ($nodes | par-each --keep-order { |d|
+  mut cur_memo = $memo
+  mut hashes = []
+  for d in $nodes {
     let trusted = (not $walk) or (not ($d.manifest | path exists))
     let cached = (if (not $docker) and (not $all_cmds) and $trusted and ($d.stamp | path exists) {
       open $d.stamp | str trim
     } else { "" })
     if not ($cached | is-empty) {
-      {hash: $cached, memo: {}}
+      $hashes ++= [$cached]
     } else {
       if not ($d.manifest | path exists) {
         error make { msg: $"fingerprint: dep manifest not found: ($d.manifest)" }
       }
-      closure-hash $d.manifest "" $docker $memo $d.view $all_cmds $walk $index $trees
+      let res = (closure-hash $d.manifest "" $docker $cur_memo $d.view $all_cmds $walk $index $trees)
+      $hashes ++= [$res.hash]
+      $cur_memo = $res.memo
     }
-  })
-
-  let hashes = ($results | get hash)
-  let merged_memo = ($results | reduce --fold $memo { |it, acc| $acc | merge $it.memo })
-  {hashes: $hashes, memo: $merged_memo}
+  }
+  {hashes: $hashes, memo: $cur_memo}
 }
 
 # resolve-manifest — concrete inputs from a .bayt/bayt.<n>.json: srcs, the

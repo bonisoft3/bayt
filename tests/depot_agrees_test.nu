@@ -26,11 +26,20 @@ def main [] {
 
   for d in $projects {
     let name = ($d | path dirname | path relative-to $root)
+    let file = ($d | path join "depot.json")
     test_membership_agrees $d $name
-    test_manifests_exist $root $d $name
-    test_repos_are_distinct_and_tagless $d $name
+    test_manifests_exist $root $file $name
+    test_repos_are_distinct_and_tagless $file $name
     test_repo_matches_what_the_bake_pushes $root $d $name
-    test_depot_plan_runs $root $d $name
+    test_depot_plan_runs $root $file $name
+  }
+
+  let standalone = (repo-glob "**/.bayt/depot.*.json")
+  for file in $standalone {
+    let name = ($file | path relative-to $root)
+    test_manifests_exist $root $file $name
+    test_repos_are_distinct_and_tagless $file $name
+    test_depot_plan_runs $root $file $name
   }
 
   print "\nAll bayt/depot agreement tests passed!"
@@ -54,8 +63,8 @@ def test_membership_agrees [dir: string, name: string] {
 # Every leaf names a manifest a caller can fingerprint. A group member can be
 # an overlay service whose build block names a different target, so this is
 # the assertion that the alias actually resolved.
-def test_manifests_exist [root: string, dir: string, name: string] {
-  let plan = (open ($dir | path join "depot.json"))
+def test_manifests_exist [root: string, file: string, name: string] {
+  let plan = (open $file)
   let missing = ($plan.targets | where { |t| not ($root | path join $t.manifest | path exists) })
   assert equal ($missing | get target) []
   print $"  PASS  ($name): every leaf's manifest exists"
@@ -64,8 +73,8 @@ def test_manifests_exist [root: string, dir: string, name: string] {
 # The caller appends its own tags, so a repo carrying one would produce
 # `<repo>:<tag>:fp-<hash>`. Two leaves sharing a repo would race for the
 # same fingerprint tag.
-def test_repos_are_distinct_and_tagless [dir: string, name: string] {
-  let plan = (open ($dir | path join "depot.json"))
+def test_repos_are_distinct_and_tagless [file: string, name: string] {
+  let plan = (open $file)
   let repos = ($plan.targets | get repo)
   assert equal ($repos | uniq | length) ($repos | length)
   let tagged = ($repos | where { |r| ($r | split row "/" | last) =~ ':' })
@@ -92,13 +101,13 @@ def test_repo_matches_what_the_bake_pushes [root: string, dir: string, name: str
   print $"  PASS  ($name): every repo matches the flattened compose"
 }
 
-def test_depot_plan_runs [root: string, dir: string, name: string] {
+def test_depot_plan_runs [root: string, file: string, name: string] {
   let bayt_nu = ($root | path join "plugins/bayt/bayt.nu")
   let fp_nu = ($root | path join "plugins/bayt/runtime/fingerprint.nu")
-  let r = (do { cd $root; ^$nu.current-exe $bayt_nu depot-plan --manifest ($dir | path join "depot.json") } | complete)
+  let r = (do { cd $root; ^$nu.current-exe $bayt_nu depot-plan --manifest $file } | complete)
   assert equal $r.exit_code 0 $"depot-plan failed: ($r.stderr)"
   let leaves = ($r.stdout | from json)
-  let plan = (open ($dir | path join "depot.json"))
+  let plan = (open $file)
   assert equal ($leaves | length) ($plan.targets | length)
   assert equal ($leaves | get target) ($plan.targets | get target)
 
