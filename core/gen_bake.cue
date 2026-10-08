@@ -14,11 +14,16 @@ import (
 	"strings"
 )
 
-#bakeGen: G={
+#bakeGen: W={
+	#bakeFrom
+	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+}
+
+#bakeFrom: G={
 	project: #project
 	depManifests:   {[string]: _}
 
-	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
+	_m: _
 
 	// Release targets: `bake.image` names the registry ref, so the HCL is the
 	// build recipe skaffold / goreleaser / depot bake with (whether they push

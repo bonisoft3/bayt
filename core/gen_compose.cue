@@ -36,7 +36,7 @@
 //                                         so directory listings sort by tool)
 //   <dir>/compose.yaml                  user-authored (not written by bayt)
 //
-// Pure CUE; generate-bayt.nu writes files to disk.
+// Pure CUE; generate.nu writes files to disk.
 package bayt
 
 import (
@@ -161,11 +161,16 @@ _copyLine: {
 	out: "COPY \(_cLink)\(_cChmod)\(_cChown)\(_cParents)\(_cExclude)\(_cFrom)\(_cSrcs) \(c.dst)"
 }
 
-#dockerComposeGen: G={
+#dockerComposeGen: W={
+	#dockerComposeFrom
+	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+}
+
+#dockerComposeFrom: G={
 	project: #project
 	depManifests:   {[string]: _}
 
-	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
+	_m: _
 
 	// Only targets that declared a dockerfile block.
 	_emit: {for n, t in G._m.files if t.dockerfile != _|_ {(n): t}}
@@ -629,7 +634,7 @@ _copyLine: {
 		// .bayt/Taskfile.yml is the in-container launch point (the
 		// user-authored project-root Taskfile.yml is never COPY'd).
 		// The .bayt/* sources land in one COPY: they're emitted
-		// together by a single generate-bayt.nu pass, so per-file
+		// together by a single generate.nu pass, so per-file
 		// granularity provides no realistic cache benefit (and the
 		// immediately-following RUN layer invalidates on any FS change
 		// either way). init.gradle.kts exists only for gradle-stack
@@ -919,41 +924,24 @@ _copyLine: {
 		][0]
 	}
 
-	// Helper: resolve a chainedDeps entry to its target manifest.
-	// Same-project deps use G._m.files (the current project's manifest);
-	// cross-project deps use G.depManifests via reconstructed
-	// `<project>:<name>` ref. Returns _|_ when the dep isn't resolvable
-	// (e.g. same-project target was null'd, cross-project ref missing).
-	_depManifest: D={
+	// A chainedDeps entry's key: its bare name in this project, the
+	// `<project>:<name>` ref into G.depManifests across projects. Edges
+	// read per-dep facts from the key-indexed flag sets below: binding a
+	// dep's whole manifest per edge copies it per edge.
+	_depKey: D={
 		d:   _
-		out: _
-		let _sameProj = D.d.project == G.project.name
-		let _crossRef = "\(D.d.project):\(D.d.name)"
-		out: [
-			if _sameProj {G._m.files[D.d.name]},
-			if !_sameProj {G.depManifests[_crossRef]},
-		][0]
+		out: [if D.d.project == G.project.name {D.d.name}, "\(D.d.project):\(D.d.name)"][0]
 	}
 
-	// Gates `COPY --from=<dep>_srcs` (the stage must exist): the dep manifest's
-	// `emitsSrcs` field. Nested guards, not `&&` — CUE's `&&` doesn't
-	// short-circuit, so `_dm != _|_ && _dm.emitsSrcs` poisons to `_|_`.
-	_depHasSrcs: D={
-		d:   _
-		out: bool
-		let _dm = (_depManifest & {"d": D.d}).out
-		out: [
-			if _dm != _|_ {[
-				// A cross manifest may lack the field (stale on-disk regen);
-				// `!= _|_` treats that as false.
-				if _dm.emitsSrcs != _|_ {[
-					if _dm.emitsSrcs {true},
-					false,
-				][0]},
-				false,
-			][0]},
-			false,
-		][0]
+	// Deps whose `COPY --from=<dep>_srcs` stage exists. A cross manifest
+	// may lack `emitsSrcs` (stale on-disk regen); that reads as false.
+	_depsWithSrcs: {
+		for n, f in G._m.files if f.emitsSrcs {(n): true}
+		for r, f in G.depManifests if f.emitsSrcs != _|_ if f.emitsSrcs {(r): true}
+	}
+	_depsWithDockerfile: {
+		for n, f in G._m.files if f.dockerfile != _|_ {(n): true}
+		for r, f in G.depManifests if f.dockerfile != _|_ {(r): true}
 	}
 
 	// A target's `_srcs`-bearing chained deps: same filter feeds the
@@ -964,7 +952,7 @@ _copyLine: {
 	_srcsChainDeps: D={
 		t:   _
 		out: [...]
-		out: [for d in D.t.chainedDeps if d.name != "bayt" if (_depHasSrcs & {"d": d}).out {d}]
+		out: [for d in D.t.chainedDeps if d.name != "bayt" if _depsWithSrcs[(_depKey & {"d": d}).out] != _|_ {d}]
 	}
 
 	// _clampFlatten — the shared synthetic-image skeleton. A busybox `_ctxs`
@@ -1075,10 +1063,8 @@ _copyLine: {
 
 	// Chain targets for a `<n>_bayt` synthetic: every dep entry,
 	// mapped to its PARENT's `_bayt` service (a `:build:srcs` dep
-	// needs build's scaffolding) and deduped. Emission gates mirror
-	// _depHasSrcs: same-project via _allEmit, cross via the dep
-	// manifest's dockerfile presence (nested guards — CUE's `&&`
-	// doesn't short-circuit).
+	// needs build's scaffolding) and deduped. Emission gate: same-project
+	// via _allEmit, cross via _depsWithDockerfile.
 	_baytChain: C={
 		t:   _
 		out: [...string]
@@ -1099,13 +1085,7 @@ _copyLine: {
 			let _ok = [
 				if _isSynth {true},
 				if d.dir == G.project.dir {_allEmit[d.name] != _|_},
-				[
-					if (_depManifest & {"d": d}).out != _|_ {[
-						if (_depManifest & {"d": d}).out.dockerfile != _|_ {true},
-						false,
-					][0]},
-					false,
-				][0],
+				_depsWithDockerfile[(_depKey & {"d": d}).out] != _|_,
 			][0]
 			if _ok {"\(d.project)-\(_p)_bayt"},
 		]

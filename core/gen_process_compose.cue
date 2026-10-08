@@ -10,13 +10,18 @@ import (
 	"strings"
 )
 
-#processComposeGen: G={
+#processComposeGen: W={
+	#processComposeFrom
+	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+}
+
+#processComposeFrom: G={
 	project: #project
 	depManifests: {[string]: _}
-	// As in #taskfileGen: "" resolves `bayt` on PATH.
+	// As in #taskfileFrom: "" resolves `bayt` on PATH.
 	runtime: *"" | string
 
-	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
+	_m: _
 
 	_procs: {for n, t in G._m.files if t.entrypoint != _|_ if t.entrypoint.host {(n): t}}
 

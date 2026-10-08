@@ -1197,7 +1197,7 @@ _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 	// `name` is its identity, the key dependents address it by, and
 	// defaults from `dir` via slash→underscore (with the empty-dir
 	// workspace-root case mapping to "workspaceroot", matching what
-	// generate-bayt.nu prints). Override only when the project's
+	// generate.nu prints). Override only when the project's
 	// conventional name diverges from its directory. A project
 	// rooted at itself has no dir to name it after, so it states its name.
 	dir:  string

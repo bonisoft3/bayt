@@ -4,7 +4,7 @@
 // `gen_*.cue` reads from.
 //
 // Pure CUE: no file IO, no exec. The nushell runtime
-// (generate-bayt.nu) walks the bundle and writes files.
+// (generate.nu) walks the bundle and writes files.
 package bayt
 
 import (
@@ -160,7 +160,10 @@ _expandCopy: {
 
 	// Per-target direct cross-project deps. Collects from t.deps +
 	// t.dockerfile.from.ref (both Bazel-style: ":X" same-project drops;
-	// "P:X" cross-project keeps). Deduped by "<project>-<name>".
+	// "P:X" cross-project keeps). Deduped by "<project>-<name>" with a
+	// prefix scan, not a struct keyed by it: generate's first pass runs
+	// before cross manifests load, while those names are still incomplete,
+	// and a struct label must be concrete.
 	_targetCrossDeps: {
 		for n, t in G.project.targets if t != null {
 			let _fr = (_fromRef & {tgt: t}).out
@@ -363,7 +366,7 @@ _expandCopy: {
 			let _fromRefs = [if strings.HasPrefix(_fr, ":") {_fr}]
 			let _depRefs = [for d in t.deps if strings.HasPrefix(d, ":") {d}]
 			let _all = list.Concat([_fromRefs, _depRefs])
-			(n): [for i, d in _all if !list.Contains(list.Slice(_all, 0, i), d) {_sameProjectRefName[d]}]
+			(n): [for d in (_uniqStrings & {in: _all}).out {_sameProjectRefName[d]}]
 		}
 	}
 
@@ -398,7 +401,7 @@ _expandCopy: {
 	// True iff the target has a dockerfile and a non-empty same-project source
 	// closure (own srcs, or a direct dep that itself emits a `_srcs`). Surfaced
 	// as the `emitsSrcs` manifest field; every srcs gate (_srcsEmit,
-	// _depHasSrcs, the synthetic-manifest stub) reads it. Recurse on DIRECT
+	// _depsWithSrcs, the synthetic-manifest stub) reads it. Recurse on DIRECT
 	// deps, not flat over transitiveDeps: a non-srcs intermediate must still
 	// emit a `_srcs` when a deeper dep has srcs, or the COPY chain breaks.
 	_emitsSrcs: {
@@ -461,6 +464,7 @@ _expandCopy: {
 			}
 		])
 		_all:  list.Concat([_direct, _viaManifests])
+		// Prefix scan: see _targetCrossDeps.
 		_keys: [for x in _all {"\(x.project)-\(x.name)"}]
 		out:   [for i, x in _all if !list.Contains(list.Slice(_keys, 0, i), _keys[i]) {x}]
 	}

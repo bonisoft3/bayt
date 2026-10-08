@@ -18,11 +18,16 @@ import (
 	"list"
 )
 
-#skaffoldGen: G={
+#skaffoldGen: W={
+	#skaffoldFrom
+	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+}
+
+#skaffoldFrom: G={
 	project: #project
 	depManifests:   {[string]: _}
 
-	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
+	_m: _
 
 	// Only targets that declared a skaffold block. Empty profile
 	// dictionaries still emit a fragment with apiVersion+kind+metadata

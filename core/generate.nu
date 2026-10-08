@@ -1,8 +1,7 @@
 # generate.nu — walk the #render bundle and write every output file.
 #
-# Pure/impure split: CUE computes the full render (#manifestGen +
-# #taskfileGen + #dockerComposeGen + #skaffoldGen + #vscodeGen + #bakeGen),
-# this script reads the JSON output and writes files to disk.
+# Pure/impure split: CUE computes the full render (#render), this script
+# reads the JSON output and writes files to disk.
 #
 # Usage (from a project directory containing bayt.cue):
 #

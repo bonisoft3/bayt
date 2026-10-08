@@ -1,6 +1,6 @@
 // gen_taskfile.cue — Taskfile.yml + per-target .bayt/Taskfile.<target>.yaml
 // emission. Reads the canonical manifest from #manifestGen; consumed by
-// generate-bayt.nu which writes the YAML to disk. Pure CUE.
+// generate.nu which writes the YAML to disk. Pure CUE.
 package bayt
 
 import (
@@ -10,12 +10,17 @@ import (
 )
 
 
-#taskfileGen: G={
+#taskfileGen: W={
+	#taskfileFrom
+	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+}
+
+#taskfileFrom: G={
 	project: #project
 	depManifests:   {[string]: _}
 	runtime: *"" | string
 
-	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
+	_m: _
 
 	// Only targets that declared a taskfile block on their #target.
 	_emit: {for n, t in G._m.files if t.taskfile != _|_ {(n): t}}
@@ -203,7 +208,7 @@ import (
 				// on host the base target's run is what materializes
 				// them, so the ref maps to the base task.
 				let _sameRefs = [for name in t.sameProjectDeps if !(name =~ "_(srcs|bayt)$") {"::bayt:\(strings.TrimSuffix(name, "_outs"))"}]
-				let _sameProjectDeps = [for i, r in _sameRefs if !list.Contains(list.Slice(_sameRefs, 0, i), r) {r}]
+				let _sameProjectDeps = (_uniqStrings & {in: _sameRefs}).out
 				let _crossRefs = [
 					for d in t.chainedDeps
 					if d.dir != G.project.dir
@@ -211,7 +216,7 @@ import (
 						"::bayt:\((_crossName & {"d": {project: d.project, name: strings.TrimSuffix(d.name, "_outs")}}).out)"
 					},
 				]
-				let _crossDeps = [for i, r in _crossRefs if !list.Contains(list.Slice(_crossRefs, 0, i), r) {r}]
+				let _crossDeps = (_uniqStrings & {in: _crossRefs}).out
 				let _allDeps = list.Concat([_sameProjectDeps, _crossDeps])
 				// Cmds with a base `do` emit tasks; a cmd with only
 				// `dockerfile.do` is RUN-only (Dockerfile RUN, no task).

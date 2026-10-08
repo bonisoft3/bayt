@@ -19,11 +19,16 @@ import (
 	"strings"
 )
 
-#vscodeGen: G={
+#vscodeGen: W={
+	#vscodeFrom
+	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+}
+
+#vscodeFrom: G={
 	project:      #project
 	depManifests: {[string]: _}
 
-	_m: (#manifestGen & {project: G.project, depManifests: G.depManifests})
+	_m: _
 
 	// Build/test only — with a vscode block and at least one host cmd
 	// (RUN-only targets have nothing an IDE task could run).

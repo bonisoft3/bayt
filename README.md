@@ -432,7 +432,7 @@ release-proxy) to targets. Overlays must not define `bayt`.
 
 1. **One declaration, every format.** Cross-cutting concerns live once on `#target`; each emitter projects into its own output format.
 2. **Canonical manifest as the source of truth.** `#manifestGen` produces format-neutral JSON; every other emitter consumes it. So do downstream tools like `fingerprint.nu` and `cache.nu`.
-3. **Pure CUE for schemas; impure nushell for I/O.** `generate-bayt.nu` is the only layer that touches the filesystem. `fingerprint.nu` hashes files. `cache.nu` talks to HTTP caches. CUE stays deterministic and sandboxable.
+3. **Pure CUE for schemas; impure nushell for I/O.** `generate.nu` is the only layer that touches the filesystem. `fingerprint.nu` hashes files. `cache.nu` talks to HTTP caches. CUE stays deterministic and sandboxable.
 4. **No path math in CUE.** Repo-relative `../` computation lives in nushell, which has a proper path library. CUE carries structured data (`{name, projectDir}`), nushell joins it.
 5. **Fragments via unification, not inheritance.** Verbs (`setup`, `build`, …) and base presets (`nubox`, `busybox`, …) are plain structs, not closed `#`-prefixed definitions — CUE's closed conjunction rejects cross-def fields. See the closedness note in `core/bayt.cue`.
 6. **Version intent vs. version lock.** Base image tags go in `bayt.cue`; digests live in `images.lock.cue`, bumped as ordinary dependency changes.

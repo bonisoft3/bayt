@@ -7,12 +7,10 @@
 // Package-scoped, like every other helper here.
 package bayt
 
-import "list"
-
 // _uniqStrings — order-preserving uniq over a list of strings; keeps
-// each value at its first occurrence. O(n²) — target graphs are small,
-// not worth a hash-table workaround.
+// each value at its first occurrence. Linear: a struct keyed by value keeps
+// fields in first-insertion order; a prefix scan copies a slice per element.
 _uniqStrings: {
 	in:  [...string]
-	out: [for i, v in in if !list.Contains(list.Slice(in, 0, i), v) {v}]
+	out: [for k, _ in {for v in in {(v): _}} {k}]
 }

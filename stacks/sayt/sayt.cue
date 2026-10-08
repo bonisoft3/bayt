@@ -11,7 +11,7 @@
 // libraries (gradle, pnpm, mise) — it's "just another stack" from
 // bayt's perspective. The sayt RUNTIME (plugins/sayt/, the nushell
 // scripts and config.cue) doesn't depend on bayt at all; the
-// runtime invokes generate-bayt.nu via .say.yaml's `generate`
+// runtime invokes generate.nu via .say.yaml's `generate`
 // rulemap, and that's the only point where the two layers meet.
 //
 // This file exports two things:
