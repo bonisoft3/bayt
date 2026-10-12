@@ -155,8 +155,8 @@ export def compute-fingerprint [
   let abs = { |p| $project | path join $p }
   let dirs = ($plain | where { |p| (do $abs $p | path type) == "dir" } | each { |p| $"($p)/**/*" })
   let literals = ($plain | where { |p| (do $abs $p | path type) != "dir" })
-  let present_literals = ($literals | where { |p| (do $abs $p | path type) == "file" })
-  let missing = ($literals | where { |p| (do $abs $p | path type) != "file" })
+  let present_literals = ($literals | where { |p| (do $abs $p | path type) in ["file" "symlink"] })
+  let missing = ($literals | where { |p| (do $abs $p | path type) not-in ["file" "symlink"] })
   if not ($missing | is-empty) {
     let n = ($missing | length)
     let names = ($missing | str join ', ')
@@ -198,9 +198,14 @@ export def compute-fingerprint [
   let assessed = ($files | par-each { |p|
     let full = ($proj_exp | path join $p)
     let key = (try { $full | path relative-to $root_exp } catch { $p })
-    let s = (try { ls $full | first } catch { null })
+    let s = (try { ls -D $full | first } catch { null })
     if ($s == null) {
       let h = (open --raw $full | hash sha256)
+      {path: $p, hash: $h, dirty: false, key: $key, mtime: "", size: 0}
+    } else if $s.type == "symlink" {
+      let target = (ls -lD $full | first | get target)
+      let content = if ($full | path expand | path type) == "file" { open --raw $full | hash sha256 } else { "" }
+      let h = ([$target $content] | to json --raw | hash sha256)
       {path: $p, hash: $h, dirty: false, key: $key, mtime: "", size: 0}
     } else {
       let mtime = ($s.modified | format date '%s.%f')

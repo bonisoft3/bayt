@@ -306,8 +306,10 @@ missing literal file is skipped with a warning, srcs that match no file fail the
 check, and a missing out forces a rerun, which the cache can answer with a
 fetch. Files hash with nushell's `hash sha256`, memoized by path, size and
 mtime in `.task/bayt/index`; git, when bayt's root is a work tree's top level,
-only lists the files faster. The stamp needs only nushell, so it runs in
-containers, on Windows and in air-gapped CI.
+only lists the files faster. Symbolic links hash their target path and, for a
+file, its contents. Directory link contents belong to a separately declared
+source dependency. The stamp needs only nushell, so it runs in containers, on
+Windows and in air-gapped CI.
 
 An interactive caller can set `BAYT_INVOCATION` to JSON containing `manifest`
 (the absolute manifest path) and `value` (its arguments and execution options).

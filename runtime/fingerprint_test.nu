@@ -27,6 +27,10 @@ def main [] {
 	test_a_dep_stamp_never_narrows_the_image_scope
 	test_hash_stable_across_runs
 	test_hash_changes_with_content
+	if $nu.os-info.name != "windows" {
+        test_directory_symlinks_hash_the_link
+        test_file_symlinks_track_content
+    }
 	test_invocation_is_target_scoped
 	test_docker_hash_differs_from_content
 	test_docker_hash_stable_across_runs
@@ -840,4 +844,35 @@ def test_a_rooted_project_is_its_own_root [] {
 def test_a_nested_project_climbs_to_its_root [] {
 	print "test a nested project's manifest climbs to the root..."
 	assert equal (manifest-root "/w/apps/x/.bayt/bayt.build.json" "apps/x") ("/w" | path expand)
+}
+
+
+def test_directory_symlinks_hash_the_link [] {
+    let tmp = (make-tmp)
+    mkdir ($tmp | path join "one") ($tmp | path join "two")
+    ^ln -s one ($tmp | path join "runtime")
+    let first = (run-fp $tmp ["-q" "**"])
+    assert ($first.exit == 0) $first.stderr
+    let warm = (run-fp $tmp ["-q" "**"])
+    assert ($warm.stdout == $first.stdout)
+    rm ($tmp | path join "runtime")
+    ^ln -s two ($tmp | path join "runtime")
+    let changed = (run-fp $tmp ["-q" "**"])
+    assert ($changed.exit == 0) $changed.stderr
+    assert ($changed.stdout != $first.stdout)
+    rm -rf $tmp
+}
+
+
+def test_file_symlinks_track_content [] {
+    let tmp = (make-tmp)
+    "one" | save ($tmp | path join "target")
+    ^ln -s target ($tmp | path join "input")
+    let first = (run-fp $tmp ["-q" "input"])
+    assert ($first.exit == 0) $first.stderr
+    "two" | save -f ($tmp | path join "target")
+    let changed = (run-fp $tmp ["-q" "input"])
+    assert ($changed.exit == 0) $changed.stderr
+    assert ($changed.stdout != $first.stdout)
+    rm -rf $tmp
 }
