@@ -266,6 +266,43 @@ def _hash-header       [c: string]: nothing -> string { "# generated from bayt.c
 def _slash-header      [c: string]: nothing -> string { "// generated from bayt.cue — do not edit\n" + $c }
 def _json-header  [d: any]: nothing -> any { {_generated_from: "bayt.cue (do not edit)"} | merge $d }
 
+
+export def custom-outputs [bundle: record]: nothing -> list<record> {
+	let reserved = ["bayt.json" "Taskfile.yml" "Taskfile.bayt.yml" "compose.yaml" "compose.bayt.yaml" "compose.bayt.ports.yaml" "process-compose.yaml" "bake.hcl" "init.gradle.kts" "depot.yaml" "depot.hcl" "depot.json"]
+	let generated = [
+		...($bundle.manifest.files | columns | each { |n| $"bayt.($n).json" })
+		...($bundle.taskfile.files | columns | each { |n| $"Taskfile.($n).yaml" })
+		...($bundle.docker.dockerfiles | columns | each { |n| $"Dockerfile.($n)" })
+		...($bundle.docker.compose.files | columns | each { |n| $"compose.($n).yaml" })
+		...($bundle.skaffold.files | columns | each { |n| $"skaffold.($n).yaml" })
+		...($bundle.vscode.files | columns | each { |n| $"vscode.($n).json" })
+	]
+	mut names = []
+	mut outputs = []
+	for entry in ($bundle.passthrough.files? | default []) {
+		let name = $entry.name
+		if not ($name =~ '^[A-Za-z0-9_-][A-Za-z0-9_.-]*\.(yaml|yml|json|toml|cue|txt)$') {
+			error make {msg: $"bayt: invalid generated filename: ($name)"}
+		}
+		if $name in ($reserved ++ $generated ++ $names) {
+			error make {msg: $"bayt: generated file collision: ($name)"}
+		}
+		let ext = $name | split row "." | last
+		let body = match $ext {
+			"yaml" | "yml" => { _hash-header ($entry.data | to yaml) }
+			"toml" => { _hash-header ($entry.data | to toml) }
+			"json" | "cue" => { $entry.data | to json --indent 2 }
+			"txt" => {
+				if ($entry.data | describe) != "string" { error make {msg: $"bayt: ($name) requires text"} }
+				$entry.data
+			}
+		}
+		$names = $names ++ [$name]
+		$outputs = $outputs ++ [{name: $name, body: $body}]
+	}
+	$outputs
+}
+
 # write-bundle writes all output files for a pre-loaded render bundle.
 # base — workspace-root-relative project dir (e.g. "path/to/project" or ".")
 def write-bundle [bundle: record, base: string, --depot] {
@@ -281,6 +318,7 @@ def write-bundle [bundle: record, base: string, --depot] {
 		error make {msg: $"bayt: the imported bayt CUE package predates this CLI \(launch shim include resolves to '($shim)'\) — refresh the vendored plugins/bayt tree to match the installed bayt version"}
 	}
 
+	let custom = custom-outputs $bundle
 	clear-bayt-dir $"($prefix).bayt"
 	write-render-driver $"($prefix)bayt.cue"
 
@@ -389,6 +427,10 @@ def write-bundle [bundle: record, base: string, --depot] {
 		if ($bundle.bake.depotHcl? | is-not-empty) {
 			atomic-write $"($prefix).bayt/depot.hcl" (_slash-header $bundle.bake.depotHcl)
 		}
+	}
+
+	for entry in $custom {
+		atomic-write $"($prefix).bayt/($entry.name)" $entry.body
 	}
 
 	print $"bayt: wrote files for project ($bundle.manifest.projectManifest.name)"

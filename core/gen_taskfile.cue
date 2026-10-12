@@ -135,9 +135,12 @@ import (
 			if strings.HasPrefix(L.do, "sayt ") {_saytPath + strings.TrimPrefix(L.do, "sayt")},
 			L.do,
 		][0]
+		let _quoted = (#shellQuote & {in: _do}).out
+		let _dollars = strings.Replace(_quoted, "$", "\\$", -1)
+		let _literal = strings.Replace(_dollars, "`", "\\`", -1)
 		out: [
 			if L.shell == "exec" {"\(L.bw)\(_do)"},
-			"\(L.bw)\(L.shell) -c \"\((#shellQuote & {in: _do}).out)\"",
+			"\(L.bw)\(L.shell) -c \"\(_literal)\"",
 		][0]
 	}
 

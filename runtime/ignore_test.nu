@@ -42,6 +42,7 @@ def main [] {
 	test_enumerate_scopes_agrees_with_walking_each
 	test_enumerate_scopes_omits_the_root
 	test_non_ascii_paths_agree_between_backends
+	test_deleted_tracked_paths_agree_between_backends
 		test_docker_flavor_does_not_nest
 	}
 
@@ -350,4 +351,20 @@ def test_docker_flavor_does_not_nest [] {
 	assert ("a/keep.txt" in $got) "a nested .dockerignore has no effect"
 	assert (not ("drop.md" in $got)) "the context-root file still applies"
 	rm -rf $fx
+}
+
+
+def test_deleted_tracked_paths_agree_between_backends [] {
+    let fx = (fixture {".gitignore": "", "a/present.rs": "x", "a/deleted.rs": "y"})
+    ^git -C $fx init -q
+    ^git -C $fx add .
+    rm ($fx | path join "a/deleted.rs")
+    let root = (^git -C $fx rev-parse --show-toplevel | str trim)
+    for scope in ["" "a"] {
+        let fast = (walk-scope $root $scope "git" | sort)
+        let walked = (walk-scope $root $scope "git" --no-git | sort)
+        assert ($fast == $walked) $"deleted tracked file in ($scope): ($fast | to json --raw) vs ($walked | to json --raw)"
+    }
+    assert ((enumerate-scopes $root ["a"] "git" | get a | sort) == (walk-scope $root "a" "git" --no-git | sort))
+    rm -rf $fx
 }

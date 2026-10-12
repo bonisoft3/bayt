@@ -21,11 +21,13 @@ def main [] {
 
 	# determinism + sensitivity
 	test_a_synthetic_dep_resolves_from_its_parent
+	test_a_compiler_source_view_invalidates_generation
 	test_an_unemitted_srcs_view_contributes_nothing
 	test_an_unemitted_other_view_is_an_error
 	test_a_dep_stamp_never_narrows_the_image_scope
 	test_hash_stable_across_runs
 	test_hash_changes_with_content
+	test_invocation_is_target_scoped
 	test_docker_hash_differs_from_content
 	test_docker_hash_stable_across_runs
 
@@ -76,6 +78,39 @@ def main [] {
 }
 
 # --- helpers --------------------------------------------------------
+
+def test_invocation_is_target_scoped [] {
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	write-manifest ($tmp | path join ".bayt/bayt.test.json") []
+	let base = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"])
+	let manifest = ($tmp | path join ".bayt/bayt.test.json" | path expand)
+	let first = with-env {BAYT_INVOCATION: ({manifest: $manifest, value: {args: ["first"], platform: ""}} | to json --raw)} { run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"] }
+	let second = with-env {BAYT_INVOCATION: ({manifest: $manifest, value: {args: ["second"], platform: ""}} | to json --raw)} { run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"] }
+	let unrelated = with-env {BAYT_INVOCATION: ({manifest: ($tmp | path join ".bayt/bayt.other.json"), value: {args: ["first"], platform: ""}} | to json --raw)} { run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"] }
+	rm -rf $tmp
+	for result in [$base $first $second $unrelated] { assert equal $result.exit 0 $result.stderr }
+	assert not equal $first.stdout $base.stdout
+	assert not equal $first.stdout $second.stdout
+	assert equal $base.stdout $unrelated.stdout
+}
+
+def test_a_compiler_source_view_invalidates_generation [] {
+	let tmp = (make-tmp)
+	let app = ($tmp | path join "app")
+	mkdir ($tmp | path join ".bayt") ($app | path join ".bayt")
+	"old compiler" | save ($tmp | path join "compiler.ts")
+	write-synthetic-owner ($tmp | path join ".bayt/bayt.compiler.json") --name compiler --view srcs --view-srcs ["compiler.ts"]
+	{name: "program", dir: "app", srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [{name: "compiler_srcs", dir: ""}], cmds: []} | to json | save ($app | path join ".bayt/bayt.program.json")
+	{name: "generate", dir: "app", srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [{name: "program", dir: "app"}], cmds: []} | to json | save ($app | path join ".bayt/bayt.generate.json")
+	let before = (run-fp $app ["-q" "--manifest" ".bayt/bayt.generate.json"])
+	"new compiler" | save -f ($tmp | path join "compiler.ts")
+	let after = (run-fp $app ["-q" "--manifest" ".bayt/bayt.generate.json"])
+	rm -rf $tmp
+	assert equal $before.exit 0 $before.stderr
+	assert equal $after.exit 0 $after.stderr
+	assert not equal $before.stdout $after.stdout
+}
 
 def make-tmp []: nothing -> string {
 	mktemp -d

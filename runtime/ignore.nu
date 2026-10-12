@@ -218,9 +218,11 @@ def git-enumerate [root: string, subs: list<string>]: nothing -> any {
   if $all.exit_code != 0 { return null }
   let ign = (do -i { ^git -C $root ls-files -z -ci --exclude-per-directory=.gitignore ...$scope } | complete)
   if $ign.exit_code != 0 { return null }
+  let deleted = (do -i { ^git -C $root ls-files -z --deleted ...$scope } | complete)
+  if $deleted.exit_code != 0 { return null }
   # A record, not a list: `in` over a list is linear, and at repo scope that
   # turns the subtraction into |tracked| x |ignored| comparisons.
-  let drop = ($ign.stdout | split row (char nul) | where { |p| not ($p | is-empty) }
+  let drop = (($ign.stdout + $deleted.stdout) | split row (char nul) | where { |p| not ($p | is-empty) }
     | reduce --fold {} { |p, acc| $acc | insert $p true })
   # `.git` and `.task` are tool boundaries the walk never descends into. git
   # knows only ignore files, so in a repo whose .gitignore does not name

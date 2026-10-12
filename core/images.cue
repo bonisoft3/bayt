@@ -23,7 +23,10 @@ package bayt
 // One-way edge: core may import a distro library, never the reverse.
 // A distro fragment imports only stdlib, which is what keeps this
 // acyclic — do not add a core import to distros/ to reach #mount.
-import "github.com/bonisoft3/bayt/distros/zypper"
+import (
+	"github.com/bonisoft3/bayt/distros/zypper"
+	"encoding/toml"
+)
 
 // _lazyboxOverlay — defaultPreamble fragment that COPYs lazybox into
 // the image and prepends its bin dirs to PATH. Shared by nubox (full
@@ -31,7 +34,7 @@ import "github.com/bonisoft3/bayt/distros/zypper"
 // version bump here flows to both presets without drift.
 _lazyboxOverlay: {
 	"lazybox-copy": {priority: -10, line: "COPY --from=\(lock.images.lazybox) /lazybox/ /root/.local/share/lazybox/"}
-	"path-env":     {priority:  -9, line: "ENV PATH=/root/.local/bin:/root/.local/share/lazybox/bin:$PATH"}
+	"path-env": {priority: -9, line: "ENV PATH=/root/.local/bin:/root/.local/share/lazybox/bin:$PATH"}
 }
 
 // nubox — leap-based, includes lazybox + mise + nushell. Use for
@@ -51,7 +54,7 @@ nubox: {
 		name: *lock.images.leap | string
 	})
 	defaultPreamble: _lazyboxOverlay & {
-		"mise-trusted":  {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
+		"mise-trusted": {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
 		"gnu-shell-utils": {priority: -7} & (zypper.#install & {
 			pkgs: ["findutils=4.10.0-160000.2.2", "which=2.23-160000.2.2", "git-core=2.51.0-160000.1.2", "libatomic1=15.3.0+git11272-160000.1.1"]
 		}).out
@@ -79,18 +82,23 @@ bkid: {
 		"socat": {priority: -10, copy: {
 			from: {name: lock.images.alpine_socat}
 			srcs: ["/usr/bin/socat1"]
-			dst:  "/usr/local/bin/socat"
+			dst: "/usr/local/bin/socat"
 		}}
 		"socat-libs": {priority: -9, copy: {
 			from: {name: lock.images.alpine_socat}
 			srcs: ["/usr/lib/libreadline.so.8", "/usr/lib/libncursesw.so.6"]
-			dst:  "/usr/lib/"
+			dst: "/usr/lib/"
 		}}
-		"depot": {priority: -8, copy: {
-			from: {name: lock.images.depot_cli}
-			srcs: ["/usr/bin/depot"]
-			dst:  "/usr/local/bin/depot"
-		}}
+		"lazybox-copy": {priority: -11, line: _lazyboxOverlay["lazybox-copy"].line}
+		"path-env": {priority: -8, line: "ENV PATH=$PATH:/root/.local/bin:/root/.local/share/lazybox/bin"}
+		"toolchain-config": {priority: -7, line: """
+			COPY <<'BKID_MISE' /opt/bkid/mise.toml
+			\(toml.Marshal(_bkidMise))BKID_MISE
+			COPY <<'BKID_LOCK' /opt/bkid/mise.lock
+			\(toml.Marshal({tools: {for name, tool in lock.tools {"github:\(name)": [tool]}}}))BKID_LOCK
+			"""}
+		"toolchain-install": {priority: -6, line: #"RUN cd /opt/bkid && mise trust -y && mise install && mise exec -- sh -c 'cp "$(mise which task)" /usr/local/bin/task && cp "$(mise which depot)" /usr/local/bin/depot'"#}
+
 	}
 }
 

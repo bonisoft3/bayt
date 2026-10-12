@@ -36,3 +36,39 @@ _dr1_materialize_net: strings.Contains(_dr1_body, "--network=none") & true
 // constraint and fail the check.
 _dr1_tf: (#taskfileGen & {project: _dr1, depManifests: {}})
 _dr1_tf: files: deps: tasks: {[!="default"]: _|_}
+
+// Secret recovery and teardown must surround Task, not disappear when RUNs become incremental.
+_dr2: #project & {
+	name: "dr2"
+	dir: "dr2"
+	activate: ""
+	targets: check: {
+		taskfile: incremental: false
+		dockerfile: {
+			from: name: "alpine"
+			incremental: true
+			secrets: token: environment: "TOKEN"
+		}
+		cmd: builtin: {
+			do: "echo leaf-command"
+			shell: "sh"
+			dockerfile: {
+				network: "host"
+				inject: {
+					secrets: [{id: "token", var: contents: "TOKEN"}]
+					steps: [{pre: "echo setup-marker", post: "echo teardown-marker"}]
+				}
+			}
+		}
+	}
+}
+_dr2_body: (#dockerComposeGen & {project: _dr2, depManifests: {}}).dockerfiles.check
+_dr2_secret: strings.Contains(_dr2_body, "--mount=type=secret,id=token") & true
+_dr2_export: strings.Contains(_dr2_body, "export TOKEN=") & true
+_dr2_setup: strings.Contains(_dr2_body, "echo setup-marker") & true
+_dr2_teardown: strings.Contains(_dr2_body, "trap 'echo teardown-marker' EXIT") & true
+_dr2_network: strings.Contains(_dr2_body, "--network=host") & true
+_dr2_task: strings.Contains(_dr2_body, "task -t .bayt/Taskfile.yml bayt:check") & true
+_dr2_not_inline: strings.Contains(_dr2_body, "echo leaf-command") & false
+_dr2_staged: strings.Contains(_dr2_body, "COPY .bayt/Taskfile.yml") & true
+_dr2_leaf: (#taskfileGen & {project: _dr2, depManifests: {}}).files.check.tasks.default.cmds & ["sh -c \"echo leaf-command\""]

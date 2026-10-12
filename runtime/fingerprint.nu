@@ -344,7 +344,7 @@ export def closure-hash [
   let dr = (dep-hashes $r.deps $docker $memo $all_cmds $walk $idx $tr)
   let deps = $dr.hashes
   let ctx = (context-hashes $r.contexts $docker $r.root $idx $tr)
-  let own = (compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx) $idx $tr)
+  let own = (compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx ++ $r.invocation) $idx $tr)
   {hash: $own.hash, memo: ($dr.memo | upsert $key $own.hash)}
 }
 
@@ -362,7 +362,7 @@ export def manifest-fingerprint [r: record, docker: bool = false, all_cmds: bool
   let tr = if ($trees | is-empty) { plan-scopes $r } else { $trees }
   let deps = (dep-hashes ($r.deps? | default []) $docker {} $all_cmds $walk $idx $tr).hashes
   let ctx = (context-hashes ($r.contexts? | default []) $docker $r.root $idx $tr)
-  compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx) $idx $tr
+  compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx ++ ($r.invocation? | default [])) $idx $tr
 }
 
 # Hash each context directory over its own contents. Rooted AT the directory so
@@ -545,7 +545,14 @@ export def resolve-manifest [manifest: string, cmd: string = "", view: string = 
       excludes:   $entry.srcs.exclude
     }
   }
+  let invocation = if $all_cmds or ($view | is-not-empty) { [] } else {
+    let selected = ($env.BAYT_INVOCATION? | default '{}' | from json)
+    if ($selected.manifest? | default "") == ($manifest | path expand) {
+      [($selected.value | to json --raw | hash sha256)]
+    } else { [] }
+  }
   {
+    invocation: $invocation
     stamp:    $".task/bayt/($scope.stamp_name).hash"
     # Ignore rules compose from the repo root down, and `up` is already the hop
     # count to it. Without this the project's own .gitignore would be the only
@@ -590,6 +597,7 @@ def merge-inputs [
     project:    $m.project
     deps:       $m.deps
     contexts:   $m.contexts
+    invocation: ($m.invocation? | default [])
     paths:      (($m.paths ++ $paths) | uniq)
     excludes:   (($m.excludes ++ (parse-list $exclude)) | uniq)
     outs:       (($m.outs ++ (parse-list $outs)) | uniq)

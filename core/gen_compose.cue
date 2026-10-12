@@ -368,6 +368,9 @@ _copyLine: {
 		t: _
 		c: _
 
+		execution?: string
+		extraMounts: *[] | [...string]
+
 		// Each `[if cond { a }, default][0]` picks `a` when cond holds
 		// and `default` otherwise. Used throughout for nullable cmd
 		// sub-fields and for OS-axis overrides on linux.
@@ -392,7 +395,7 @@ _copyLine: {
 		][0]
 
 		// Mount-flag prefix combines target mounts + cmd mounts + inject mounts + network.
-		let _allMountStrs = list.Concat([_mountStrs, _injectMountStrs])
+		let _allMountStrs = list.Concat([_mountStrs, _injectMountStrs, extraMounts])
 		let _net = [
 			if c.dockerfile != _|_ && c.dockerfile.network != _|_ && (c.dockerfile.network & ("none" | "host")) != _|_ {
 				["--network=\(c.dockerfile.network)"]
@@ -408,7 +411,7 @@ _copyLine: {
 		// happens here.
 		let _do        = [if c.dockerfile != _|_ && c.dockerfile.do != _|_ {c.dockerfile.do}, c.do][0]
 		let _shell     = [if c.dockerfile != _|_ && c.dockerfile.shell != _|_ {c.dockerfile.shell}, c.shell][0]
-		let _activated = [if len(t.activate) > 0                       {"\(t.activate) \(_do)"}, _do][0]
+		let _activated = [if execution != _|_ {execution}, if len(t.activate) > 0                       {"\(t.activate) \(_do)"}, _do][0]
 
 		// --- inject body assembly ---
 		// Auto-emitted pre lines from secrets[].var sugar.
@@ -735,15 +738,29 @@ _copyLine: {
 		_baytCacheMount: {type: "cache", target: "/root/.cache/bayt"}
 		_baytCacheMountStr: (_mount & {m: _baytCacheMount, project: t.project, name: t.name}).out
 
+		_injectedCommands: [for c in t.cmds if c.dockerfile != _|_ if c.dockerfile.inject != _|_ {c}]
+		_incrementalExecution: [
+			if t.dockerfile.incremental && len(_injectedCommands) > 0 && len(t.cmds) != 1 {error("incremental RUN injection requires a single task command")},
+			for c in t.cmds if t.dockerfile.incremental if c.do == _|_ {error("incremental RUN requires a host task command")},
+			for c in t.cmds if t.dockerfile.incremental if c.dockerfile != _|_ if c.dockerfile.do != _|_ if c.do != c.dockerfile.do {error("incremental RUN cannot replace a task with dockerfile.do")},
+			for c in t.cmds if t.dockerfile.incremental if c.dockerfile != _|_ if c.dockerfile.shell != _|_ if c.shell != c.dockerfile.shell {error("incremental RUN cannot replace a task shell")},
+			true,
+		][0]
+
 		_runs: list.Concat([
-			if t.dockerfile.incremental {
+			if t.dockerfile.incremental && _incrementalExecution {
 				let _allMounts = list.Concat([[_baytCacheMountStr], _targetMountStrs, _cmdMountStrs])
 				let _mountStr = [if len(_allMounts) > 0 {strings.Join(_allMounts, " ") + " "}, ""][0]
-				// Launch root is the generated .bayt/Taskfile.yml —
-				// same `bayt:<n>` address users invoke on the host, no
-				// dependency on the user-authored project-root shim.
-				// Exec form: `task` is a single program, no shell needed.
-				["RUN \(_mountStr)[\"task\", \"-t\", \".bayt/Taskfile.yml\", \"bayt:\(t.name)\"]"]
+				if len(t.cmds) == 1 {
+					[(_runLine & {
+						"t": t, "c": t.cmds[0]
+						extraMounts: [_baytCacheMountStr]
+						execution: "task -t .bayt/Taskfile.yml bayt:\(t.name)"
+					}).out]
+				}
+				if len(t.cmds) != 1 {
+					["RUN \(_mountStr)[\"task\", \"-t\", \".bayt/Taskfile.yml\", \"bayt:\(t.name)\"]"]
+				}
 			},
 			if !t.dockerfile.incremental {[]},
 			if !t.dockerfile.incremental {

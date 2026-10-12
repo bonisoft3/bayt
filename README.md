@@ -367,6 +367,37 @@ part in dependency and cache boundaries. The tool roots (`Taskfile.yml`,
 are **user-authored**: you write them once and point their includes at the
 `.bayt/` aggregates below.
 
+### Additional generated files
+
+Projects can emit structured files alongside Bayt's built-in outputs:
+
+```cue
+project: bayt.#project & {
+    files: "settings.yaml": {enabled: true}
+    targets: build: files: "settings.json": {enabled: true}
+}
+```
+
+Project filenames are preserved (`.bayt/settings.yaml`); target filenames
+include the target (`.bayt/settings.build.json`). The format, collision and
+input contracts are specified in [[SPEC#Additional file emission]].
+
+`stacks/sayt.gate` derives `.bayt/say.yaml` for the declared generate, build, lint and test
+Task targets. Custom checks belong in those targets' command maps, where their
+inputs, outputs and dependencies participate in the same graph. The project
+owns the glue: after running Bayt generation, it can copy the gates into its
+Sayt configuration:
+
+```sh
+cp .bayt/say.yaml .say.yaml
+```
+
+The configuration remains typed by Sayt's schema; conflicting values fail.
+Pronto generates its own `.say.yaml` with these gates, so its bootstrap can run
+before `.bayt/say.yaml` exists.
+
+### Authored roots
+
 User-authored roots (you write these; bayt never overwrites them):
 
 | Path                        | Purpose                                                          |

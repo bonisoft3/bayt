@@ -35,8 +35,6 @@ lock: images: {
 	deno_bin:     "denoland/deno:bin-2.5.5@sha256:a8dd9a073b2b4d1beb77a8174830c5af54e32517808dcc28249ed6c04fdac979"
 	docker:       "docker:29.7.1-cli@sha256:27a51d5ab1cd38d9eeaba7b415b8c07bc10c31e1cf1ec8d78f6413fcfab3f44f"
 	alpine_socat: "mirror.gcr.io/alpine/socat:1.8.0.0@sha256:a6be4c0262b339c53ddad723cdd178a1a13271e1137c65e27f90a08c16de02b8"
-	// depot CLI — static binary for the bkid's inner depot bake. Multiplatform digest.
-	depot_cli:    "ghcr.io/depot/cli:2.101.78@sha256:71fc7e6cf9f10ee1699bdba40e9461387f3a8406bc7bb9a9b1857c38587a7254"
 	leap: "opensuse/leap:16.0@sha256:859560554b625c225fa767b76d61253d529b95d082c2d68579ad69168d5e3da7"
 	// envoyproxy/envoy ships /usr/local/bin/envoy and /usr/bin/envsubst.
 	// Both are glibc-linked, so they COPY into any glibc-based stage

@@ -987,6 +987,10 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 	out:   (#cacheTagFit & {in: X.in, max: _cacheTagBudget - len((#cacheTagScope & {in: X.scope}).out)}).out
 }
 
+#generatedFiles: {
+	[=~"^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.(yaml|yml|json|toml|cue|txt)$"]: _
+}
+
 // =============================================================================
 // #target — the build unit.
 //
@@ -997,6 +1001,7 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 #target: {
 	// Bound by the enclosing #project.targets map key.
 	name: string
+	files?: #generatedFiles
 
 	// Injected by #project — the project's name and dir. Emitters
 	// read these on cross-project dep refs (when dep.project differs
@@ -1189,6 +1194,7 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 
 #project: P={
+	files?: #generatedFiles
 	// "." roots the project at its own directory, wherever it sits: an
 	// installed app, or a mirror's root, has no sibling projects, and bayt
 	// computes its paths from there in every checkout.

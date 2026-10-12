@@ -53,6 +53,9 @@ from the target and merged at evaluation. Keyed entries (`defaultGlobs`,
 
 `inject` forces `shell: "sh"`: the wrapped body is a heredoc `RUN` that
 `/bin/sh` interprets.
+Incremental RUNs retain singleton injection around Task. Multi-command
+injection and differing `dockerfile.do`/shell overrides are rejected: a shared
+Task invocation cannot preserve their individual execution scopes.
 
 ```cue
 // 1. Shorthand: `do` is the "builtin" rule.
@@ -306,6 +309,13 @@ mtime in `.task/bayt/index`; git, when bayt's root is a work tree's top level,
 only lists the files faster. The stamp needs only nushell, so it runs in
 containers, on Windows and in air-gapped CI.
 
+An interactive caller can set `BAYT_INVOCATION` to JSON containing `manifest`
+(the absolute manifest path) and `value` (its arguments and execution options).
+That value contributes to both stamp and cache keys for the selected target;
+dependencies, synthetic source views and image fingerprints ignore it. Sayt
+sets this for the requested verb so changing arguments or platform runs the
+new invocation without invalidating its prerequisites.
+
 **`bayt cache run [--full] [--similar] -- <cmd>`** computes the same key and
 restores an exact hit's outs. With `--full` (`bayt.cache.full`) it skips the
 command on that hit, which suits a command whose own no-op is expensive, such
@@ -349,3 +359,17 @@ inputs and a `cache.full` hit covers a change to none.
   reach every key through the setup target's outs.
 - **bayt's cache in place of a tool's own** — a per-target key misses whenever
   any input changed, where gradle's per-task cache still hits on the rest.
+
+## Additional file emission
+
+`#project.files` maps filenames to values emitted under `.bayt/` without changing
+the names. `#target.files` inserts the target name before the final extension.
+Supported extensions are `yaml`, `yml`, `json`, `toml`, `cue` and `txt`. Text
+requires a string; other formats serialize the declared data. Generated JSON
+contains exactly that data, and generated CUE contains data without a package.
+
+The writer validates filenames, duplicate destinations and built-in output
+collisions before clearing the previous output tree. Only `.bayt/.env` survives
+the normal sweep; removed custom files do not. Target-level declarations ride
+in their target manifest. Consumers of project-level files declare the emitted
+paths as inputs.

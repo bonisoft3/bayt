@@ -4,10 +4,11 @@
 # Run with: nu generate_test.nu (from this directory).
 
 use std/assert
-use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects, clear-bayt-dir, find-workspace-root, workspace-module, root-for, partition-scan, topo-schedule, check-dirs]
+use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects, clear-bayt-dir, find-workspace-root, workspace-module, root-for, partition-scan, topo-schedule, check-dirs, custom-outputs]
 
 def main [] {
 	print "Running generate.nu tests...\n"
+	test_custom_outputs
 
 	test_repo_of_strips_a_plain_tag
 	test_repo_of_keeps_a_ref_that_has_none
@@ -380,4 +381,37 @@ def test_a_dir_elsewhere_fails_naming_both [] {
 	print "test a declared dir elsewhere fails, naming both..."
 	let got = (try { check-dirs [(_row sub apps/ws/sub false sub)] /w; "passed" } catch {|e| $e.rendered | ansi strip })
 	assert str contains $got "sub declares dir apps/ws/sub but its bayt.cue sits at sub"
+}
+
+
+def test_custom_outputs [] {
+	let bundle = {
+		manifest: {files: {build: {}}}
+		taskfile: {files: {build: {}}}
+		docker: {dockerfiles: {}, compose: {files: {}}}
+		skaffold: {files: {}}
+		vscode: {files: {}}
+		passthrough: {files: [
+			{name: "say.yaml", data: {say: {lint: {do: "task lint"}}}}
+			{name: "settings.json", data: {enabled: true}}
+			{name: "message.txt", data: "exact bytes"}
+		]}
+	}
+	let emitted = custom-outputs $bundle
+	assert equal ($emitted.0.body | from yaml) $bundle.passthrough.files.0.data
+	assert equal ($emitted.1.body | from json) {enabled: true}
+	assert equal $emitted.2.body "exact bytes"
+	for name in ["../say.yaml" "/say.yaml" "Taskfile.build.yaml" "compose.yaml" "depot.yaml"] {
+		let rejected = try {
+			custom-outputs ($bundle | update passthrough.files [{name: $name, data: {}}])
+			false
+		} catch { true }
+		assert $rejected $"accepted ($name)"
+	}
+	let repeated = try {
+		custom-outputs ($bundle | update passthrough.files [$bundle.passthrough.files.0 $bundle.passthrough.files.0])
+		false
+	} catch { true }
+	assert $repeated "accepted duplicate custom filenames"
+	print "  PASS custom outputs preserve data and reject path escapes and collisions"
 }

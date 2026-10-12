@@ -41,6 +41,7 @@ say:
           - tests/diamond_dedup_it.nu
           - tests/export_repro_it.nu
           - tests/scoped_clamp_it.nu
+          - tests/incremental_inject_it.nu
   launch:
     do: "true"
   # Both images bayt build, and a tag on HEAD agreeing with the VERSION it

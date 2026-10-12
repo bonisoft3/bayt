@@ -5,7 +5,7 @@
 package bayt
 
 // --- I1: Each preset's `from.name` resolves through the lock table.
-_i1_nubox:   nubox & {from: name: lock.images.leap}
+_i1_nubox: nubox & {from: name: lock.images.leap}
 _i1_busybox: busybox & {from: name: lock.images.busybox}
 _i1_bkid: bkid & {from: name: lock.images.docker}
 
@@ -14,14 +14,10 @@ _i1_bkid: bkid & {from: name: lock.images.docker}
 _i3_scratch: scratch
 _i3_scratch: from: null
 
-// --- I4: bkid COPYs socat (binary + readline/ncurses libs) and the
-// depot CLI — three entries. Counted over defaultPreamble's copy arms,
-// which is where they live: `bkid.copy` is an undefined field, and `len`
-// of one is incomplete rather than wrong, so the obvious spelling holds
-// against any number.
+// Structured copy arms carry socat and its libraries.
 _i4_bkid_copy: len([
 	for _, e in bkid.defaultPreamble if e != null if e.copy != _|_ {e},
-]) & 3
+]) & 2
 
 // --- I6: presets unify into a target's dockerfile block. Project-level
 // composition: each leaf target picks a preset (or chains via from.ref).
@@ -29,11 +25,11 @@ _i6_probe: #project & {
 	name: "i6"
 	dir:  "test/i6"
 	targets: {
-		"build":   {dockerfile: nubox}
+		"build": {dockerfile: nubox}
 		"release": {dockerfile: busybox}
 	}
 }
-_i6_probe: targets: build:   dockerfile: from: name: lock.images.leap
+_i6_probe: targets: build: dockerfile: from: name:   lock.images.leap
 _i6_probe: targets: release: dockerfile: from: name: lock.images.busybox
 
 // Public aggregator forces evaluation of the hidden _i* bindings.

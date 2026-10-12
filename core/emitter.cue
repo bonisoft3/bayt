@@ -23,6 +23,7 @@ package bayt
 	module: *"" | string
 	project: _module: G.module
 
+	passthrough: (#passthroughFrom & {project: G.project})
 	manifest: (#manifestGen & {"project":      G.project, "depManifests": G.depManifests})
 	taskfile: (#taskfileFrom & {_m: G.manifest, "project":      G.project, "depManifests": G.depManifests, "runtime": G.runtime})
 	docker:   (#dockerComposeFrom & {_m: G.manifest, "project": G.project, "depManifests": G.depManifests})
