@@ -29,6 +29,7 @@ def main [] {
 	test_hash_changes_with_content
 	if $nu.os-info.name != "windows" {
         test_directory_symlinks_hash_the_link
+        test_docker_directory_symlinks_hash_the_link
         test_file_symlinks_track_content
     }
 	test_invocation_is_target_scoped
@@ -874,5 +875,19 @@ def test_file_symlinks_track_content [] {
     let changed = (run-fp $tmp ["-q" "input"])
     assert ($changed.exit == 0) $changed.stderr
     assert ($changed.stdout != $first.stdout)
+    rm -rf $tmp
+}
+
+
+def test_docker_directory_symlinks_hash_the_link [] {
+    let tmp = (make-tmp)
+    mkdir ($tmp | path join "empty")
+    ^ln -s empty ($tmp | path join "input")
+    let first = (run-fp $tmp ["-q" "--docker" "input"])
+    assert ($first.exit == 0) $first.stderr
+    "child" | save ($tmp | path join "empty/child")
+    let populated = (run-fp $tmp ["-q" "--docker" "input"])
+    assert ($populated.exit == 0) $populated.stderr
+    assert equal $first.stdout $populated.stdout
     rm -rf $tmp
 }

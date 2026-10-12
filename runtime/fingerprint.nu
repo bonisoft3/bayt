@@ -247,7 +247,7 @@ export def compute-fingerprint [
   # scopes the hash.
   let windows = ($nu.os-info.name == "windows")
   let enriched = ($unique | each { |it|
-    let info = (ls --long ($project | path join $it.path) | first)
+    let info = (ls --long --directory ($project | path join $it.path) | first)
     let mtime = ($info.modified | format date '%Y-%m-%dT%H:%M:%S.%9f')
     let size = ($info.size | into int)
     let base = {
