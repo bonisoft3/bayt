@@ -175,6 +175,47 @@ _copyLine: {
 	// Only targets that declared a dockerfile block.
 	_emit: {for n, t in G._m.files if t.dockerfile != _|_ {(n): t}}
 
+	// Every port a service publishes, by its host variable: the default host
+	// port it binds when the variable is unset. Each variable and each default
+	// is the project's alone, or two services would bind one host port.
+	let _pubs = [
+		for n, t in G._m.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ {
+			let _var = (_publishVar & {target: n, name: p, port: e}).out
+			let _port = (_hostDefault & {project: G.project._portIdentity, target: n, name: p, port: e}).out
+			target: n
+			who:  "\(n).expose.\(p)"
+			var:  _var
+			port: _port
+			// The variable as a compose value with its default, spelled once.
+			spelling: "${\(_var):-\(_port)}"
+		},
+	]
+	// First claim per variable, so a second is reported by name below rather
+	// than as a conflict here.
+	_published: {for i, x in _pubs if len([for j, y in _pubs if j < i if y.var == x.var {y}]) == 0 {(x.var): x.spelling}}
+	// What the project's host processes bind: a published port sharing one's
+	// default or variable would bind it twice. A target that is both is not a
+	// clash: launch starts it one way or the other, never both.
+	let _procPorts = (_hostProcPorts & {files: G._m.files, identity: G.project._portIdentity}).out
+	_publishClashes: {
+		for n, t in G._m.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ if t.compose == _|_ {
+			"\(n).expose.\(p)": error("\(n).expose.\(p) publishes a port, but \(n) has no compose service to publish it")
+		}
+		for i, x in _pubs for j, y in _pubs if i < j if x.var == y.var {(x.who): error("\(x.who) and \(y.who) both publish under \(x.var)")}
+		for i, x in _pubs for j, y in _pubs if i < j if x.port == y.port {(x.who): error("\(x.who) and \(y.who) both default to host port \(x.port)")}
+		for x in _pubs for y in _procPorts if x.target != y.target if x.port == y.port {(x.who): error("\(x.who) and \(y.who) both default to host port \(x.port)")}
+		for x in _pubs for y in _procPorts if x.target != y.target if y.var != _|_ if x.var == y.var {(x.who): error("\(x.who) and \(y.who) both move by \(x.var)")}
+	}
+	// A compose value naming a published variable bare, `${<var>}`, takes the
+	// variable's default too, so a value built on the port (an origin) follows
+	// wherever it binds.
+	let _pubVars = [for v, _ in _published {v}]
+	_withPublished: F={
+		in: string
+		_steps: [F.in, for i, v in _pubVars {strings.Replace(F._steps[i], "${\(v)}", _published[v], -1)}]
+		out: F._steps[len(_pubVars)]
+	}
+
 	// Synthetic stages emitted alongside each user target. They're
 	// FROM-scratch packaging images that downstream consumers reach via
 	// the `:foo:srcs` / `:foo:outs` ref grammar (#qualifyRef resolves
@@ -537,7 +578,9 @@ _copyLine: {
 			//   `:foo:srcs` / `:foo:outs` (synth) — per-glob filter using
 			//     the synth's outs.globs/exclude. The synth itself is a
 			//     scratch stage that only carries the filtered fileset.
-			let _dp          = [if d.dir != ""              {"\(d.dir)/"},        ""][0]
+			// A root project spells no segment: `/monorepo/./x` under --parents
+			// pivots at `/./` and lands the file at `/x`.
+			let _dp          = [if d.dir != "" if d.dir != "." {"\(d.dir)/"}, ""][0]
 			let _bulkDest    = [if d.dir != "" {"/monorepo/\(d.dir)"}, "/monorepo"][0]
 			let _isSynth     = strings.HasSuffix(d.name, "_srcs") || strings.HasSuffix(d.name, "_outs")
 			let _excludeTail = strings.Join([for e in d.outs.exclude {"--exclude=\(e)"}], " ")
@@ -1014,9 +1057,11 @@ _copyLine: {
 		_ctxsStage: "\(R.t.name)_ctxs"
 		_excludeFlags: [for e in R.t.srcs.exclude {"--exclude=\(e)"}]
 		_excludeJoin: [if len(_excludeFlags) > 0 {strings.Join(_excludeFlags, " ") + " "}, ""][0]
+		// Each cmd's srcs already hold the target's (see gen_bayt's _ownSrcGlobs).
+		_globs: (_uniqStrings & {in: list.Concat([R.t.srcs.globs, for c in R.t.cmds {c.srcs.globs}])}).out
 		_srcCopy: [
-			if len(R.t.srcs.globs) > 0 {
-				"COPY --parents \(_excludeJoin)\(strings.Join(R.t.srcs.globs, " ")) ./"
+			if len(_globs) > 0 {
+				"COPY --parents \(_excludeJoin)\(strings.Join(_globs, " ")) ./"
 			},
 		]
 		// Non-link: the clamp normalises mtimes anyway, and a `--link`
@@ -1046,7 +1091,7 @@ _copyLine: {
 		_ctxsStage: "\(R.t.name)_outs_ctxs"
 		_excludeFlags: [for e in R.t.outs.exclude {"--exclude=\(e)"}]
 		_excludeJoin: [if len(_excludeFlags) > 0 {" \(strings.Join(_excludeFlags, " "))"}, ""][0]
-		_dirPath:  [if R.t.dir != "" {"\(R.t.dir)/"}, ""][0]
+		_dirPath:  [if R.t.dir != "" if R.t.dir != "." {"\(R.t.dir)/"}, ""][0]
 		_outsPaths: strings.Join([for g in R.t.outs.globs {"/monorepo/\(_dirPath)\(g)"}], " ")
 		_copy: [
 			if len(R.t.outs.globs) > 0 {
@@ -1172,12 +1217,22 @@ _copyLine: {
 				if _imagesPull if G.project.bake.cache.registry != _|_ {G.project.bake.cache.registry + "/"},
 				"",
 			][0]
+			// Image and bake tags (SPEC.md, Image tags and refs). Bake reads only
+			// build.tags, so the project-scoped image leads the list.
+			let _local = !_imagesPull && (t.compose == _|_ || t.compose.image == _|_)
+			let _image = [
+				if t.compose != _|_ if t.compose.image != _|_ {t.compose.image},
+				if _imagesPull {"\(_imagesRegistry)bayt-\(svc):${BAYT_IMAGE_TAG:-latest}"},
+				"bayt-\(svc):${BAYT_IMAGE_TAG:-${COMPOSE_PROJECT_NAME}}",
+			][0]
+			let _tags = [_image, for x in ["bayt-\(svc):latest"] if _local {x}]
 			// Build block: context is one up from .bayt/ (= project root)
 			// so `COPY src/...` in the Dockerfile reaches real files.
 			build: {
 				context:    ".."
 				dockerfile: ".bayt/Dockerfile.\(n)"
 				target:     n
+				tags: _tags
 
 				args: BUILDKIT_SYNTAX: #buildkitSyntax
 
@@ -1327,7 +1382,7 @@ _copyLine: {
 				// layers CACHED. compose-spec's `x-bake` doesn't pass
 				// through `attest` / `provenance` / `sbom` fields
 				// (verified via `bake --print`), so they must be
-				// disabled out-of-band by every bake caller. dindbox
+				// disabled out-of-band by every bake caller. bkid
 				// compose sets BUILDX_NO_DEFAULT_ATTESTATIONS=1 for the
 				// inner-bake; CI workflows must disable them on the outer
 				// host bake. That env var reaches buildx only — `depot
@@ -1346,7 +1401,7 @@ _copyLine: {
 						// locally, and a registry push would resolve
 						// their bare names to docker.io and fail.
 						if !_imagesPull && len(t.bake.tags) > 0 {
-							tags: t.bake.tags
+							tags: list.Concat([_tags, t.bake.tags])
 						}
 						if len(t.bake.args) > 0 {
 							args: t.bake.args
@@ -1361,7 +1416,7 @@ _copyLine: {
 						// (`compose: {}` set on the target) emit an output
 						// so the inner bake's positional `<target>`
 						// invocation materializes them — by default
-						// `type=docker`, loading them into the dindbox's
+						// `type=docker`, loading them into the bkid's
 						// daemon, what `compose up` needs to start the
 						// container. BAYT_COMPOSE_OUTPUT switches that for
 						// the build phase of a build/run split: set it to
@@ -1398,17 +1453,10 @@ _copyLine: {
 				scale: 0
 			}
 
-			// Deterministic image ref. Bake reads `image:` to tag the
-			// loaded image (or push it, under output=type=registry);
-			// compose's `up`/`run` (without `--build`) looks up images
-			// by the same name — without the field, compose falls back
-			// to an implicit `<project>-<service>` tag that misses
-			// what bake loaded and rebuilds. Under images:pull the name
-			// is registry-qualified, identically in dev and CI; the tag
-			// is the host's (empty env → latest). User `compose.image:`
-			// wins via the guarded emission below.
+			// Deterministic image ref (SPEC.md, Image tags and refs): prevents
+			// compose from falling back to an implicit tag that misses bake's output.
 			if t.compose == _|_ || t.compose.image == _|_ {
-				image: "\(_imagesRegistry)bayt-\(svc):${BAYT_IMAGE_TAG:-latest}"
+				image: _image
 			}
 			if _imagesPull && (t.compose == _|_ || t.compose.pull_policy == _|_) {
 				pull_policy: "${BAYT_PULL_POLICY:-build}"
@@ -1438,7 +1486,9 @@ _copyLine: {
 				if r.image != _|_ {image:   r.image}
 				if r.command != _|_ {command: r.command}
 				if r.entrypoint != _|_ {entrypoint: r.entrypoint}
-				if len(_environment) > 0 {environment: _environment}
+				if len(_environment) > 0 {
+					environment: {for k, v in _environment {(k): (G._withPublished & {in: v}).out}}
+				}
 				if r.env_file != _|_ {env_file: r.env_file}
 				if len(r.ports) > 0 {ports: r.ports}
 				if len(r.volumes) > 0 {volumes: r.volumes}
@@ -1630,6 +1680,9 @@ _copyLine: {
 	// #target ref deps (single source of truth, no manual sync).
 	compose: {
 		files: {
+			// Empty unless two published ports clash, so a clash fails any read.
+			G._publishClashes
+
 			for n, t in _emit {
 				(n): {
 					// Fragment: the target's service plus its `<n>_srcs` /
@@ -1660,7 +1713,7 @@ _copyLine: {
 								// source. Map value is the secret spec — null
 								// means default file source, an `environment`
 								// arm means a sibling service supplies the value
-								// at compose-up time (e.g. dindbox sidecar's
+								// at compose-up time (e.g. bkid sidecar's
 								// published port).
 								if src == null {
 									(s): {file: "${BAYT_\(strings.ToUpper(strings.Replace(s, ".", "_", -1)))_FILE}"}
@@ -1695,7 +1748,7 @@ _copyLine: {
 			// hand-alias names bayt cannot resolve to targets, so the
 			// union is the smallest set provably complete. Overlay-free
 			// projects keep the exact per-target closure. `:x:bayt`-
-			// depping targets (the dindbox tier) are excluded — they ARE
+			// depping targets (the bkid tier) are excluded — they ARE
 			// the layer the closure loads inside.
 			let _unionClosure = (_uniqStrings & {in: list.FlattenN([
 				for _, t2 in _emit
@@ -1722,6 +1775,22 @@ _copyLine: {
 						scale: 1
 					}
 				}
+			}
+		}
+
+		// The published ports, merged over the federation root by the user
+		// root alone (compose.bayt.ports.yaml): what a person brings up binds
+		// them, and a closure, which includes fragments, keeps them private.
+		// Empty when the project publishes nothing.
+		ports: {
+			let _svcPorts = {
+				for n, t in G._m.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ {
+					let _v = (_publishVar & {target: n, name: p, port: e}).out
+					((_svcName & {pn: G.project.name, tn: n}).out): "\(p)": "\(G._published[_v]):\(e.port)"
+				}
+			}
+			if len(_svcPorts) > 0 {
+				services: {for s, ps in _svcPorts {(s): ports: [for k in list.SortStrings([for k, _ in ps {k}]) {ps[k]}]}}
 			}
 		}
 
@@ -1757,7 +1826,13 @@ _copyLine: {
 		// re-arm with scale: 1. Guarded by D6 + D16. Flattens of this
 		// root need `--profile "*"` or the alias target names drop out.
 		root: {
-			include: [{path: "./compose.bayt.yaml", required: false}]
+			include: [{
+				path: [
+					if len(G._published) == 0 {"./compose.bayt.yaml"},
+					["./compose.bayt.yaml", "./compose.bayt.ports.yaml"],
+				][0]
+				required: false
+			}]
 
 			if len(_emit) > 0 {
 				services: {

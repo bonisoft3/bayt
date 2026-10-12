@@ -35,6 +35,17 @@ _d1_dc: compose: files: build: services: "d1-build": build: dockerfile: ".bayt/D
 _d1_dc: compose: files: build: services: "d1-build": build: target:     "build"
 // Depless target → no include (only services:).
 _d1_dc: compose: files: build: {[!="services"]: _|_}
+// A local image carries the compose project it runs under, so two checkouts'
+// stacks never start each other's builds, and `latest` beside it; bake reads
+// only `build.tags`, which the image leads.
+_d1_dc: compose: files: build: services: "d1-build": image: "bayt-d1-build:${BAYT_IMAGE_TAG:-${COMPOSE_PROJECT_NAME}}"
+_d1_dc: compose: files: build: services: "d1-build": build: tags: ["bayt-d1-build:${BAYT_IMAGE_TAG:-${COMPOSE_PROJECT_NAME}}", "bayt-d1-build:latest"]
+// Under images:pull the name is a published one: registry-qualified, its tag
+// the host's, and nothing tagged beside it to push.
+_d1_pull: _d1 & {bake: {cache: {type: "registry", registry: "reg.example/p", scope: "s"}, images: pull: true}}
+_d1_pull_svc: (#dockerComposeGen & {project: _d1_pull, depManifests: {}}).compose.files.build.services."d1-build"
+_d1_pull_image: _d1_pull_svc.image & "reg.example/p/bayt-d1-build:${BAYT_IMAGE_TAG:-latest}"
+_d1_pull_tags: _d1_pull_svc.build.tags & ["reg.example/p/bayt-d1-build:${BAYT_IMAGE_TAG:-latest}"]
 
 // --- D2: dep chain — build depends on setup, both have dockerfile
 // blocks. The build service gets `additional_contexts: { d2-setup:
@@ -231,6 +242,49 @@ _d9_bayt_scope:  strings.Contains(_d9_bayt_body, "COPY --parents .bayt/compose.b
 _d9_srcs_svc: _d1_dc.compose.files.build.services."d1-build_srcs".build.target & "build_srcs"
 _d9_outs_svc: _d1_dc.compose.files.build.services."d1-build_outs".build.target & "build_outs"
 _d9_bayt_svc: _d1_dc.compose.files.build.services."d1-build_bayt".build.target & "build_bayt"
+
+// A cmd's srcs are its target's sources too: mise.install declares its
+// manifests on the cmd alone, and a `:srcs` view without them handed a
+// consumer a stage whose `mise install` installed nothing.
+_d9_cmd: #project & {
+	name: "d9c"
+	dir:  "d9c"
+	targets: setup: {
+		cmd: "builtin": {do: "mise install", srcs: globs: ["[.]mise.toml"]}
+		dockerfile: busybox
+	}
+}
+_d9_cmd_srcs: strings.Contains((#dockerComposeGen & {project: _d9_cmd, depManifests: {}}).dockerfiles.setup, "COPY --parents [.]mise.toml ./") & true
+
+// A target that is both a host process and a container publishes the port
+// its host process moves by: launch starts it one way or the other, so the
+// shared variable and default are not a clash.
+_d9_dual: #project & {
+	name: "d9d"
+	dir:  "d9d"
+	targets: web: {
+		entrypoint: do: "web"
+		dockerfile: busybox
+		compose: {}
+		expose: http: {port: 8080, env: "PORT", publish: true}
+	}
+}
+_d9_dual_ports: (#dockerComposeGen & {project: _d9_dual, depManifests: {}}).compose.ports.services["d9d-web"].ports & ["${WEB_HTTP_PORT:-\((_portDefault & {project: "d9d", target: "web", name: "http"}).out)}:8080"]
+
+// A project rooted at `.` spells no directory segment in a view's COPY:
+// `/monorepo/./x` under --parents pivots at `/./` and lands the file at `/x`,
+// so a bkid runner's inner bake found none of the sources it was handed.
+_d9_dot: #project & {
+	name: "d9dot"
+	dir:  "."
+	targets: {
+		db: {srcs: globs: ["migrations/*.sql"], cmd: "builtin": do: "true", dockerfile: busybox}
+		run: {deps: [":db:srcs"], cmd: "builtin": do: "true", dockerfile: busybox}
+	}
+}
+_d9_dot_body: (#dockerComposeGen & {project: _d9_dot, depManifests: {}}).dockerfiles.run
+_d9_dot_copy: strings.Contains(_d9_dot_body, "COPY --from=d9dot-db_srcs --parents /monorepo/migrations/*.sql /") & true
+_d9_dot_none: strings.Contains(_d9_dot_body, "/./") & false
 
 // --- D10: `:x:bayt` ref consumer. A target depending on a
 // scaffolding synth gets a bulk-COPY `--from=<proj>-<x>_bayt --link
@@ -674,6 +728,8 @@ Tests: docker_compose: {
 	d23_parents_plain:    _d23_parents_plain
 	d23_optout_plain:     _d23_optout_plain
 	d1: _d1_dc
+	d1_pull_image: _d1_pull_image
+	d1_pull_tags:  _d1_pull_tags
 	d2: _d2_dc
 	d3: _d3_dc
 	d4: _d4_dc
@@ -688,6 +744,10 @@ Tests: docker_compose: {
 	d9_outs_clamp:  _d9_outs_clamp
 	d9_bayt_stage:  _d9_bayt_stage
 	d9_bayt_scope:  _d9_bayt_scope
+	d9_cmd_srcs:    _d9_cmd_srcs
+	d9_dual_ports:  _d9_dual_ports
+	d9_dot_copy:    _d9_dot_copy
+	d9_dot_none:    _d9_dot_none
 	d10:            _d10_dc
 	d10_has_bulk_copy: _d10_ci_has_bulk_copy
 	d10_chain_copy:    _d10_chain_copy
@@ -861,3 +921,73 @@ _d26_empty_inc: (#dockerComposeGen & {project: _d26_empty, depManifests: {}}).co
 _d26_nested_inc: (#dockerComposeGen & {project: _d26_nested, depManifests: {}}).compose.files."launch.closure".include & [
 	{path: "../../../apps/demo/.bayt/compose.launch.yaml", required: false},
 ]
+
+// --- D27: a published port. Its fragment publishes nothing, so a closure
+// (integrate's) keeps it private; the overlay compose.bayt.ports.yaml binds
+// `${<var>:-<n>}`, and only the user root merges it, so what a person brings
+// up publishes it. A bare `${<var>}` in the project's environment takes the
+// same default.
+_d27_door: {
+	cmd: "builtin": do: "true"
+	dockerfile: busybox
+	expose: tls: {port: 8443, publish: environment: "DOOR_HOST_PORT"}
+	compose: environment: ORIGIN: "${ORIGIN:-https://localhost:${DOOR_HOST_PORT}}"
+}
+_d27: #project & {
+	name: "d27"
+	dir:  "d27"
+	targets: {
+		"door": _d27_door
+		"integrate": {
+			deps: [":door"]
+			cmd: "builtin": do: "true"
+			dockerfile: busybox
+			compose: up: true
+		}
+	}
+}
+_d27_port: (_hostDefault & {project: "d27", target: "door", name: "tls", port: {port: 8443}}).out
+_d27_dc: (#dockerComposeGen & {project: _d27, depManifests: {}})
+_d27_dc: compose: files: door: services: "d27-door": environment: ORIGIN: "${ORIGIN:-https://localhost:${DOOR_HOST_PORT:-\(_d27_port)}}"
+_d27_door_private: (_d27_dc.compose.files.door.services."d27-door".ports == _|_) & true
+_d27_dc: compose: ports: services: "d27-door": ports: ["${DOOR_HOST_PORT:-\(_d27_port)}:8443"]
+_d27_dc: compose: root: include: [{path: ["./compose.bayt.yaml", "./compose.bayt.ports.yaml"], required: false}]
+_d27_dc: compose: files: "integrate.closure": include: [...close({path: string, required: false})]
+
+// A project publishing nothing has no overlay, and its root includes the
+// federation root alone.
+_d27_private: #project & {
+	name: "d27"
+	dir:  "d27"
+	targets: "door": {
+		cmd: "builtin": do: "true"
+		dockerfile: busybox
+		expose: tls: port: 8443
+		compose: {}
+	}
+}
+_d27_private_dc: (#dockerComposeGen & {project: _d27_private, depManifests: {}})
+_d27_private_dc: compose: ports: close({})
+_d27_private_dc: compose: root: include: [{path: "./compose.bayt.yaml", required: false}]
+
+// `publish: true` binds under the variable bayt derives, the one a host
+// process's port of that name moves by.
+_d27_derived: #project & {
+	name: "d27"
+	dir:  "d27"
+	targets: "door": {
+		cmd: "builtin": do: "true"
+		dockerfile: busybox
+		expose: tls: {port: 8443, publish: true}
+		compose: environment: ORIGIN: "https://localhost:${DOOR_TLS_PORT}"
+	}
+}
+_d27_derived_dc: (#dockerComposeGen & {project: _d27_derived, depManifests: {}})
+_d27_derived_dc: compose: ports: services: "d27-door": ports: ["${DOOR_TLS_PORT:-\(_d27_port)}:8443"]
+_d27_derived_dc: compose: files: door: services: "d27-door": environment: ORIGIN: "https://localhost:${DOOR_TLS_PORT:-\(_d27_port)}"
+
+// The repo's module path and the discriminator each move the default: two
+// repos' projects of one name, or two that collide, separate.
+_d27_id:      (_d27 & {_module: "example.org/repo"})._portIdentity & "example.org/repo/d27"
+_d27_id_disc: (_d27 & {_module: "example.org/repo", discriminator: "ab12"})._portIdentity & "example.org/repo/d27/ab12"
+_d27_salted:  (_hostDefault & {project: _d27_id, target: "door", name: "tls", port: {port: 8443}}).out != _d27_port & true

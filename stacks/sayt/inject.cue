@@ -1,8 +1,8 @@
 // stacks/sayt/inject — shared inject helper for ci-style targets that
 // run an inner docker / docker-bake / docker-compose stack against a
-// host-provided daemon. Pair with the `bayt.dindbox` image preset.
+// host-provided daemon. Pair with the `bayt.bkid` image preset.
 //
-// Architecture summary (matches the host-side `dind.nu env-file --socat
+// Architecture summary (matches the host-side `docker-bridge.nu env-file --socat
 // --builder sayt-builder` contract):
 //
 //   Host                                      Sandbox (RUN inside ci)
@@ -34,9 +34,8 @@
 //
 // What the consumer still provides (sayt.inject is one piece,
 // not a complete target):
-//   - dockerfile.from (typically `bayt.dindbox` preset for the lean
-//     docker:cli + socat image, or `ref: ":dindbox"` to chain off a
-//     project-local target with that preset).
+//   - dockerfile.from (typically the `bayt.bkid` preset, the lean
+//     docker:cli + socat image; sayt.ci uses it).
 //   - cmd."builtin".shell + cmd."builtin".do — the actual inner invocation
 //     (e.g. /usr/local/bin/inner-bake.sh or a direct `docker buildx bake`).
 //   - dockerfile.preamble for whatever inner-* shell scripts the cmd.do
@@ -62,7 +61,7 @@ inject: {
 	// Compose service-level secret sources. Env-sourced uniformly: each
 	// secret reads from the named env var on the host invoking compose
 	// (the GHA action's $GITHUB_ENV exports, or a local `set -a; . <(nu
-	// dind.nu env-file --socat --builder sayt-builder); set +a` shell).
+	// docker-bridge.nu env-file --socat --builder sayt-builder); set +a` shell).
 	// No `file:` source anywhere — env vars travel cleanly across
 	// host/CI/inception boundaries without tempfile path interpolation.
 	// docker_host sources from DOCKER_HOST_TCP rather than DOCKER_HOST so
@@ -94,7 +93,7 @@ inject: {
 		// testcontainers_host — the host address that routes to spawned
 		// containers' published ports. The docker gateway address works
 		// from every sandbox topology (host-netns and bridged builders
-		// alike), so dind.nu derives it host-side via its gateway-ip
+		// alike), so docker-bridge.nu derives it host-side via its gateway-ip
 		// probe when the caller doesn't set one.
 		testcontainers_host:       environment: "TESTCONTAINERS_HOST_OVERRIDE"
 		// cache_scope + cache_scope_fallback — pre-composed scope
@@ -143,6 +142,10 @@ inject: {
 		// per-run token stays out of layers and out of RUN cache keys.
 		actions_results_url:       environment: "ACTIONS_RESULTS_URL"
 		actions_runtime_token:     environment: "ACTIONS_RUNTIME_TOKEN"
+		// bkid_project — the caller's compose project, which names a runner's
+		// inner stack `<project>_<check>`: apart from its launch stack and from
+		// other checkouts'. sayt integrate sets it on a bake, else empty.
+		bkid_project:              environment: "BKID_PROJECT"
 	}
 
 	// Cmd-level inject: mounts + setup body around the cmd.do invocation.
@@ -170,6 +173,7 @@ inject: {
 			{id: "depot_disable_otel",   var: contents: "DEPOT_DISABLE_OTEL"},
 			{id: "actions_results_url",  var: contents: "ACTIONS_RESULTS_URL"},
 			{id: "actions_runtime_token", var: contents: "ACTIONS_RUNTIME_TOKEN"},
+			{id: "bkid_project",         var: contents: "BKID_PROJECT"},
 			// Keep the instance as contents and install it in a guarded pre-step.
 			// The static secret list keeps this RUN cache-compatible with every
 			// capability set, while empty builder credentials remain a no-op.
@@ -184,12 +188,12 @@ inject: {
 				if [ -n "$DOCKER_HOST" ] && [ ! -e /var/run/docker.sock ]; then
 				  ulimit -n 1048576 2>/dev/null || true
 				  addr=${DOCKER_HOST#tcp://}
-				  [ -n "$addr" ] || { echo "dindbox: DOCKER_HOST=$DOCKER_HOST has no tcp:// address" >&2; exit 1; }
+				  [ -n "$addr" ] || { echo "bkid: DOCKER_HOST=$DOCKER_HOST has no tcp:// address" >&2; exit 1; }
 				  socat -d0 UNIX-LISTEN:/var/run/docker.sock,fork,backlog=1024,reuseaddr "TCP:$addr,keepalive,keepidle=30,keepintvl=15,keepcnt=4" &
 				  SOCAT_PID=$!
 				  trap 'kill $SOCAT_PID 2>/dev/null || true' EXIT INT TERM
 				  socat -u OPEN:/dev/null UNIX-CONNECT:/var/run/docker.sock,retry=20,interval=0.2 >/dev/null 2>&1 \\
-				    || { echo "dindbox: socat bridge to /var/run/docker.sock not ready" >&2; exit 1; }
+				    || { echo "bkid: socat bridge to /var/run/docker.sock not ready" >&2; exit 1; }
 				fi
 				"""
 		}

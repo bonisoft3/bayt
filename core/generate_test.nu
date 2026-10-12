@@ -4,7 +4,7 @@
 # Run with: nu generate_test.nu (from this directory).
 
 use std/assert
-use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects, clear-bayt-dir, find-workspace-root, root-for, partition-scan, topo-schedule, check-dirs]
+use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects, clear-bayt-dir, find-workspace-root, workspace-module, root-for, partition-scan, topo-schedule, check-dirs]
 
 def main [] {
 	print "Running generate.nu tests...\n"
@@ -12,6 +12,7 @@ def main [] {
 	test_repo_of_strips_a_plain_tag
 	test_repo_of_keeps_a_ref_that_has_none
 	test_repo_of_survives_a_templated_tag
+	test_repo_of_survives_a_nested_default
 	test_repo_of_keeps_a_registry_port
 	test_repo_of_ignores_a_slash_inside_a_template
 	test_scan_dir_answers_the_scan_s_spelling
@@ -30,6 +31,8 @@ def main [] {
 	test_scan_places_a_nested_rooted_project_where_it_sits
 	test_scan_reads_a_rooted_project_from_its_bayt_cue
 	test_root_walk_stops_at_cue_mod
+	test_module_is_the_published_one
+	test_module_walk_stops_at_the_workspace_root
 	test_a_rooted_project_containing_here_is_the_root
 	test_a_plain_project_runs_from_the_cue_mod_root
 	test_a_rooted_cue_mod_root_is_rooted
@@ -61,6 +64,12 @@ def test_repo_of_keeps_a_ref_that_has_none [] {
 # in `:${BAYT_IMAGE_TAG`.
 def test_repo_of_survives_a_templated_tag [] {
 	check "templated tag" "${ORG:-o}.registry.example/${PROJ:-p}/bayt-x:${BAYT_IMAGE_TAG:-latest}" "${ORG:-o}.registry.example/${PROJ:-p}/bayt-x"
+}
+
+# A local image's tag defaults to the compose project, a default nested inside
+# the first: the cut must skip both.
+def test_repo_of_survives_a_nested_default [] {
+	check "nested default" "bayt-x:${BAYT_IMAGE_TAG:-${COMPOSE_PROJECT_NAME}}" "bayt-x"
 }
 
 # Cutting at the FIRST colon instead takes the registry's port for a tag.
@@ -303,6 +312,39 @@ def test_root_walk_stops_at_cue_mod [] {
 	let got = (find-workspace-root ($dir | path join plugins/bayt/core))
 	rm -rf $dir
 	assert equal $got $dir
+}
+
+# A project's ports are salted with the module it is published under, so its
+# mirror, whose root module that is, generates the same ones; a major bump is
+# no new project.
+def test_module_is_the_published_one [] {
+	print "test the port module is the mirror's, else the workspace's..."
+	let dir = (mktemp -d)
+	mkdir ($dir | path join cue.mod) ($dir | path join apps/m/.mirror/cue.mod) ($dir | path join apps/m/sub) ($dir | path join apps/plain)
+	'module: "example.org"\n' | save ($dir | path join cue.mod module.cue)
+	'module: "github.com/acme/m@v2"\n' | save ($dir | path join apps/m/.mirror/cue.mod module.cue)
+	let mirrored = (workspace-module ($dir | path join apps/m/sub))
+	let plain = (workspace-module ($dir | path join apps/plain))
+	rm -rf $dir
+	assert equal $mirrored "github.com/acme/m"
+	assert equal $plain "example.org"
+}
+
+# The walk compared an expanded directory to an unexpanded root, so a relative
+# or symlinked path (macOS's /var is /private/var) never met the root and took
+# an enclosing checkout's mirror module, moving every default port.
+def test_module_walk_stops_at_the_workspace_root [] {
+	print "test the module walk stops at the workspace root..."
+	let outer = (mktemp -d)
+	let ws = ($outer | path join ws)
+	mkdir ($outer | path join .mirror/cue.mod) ($ws | path join cue.mod) ($ws | path join apps/plain)
+	'module: "github.com/enclosing/x"\n' | save ($outer | path join .mirror/cue.mod module.cue)
+	'module: "example.org"\n' | save ($ws | path join cue.mod module.cue)
+	let relative = (do { cd $ws; workspace-module "apps/plain" })
+	let absolute = (workspace-module ($ws | path join apps/plain))
+	rm -rf $outer
+	assert equal $relative "example.org"
+	assert equal $absolute "example.org"
 }
 
 # Run from inside a project rooted at itself, under an outer cue.mod, the run

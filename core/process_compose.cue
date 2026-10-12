@@ -25,7 +25,25 @@ import (
 	port:  int & >0 & <65536
 	env?:  string
 	host?: int & >0 & <65536
-	if host != _|_ {env: string}
+	// A host process's fixed port reaches it through `env`; a published
+	// container port listens on its own `port` whatever the host binds.
+	if host != _|_ if publish == _|_ {env: string}
+	// Published on the host by the container's compose service under a
+	// variable sourced as a secret's is (#dockerfile.secrets): `true` takes
+	// the derived `<TARGET>_<NAME>_PORT`, `{environment: V}` names one
+	// (SPEC.md, Published ports).
+	publish?: true | close({environment: =~"^[A-Za-z_][A-Za-z0-9_]*$"})
+}
+
+// The host variable a published port binds under.
+_publishVar: P={
+	target: string
+	name:   string
+	port:   #port
+	out: [
+		if (P.port.publish & true) != _|_ {(_portVar & {target: P.target, name: P.name}).out},
+		P.port.publish.environment,
+	][0]
 }
 
 // The process the runtime starts, whether it serves until stopped or runs to
@@ -95,6 +113,22 @@ _hostDefault: H={
 	name:    string
 	port:    #port
 	out: [if H.port.host != _|_ {H.port.host}, (_portDefault & {project: H.project, target: H.target, name: H.name}).out][0]
+}
+
+// Every port a project's host processes bind when launched: its default and,
+// when it moves, the variable that moves it. Read by process-compose's own
+// clash check and by the published-port check, which must agree on both.
+_hostProcPorts: H={
+	files:    _
+	identity: string
+	out: [
+		for n, t in H.files if t.entrypoint != _|_ if t.entrypoint.host if t.expose != _|_ for p, e in t.expose {
+			target: n
+			who:    "\(n).expose.\(p)"
+			port: [if e.env != _|_ {(_hostDefault & {project: H.identity, target: n, name: p, port: e}).out}, e.port][0]
+			if e.env != _|_ {var: (_portVar & {target: n, name: p}).out}
+		},
+	]
 }
 
 // The host spelling of a port: its variable, which the driver exports to move

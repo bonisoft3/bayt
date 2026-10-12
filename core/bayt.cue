@@ -393,7 +393,7 @@ noop: #cmd & {
 	//   preamble        — project-leaf-additive plain list of raw lines,
 	//                     appended after the framework's contribution.
 	//   defaultPreamble — framework/preset's #MapAsList, keyed so
-	//                     multiple stacks (image preset + dind overlay
+	//                     multiple stacks (image preset + bkid overlay
 	//                     + project add-on) compose by key rather than
 	//                     positional list-unification (which is
 	//                     length-strict and rejects extension).
@@ -910,9 +910,9 @@ noop: #cmd & {
 		if X._type == "registry" {[
 			// CACHE_SCOPE — branch + builder identity (engine, frontend,
 			// platform) of whichever builder runs THIS bake, composed
-			// host-side by sayt (dind.nu for local builders, the sayt/depot
+			// host-side by sayt (docker-bridge.nu for local builders, the sayt/depot
 			// action for depot) and interpolated here by compose. bayt only
-			// transports it into dindbox sandboxes via the env-sourced
+			// transports it into bkid sandboxes via the env-sourced
 			// cache_scope secret — never derive it in-sandbox.
 			// CACHE_SCOPE_FALLBACK is the same identity at main: branches
 			// read their own scope first, then main's, so PRs never pollute
@@ -1209,8 +1209,20 @@ _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 	// created, and never changes, like a proto field's tag. Opt-in: a
 	// dependent keys the project's Taskfile include as `<name>-<discriminator>`
 	// instead of its bare name, so the key cannot collide with a local
-	// target's. A collision without one fails as a CUE conflict.
+	// target's. A collision without one fails as a CUE conflict. It also
+	// salts the project's default host ports, the fix for two projects whose
+	// ports collide.
 	discriminator?: =~"^[a-z0-9]{4}$"
+
+	// The consuming repo's CUE module path, injected by #render: projects of
+	// one name in two repos default to different host ports.
+	_module: *"" | string
+	// What a default host port is hashed from (process_compose.cue).
+	_portIdentity: strings.Join([
+		if _module != "" {_module},
+		name,
+		if discriminator != _|_ {discriminator},
+	], "/")
 
 	// Toolchain activator; prefixes every emitted command. Emitters read
 	// it from here; targets don't carry it unless they need to override.

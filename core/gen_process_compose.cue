@@ -39,13 +39,7 @@ import (
 	// stack whichever process it starts. Each must be a distinct variable, and
 	// every host process's port, movable or fixed, a distinct number when
 	// launched, or two would share one; containers each have their own.
-	let _all = [
-		for n, t in G._procs if t.expose != _|_ for p, e in t.expose {
-			who: "\(n).expose.\(p)"
-			port: [if e.env != _|_ {(_hostDefault & {project: G.project.name, target: n, name: p, port: e}).out}, e.port][0]
-			if e.env != _|_ {var: (_portVar & {target: n, name: p}).out}
-		},
-	]
+	let _all = (_hostProcPorts & {files: G._m.files, identity: G.project._portIdentity}).out
 	let _vars = [for x in _all if x.var != _|_ {x}]
 	_clashes: {
 		for i, x in _vars for j, y in _vars if i < j if x.var == y.var {(x.who): error("\(x.who) and \(y.who) both map to \(x.var)")}
@@ -65,7 +59,7 @@ import (
 				peer:   n
 				needle: "\(alias):\(e.port)"
 				from:   "(^|[^A-Za-z0-9_.-])\((_reQuote & {in: alias}).out):\(e.port)\(_portEnd)"
-				to:     "${1}127.0.0.1:\(strings.Replace((_hostPort & {project: G.project.name, target: n, name: p, port: e}).out, "$", "$$", -1))${2}"
+				to:     "${1}127.0.0.1:\(strings.Replace((_hostPort & {project: G.project._portIdentity, target: n, name: p, port: e}).out, "$", "$$", -1))${2}"
 			}
 			[_rule, _rule]
 		},
@@ -81,7 +75,7 @@ import (
 	// What a probe or a value needs to spell a target's own ports.
 	_self: S={
 		t: _
-		out: {expose: [if S.t.expose != _|_ {S.t.expose}, {}][0], project: G.project.name, target: S.t.name}
+		out: {expose: [if S.t.expose != _|_ {S.t.expose}, {}][0], project: G.project._portIdentity, target: S.t.name}
 	}
 
 	// Only a rule whose alias and port appear can match.
@@ -99,7 +93,7 @@ import (
 		let _raw = {
 			H.t.entrypoint.env
 			if H.t.expose != _|_ for p, e in H.t.expose if e.env != _|_ {
-				(e.env): (_hostPort & {project: G.project.name, target: H.t.name, name: p, port: e}).out
+				(e.env): (_hostPort & {project: G.project._portIdentity, target: H.t.name, name: p, port: e}).out
 			}
 		}
 		let _own = (G._self & {t: H.t}).out
@@ -113,7 +107,7 @@ import (
 			let _pk = (_portKey & {in: hk}).out
 			if _raw[_pk] != _|_ if pt.expose != _|_
 			for p, e in pt.expose if _raw[_pk] == "\(e.port)" {
-				(_pk): {host: hk, ref: (_hostPort & {project: G.project.name, target: peer, name: p, port: e}).out}
+				(_pk): {host: hk, ref: (_hostPort & {project: G.project._portIdentity, target: peer, name: p, port: e}).out}
 			}
 		}
 		out: {

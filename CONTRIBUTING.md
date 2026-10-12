@@ -95,7 +95,7 @@ suite cannot see compose behaviour.
   containers started through an alias, passes `--profile "*"`; `sayt integrate`
   tears down by project label, which is profile-blind.
 - `docker compose -f .bayt/compose.<n>.closure.yaml up bayt` works in every
-  project and inside a dindbox, where the user root may not exist; the generated
+  project and inside a bkid, where the user root may not exist; the generated
   ci RUN bodies and `sayt/depot`'s run phase use it.
 
 ## Where computation lives: CUE vs nushell

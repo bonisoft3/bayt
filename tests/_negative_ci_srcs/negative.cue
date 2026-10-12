@@ -14,7 +14,6 @@ _p: bayt.#project & {
 	targets: {
 		"integrate": {cmd: "builtin": do: "true", srcs: globs: ["it/**"], dockerfile: bayt.nubox}
 		"test": {cmd: "builtin": do: "true", srcs: globs: ["test/**"], dockerfile: bayt.nubox}
-		"dindbox": sayt.dindbox
 		"ci":      sayt.ci & {deps: [":integrate:srcs", ":integrate:bayt", ":test:bayt"]}
 	}
 }

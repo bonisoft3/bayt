@@ -320,6 +320,9 @@ def write-bundle [bundle: record, base: string, --depot] {
 	for entry in ($bundle.docker.compose.files | transpose name data) {
 		atomic-write $"($prefix).bayt/compose.($entry.name).yaml" (_hash-header (_inject-runtime $entry.data $base | to yaml))
 	}
+	if ($bundle.docker.compose.ports | is-not-empty) {
+		atomic-write $"($prefix).bayt/compose.bayt.ports.yaml" (_hash-header ($bundle.docker.compose.ports | to yaml))
+	}
 
 	# --- process-compose: one file per project, one process per host process.
 	if ($bundle.processCompose.file.processes | is-not-empty) {
@@ -565,7 +568,7 @@ def write-render-driver [bayt_cue: string] {
 	let pkg = (open --raw $bayt_cue | lines | where ($it | str starts-with "package ") | first | str replace "package " "")
 	let driver = ($bayt_cue | path dirname | path join ".bayt" "render.cue")
 	let core_import = (open $render_import_file)
-	atomic-write $driver $"// generated from bayt.cue — do not edit\npackage ($pkg)\n\nimport bayt_ \"($core_import)\"\n\n// Declared so a bayt.json project can inject the value via stdin —\n// file-mode identifier references only resolve against declarations.\nproject: _\ndepManifestsIn: {[string]: _}\nruntimeIn: *\"\" | string\n_render: \(bayt_.#render & {\"project\": project, depManifests: depManifestsIn, runtime: runtimeIn}\)\n"
+	atomic-write $driver $"// generated from bayt.cue — do not edit\npackage ($pkg)\n\nimport bayt_ \"($core_import)\"\n\n// Declared so a bayt.json project can inject the value via stdin —\n// file-mode identifier references only resolve against declarations.\nproject: _\ndepManifestsIn: {[string]: _}\nruntimeIn: *\"\" | string\nmoduleIn: *\"\" | string\n_render: \(bayt_.#render & {\"project\": project, depManifests: depManifestsIn, runtime: runtimeIn, module: moduleIn}\)\n"
 }
 
 def pass2 [bayt_cue: string, dep_manifests: record] {
@@ -575,7 +578,7 @@ def pass2 [bayt_cue: string, dep_manifests: record] {
 	# file-mode `cue export` cannot resolve the stub's @embed — inject the
 	# value as `project` and render from the driver alone.
 	let json_path = ($bayt_cue | path dirname | path join "bayt.json")
-	let base = {depManifestsIn: $dep_manifests, runtimeIn: ($env.BAYT_RUNTIME_DIR? | default "")}
+	let base = {depManifestsIn: $dep_manifests, runtimeIn: ($env.BAYT_RUNTIME_DIR? | default ""), moduleIn: (workspace-module ($bayt_cue | path dirname))}
 	let r = if ($json_path | path exists) {
 		let inject = ($base | insert project (open $json_path) | to json --raw)
 		(do { $inject | run-cue export - $driver -e _render --out json } | complete)
@@ -662,6 +665,33 @@ def load-dep-manifests [deps: list<string>, index: record, workspace_root: strin
 # walk `:srcs` closures without enumerating each one explicitly.
 def srcs-variants [deps: list<string>] {
 	$deps | where {|r| ($r | split row ":" | length) == 2 } | each {|r| $"($r):srcs" }
+}
+
+# workspace-module is the CUE module path a project is published under, which
+# salts its default host ports (#project._portIdentity): the nearest mirror's
+# `.mirror/cue.mod/module.cue` (copybara makes it the mirror's root module),
+# else the workspace's. So a project generates the same ports in the monorepo
+# and in its mirror. The `@vN` suffix is dropped: a major bump is no new project.
+export def workspace-module [from: string] {
+	# Both sides expanded, or a relative or symlinked `from` never meets the
+	# root and the walk climbs past it into an enclosing checkout's mirror.
+	let from = ($from | path expand)
+	let root = (find-workspace-root $from | path expand)
+	mut dir = $from
+	mut file = ($root | path join "cue.mod" "module.cue")
+	loop {
+		let mirror = ($dir | path join ".mirror" "cue.mod" "module.cue")
+		if ($mirror | path exists) { $file = $mirror; break }
+		if $dir == $root { break }
+		let parent = ($dir | path dirname)
+		if $parent == $dir { break }
+		$dir = $parent
+	}
+	let found = (open --raw $file | parse --regex '(?m)^module:\s*"(?P<path>[^"]+)"')
+	if ($found | is-empty) {
+		error make {msg: $"bayt: no module path in ($file)"}
+	}
+	$found.0.path | str replace --regex '@v[0-9]+$' ''
 }
 
 # find-workspace-root walks up from `from` to the directory containing cue.mod/.

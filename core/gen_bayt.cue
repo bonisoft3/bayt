@@ -295,12 +295,25 @@ _expandCopy: {
 	//   `<n>_srcs`   → target's expanded srcs (the synthetic's outs)
 	//   `<n>_outs`   → target's outs (the synthetic's outs)
 	//   `<n>_bayt`   → target's scaffolding fileset
+	// A target's source globs: its own and every cmd's. A cmd's srcs (mise
+	// install's manifests) are as much the target's sources as its own are.
+	_ownSrcGlobs: {
+		for n, t in G.project.targets if t != null {
+			(n): (_uniqStrings & {in: list.Concat([
+				(_expandGlobs & {in: t.srcs.defaultGlobs}).out,
+				t.srcs.globs,
+				for _, c in t.cmd if c != null {(_expandGlobs & {in: c.srcs.defaultGlobs}).out},
+				for _, c in t.cmd if c != null {c.srcs.globs},
+			])}).out
+		}
+	}
+
 	_sameProjectOutsByName: {
 		for n, t in G.project.targets if t != null {
 			(n): t.outs
 			if t.dockerfile != _|_ {
 				"\(n)_srcs": {
-					globs:   list.Concat([(_expandGlobs & {in: t.srcs.defaultGlobs}).out,   t.srcs.globs])
+					globs:   _ownSrcGlobs[n]
 					exclude: list.Concat([(_expandGlobs & {in: t.srcs.defaultExclude}).out, t.srcs.exclude])
 				}
 				"\(n)_outs": t.outs
@@ -408,7 +421,7 @@ _expandCopy: {
 		for n, t in G.project.targets if t != null {
 			(n): [
 				if t.dockerfile == _|_ {false},
-				if len(list.Concat([(_expandGlobs & {in: t.srcs.defaultGlobs}).out, t.srcs.globs])) > 0 {true},
+				if len(_ownSrcGlobs[n]) > 0 {true},
 				// `!= _|_` skips dep names that aren't targets (e.g. the `bayt`
 				// synthetic from `:bayt`) — never part of the `_srcs` closure.
 				if len([for dn in _sameProjectDepNames[n] if _emitsSrcs[dn] != _|_ if _emitsSrcs[dn] {dn}]) > 0 {true},

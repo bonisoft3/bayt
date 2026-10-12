@@ -6,7 +6,7 @@
 // "turn on X for this target" and show up in exactly the places that
 // would need manual wiring. Capabilities should stay at the
 // *abstraction* level bayt can express (secrets, mounts, env,
-// volumes) — concrete implementations (script paths like dind.sh)
+// volumes) — concrete implementations (script paths like docker-bridge.sh)
 // belong to the layer that owns them (typically sayt, or the user's
 // own bayt.cue).
 package bayt

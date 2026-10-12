@@ -7,20 +7,20 @@ package bayt
 // --- I1: Each preset's `from.name` resolves through the lock table.
 _i1_nubox:   nubox & {from: name: lock.images.leap}
 _i1_busybox: busybox & {from: name: lock.images.busybox}
-_i1_dindbox: dindbox & {from: name: lock.images.docker}
+_i1_bkid: bkid & {from: name: lock.images.docker}
 
 // --- I3: scratch sets from=null; the emitter writes `FROM scratch`
 // without an additional_contexts entry.
 _i3_scratch: scratch
 _i3_scratch: from: null
 
-// --- I4: dindbox COPYs socat (binary + readline/ncurses libs) and the
+// --- I4: bkid COPYs socat (binary + readline/ncurses libs) and the
 // depot CLI — three entries. Counted over defaultPreamble's copy arms,
-// which is where they live: `dindbox.copy` is an undefined field, and `len`
+// which is where they live: `bkid.copy` is an undefined field, and `len`
 // of one is incomplete rather than wrong, so the obvious spelling holds
 // against any number.
-_i4_dindbox_copy: len([
-	for _, e in dindbox.defaultPreamble if e != null if e.copy != _|_ {e},
+_i4_bkid_copy: len([
+	for _, e in bkid.defaultPreamble if e != null if e.copy != _|_ {e},
 ]) & 3
 
 // --- I6: presets unify into a target's dockerfile block. Project-level
@@ -38,8 +38,8 @@ _i6_probe: targets: release: dockerfile: from: name: lock.images.busybox
 
 // Public aggregator forces evaluation of the hidden _i* bindings.
 Tests: images: {
-	i1: {nubox: _i1_nubox, busybox: _i1_busybox, dindbox: _i1_dindbox}
+	i1: {nubox: _i1_nubox, busybox: _i1_busybox, bkid: _i1_bkid}
 	i3: _i3_scratch
-	i4: _i4_dindbox_copy
+	i4: _i4_bkid_copy
 	i6: _i6_probe
 }

@@ -19,6 +19,9 @@ package bayt
 	// generate.nu's pass-2 expression — cue tags don't propagate into
 	// imported packages (cue-lang/cue#1530).
 	runtime: *"" | string
+	// The consuming repo's CUE module path, injected the same way.
+	module: *"" | string
+	project: _module: G.module
 
 	manifest: (#manifestGen & {"project":      G.project, "depManifests": G.depManifests})
 	taskfile: (#taskfileFrom & {_m: G.manifest, "project":      G.project, "depManifests": G.depManifests, "runtime": G.runtime})

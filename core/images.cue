@@ -12,10 +12,10 @@
 //
 //   targets: "build":   dockerfile: nubox       // leap, includes lazybox
 //   targets: "release": dockerfile: busybox     // musl runtime
-//   targets: "dindbox": dockerfile: bayt.dindbox // docker:cli + socat
+//   targets: "ci":      dockerfile: bayt.bkid  // docker:cli + socat
 //
-// docker-in-docker targets pair `dindbox` (the image preset) with
-// `sayt.dindboxInject` (the inject helper) — the preset provides the
+// bkid targets (sayt.ci) pair `bkid` (the image preset) with
+// `sayt.inject` (the inject helper) — the preset provides the
 // FROM base + socat binary; the inject body does the in-sandbox env
 // extraction, file placement, and unix-socket forwarding.
 package bayt
@@ -41,6 +41,8 @@ _lazyboxOverlay: {
 //
 // Installs GNU findutils + which (absent in leap 16.0's slim base);
 // gradle's gradlew probes for both at startup and dies otherwise.
+// libatomic1 likewise: node 26's linux binary links it, so a mise-installed
+// node fails its own `node -v` install check without it.
 nubox: {
 	// `from` is bound to the leaf disjunct, so `bayt.nubox & {from: ref: ...}`
 	// fails CUE evaluation. Chained-FROM consumers don't compose the
@@ -51,13 +53,13 @@ nubox: {
 	defaultPreamble: _lazyboxOverlay & {
 		"mise-trusted":  {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
 		"gnu-shell-utils": {priority: -7} & (zypper.#install & {
-			pkgs: ["findutils=4.10.0-160000.2.2", "which=2.23-160000.2.2", "git-core=2.51.0-160000.1.2"]
+			pkgs: ["findutils=4.10.0-160000.2.2", "which=2.23-160000.2.2", "git-core=2.51.0-160000.1.2", "libatomic1=15.3.0+git11272-160000.1.1"]
 		}).out
 	}
 }
 
-// dindbox — lean docker:cli + socat binary. No entrypoint script.
-// Pair with `sayt.dindboxInject` on the consuming
+// bkid — lean docker:cli + socat binary. No entrypoint script.
+// Pair with `sayt.inject` on the consuming
 // ci target: that helper mounts host-supplied compose secrets
 // (docker_host, buildx_builder, buildx_instance, docker_config) and
 // emits the in-sandbox setup body (env extraction, file placement,
@@ -66,7 +68,7 @@ nubox: {
 // socat binary ships in the image because some clients (testcontainers)
 // bypass $DOCKER_HOST and look for /var/run/docker.sock — the
 // in-sandbox socat creates that bridge at RUN time.
-dindbox: {
+bkid: {
 	from: close({
 		name: *lock.images.docker | string
 	})

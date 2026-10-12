@@ -58,7 +58,7 @@ def main [] {
       via:      "a cross-project :srcs view"
     }
     {
-      manifest: "guis/iris/.bayt/bayt.ci-run.json"
+      manifest: "guis/iris/.bayt/bayt.ci.json"
       probe:    "guis/iris/app/__bayt_fp_probe__.ts"
       via:      "a same-project :srcs view"
     }
@@ -73,12 +73,12 @@ def main [] {
       via:      "its own bayt view (project-wide scaffolding)"
     }
     {
-      manifest: "guis/iris/.bayt/bayt.ci-run.json"
+      manifest: "guis/iris/.bayt/bayt.ci.json"
       probe:    "plugins/omnishell/src/__bayt_fp_probe__.ts"
       via:      "transitiveCrossDeps"
     }
     {
-      manifest: "guis/iris/.bayt/bayt.ci-run.json"
+      manifest: "guis/iris/.bayt/bayt.ci.json"
       probe:    "plugins/bayt/runtime/__bayt_fp_probe__.nu"
       via:      "an additional_context directory"
     }

@@ -251,11 +251,11 @@ lint: {
 	taskfile: run: "always"
 }
 
-// ci — bake-driven dindbox-cascade entry. Composes sayt.inject's dind
-// plumbing with a bake-then-compose-up RUN body and FROMs the
-// project's :dindbox target. Leaf projects supply `deps:` (source
-// closure / scaffolding refs); override cmd.builtin.do for non-default
-// flags.
+// ci — the bkid entry: sayt.inject's docker bridge plumbing and a
+// bake-then-compose-up RUN body, in bayt's bkid image. Leaf projects supply
+// `deps:` (source closure / scaffolding refs); override cmd.builtin.do for
+// non-default flags. Its manifest's source closure is also what a CI run
+// stamp hashes.
 //
 // Two-step shape:
 //   1. `bake bayt` builds the stack. Only `bayt` is named, so bake drops
@@ -269,6 +269,12 @@ lint: {
 ci: C={
 	inject
 	activate: ""
+	// The closure this runner brings up (.bayt/compose.<#closure>.closure.yaml)
+	// and the check it is, which names the inner stack
+	// `${BKID_PROJECT}_<#check>`. Definitions, so a consumer's package can
+	// set them on a closed #target.
+	#closure: *"integrate" | string
+	#check:   *#closure | string
 	// Sources reach this stage only through a `:srcs` dep: the per-run values
 	// (image tag, cache scope, docker host) arrive as secrets, which buildkit
 	// keeps out of cache keys. Without one, the RUN layer's key holds no source
@@ -306,18 +312,9 @@ ci: C={
 		// parsers — so inject the headline ONLY when $BUILDKIT_SYNTAX is set (sayt/depot pins it;
 		// unset elsewhere keeps the crash-free embedded parser, which already supports --parents).
 		// Per-file -exec (not {} +): busybox sed -i doesn't reset line numbers across files.
-		// _build / _run gate the two RUN lines; output derives from the pair.
-		// Hidden (non-emitted) so a target can override one for a phase without
-		// the field leaking into bayt.*.json. Generation-time → distinct phases
-		// emit distinct RUN bodies → distinct RUN-layer cache keys (see
-		// plugins/sayt/.github/actions/sayt/depot/action.yml):
-		//   _build && _run  → bake-load + up   (dev/local, default)
-		//   !_build && _run → up only, pulls   (run phase)
-		// The build-only phase (push a closure, no up) is a host `depot bake`
-		// via sayt/depot phase: build — never a dindbox do-script.
-		_build: *true | bool
-		_run:   *true | bool
-		// _do_both bakes inline: `depot bake` when $DEPOT_TOKEN is set, else
+		// A build/run split never runs here: its build phase is a host `depot
+		// bake` and its run phase a host `compose up` (sayt/depot).
+		// The body bakes inline: `depot bake` when $DEPOT_TOKEN is set, else
 		// `docker buildx bake`, fed the `buildx bake --print integrate` JSON
 		// (depot bake needs compose's service:X rewritten to target:X, which
 		// --print does). The compose entry point is the integrate closure
@@ -326,55 +323,31 @@ ci: C={
 		// and its inline `bayt` alias (reserved; see gen_compose's closure
 		// emitter) is ungated at scale 1. Every compose invocation passes
 		// `--profile '*'` to materialize the fully-evaluated config (all
-		// profiles) — the canonical flatten call. The printed file
-		// defines the full build closure (gen_compose mirrors depends_on
-		// into additional_contexts), so `bayt` resolves. No --allow:
-		// BUILDX_BAKE_ENTITLEMENTS_FS=0 (inject.cue) covers fs-read. _do_run
-		// has no bake and is pull-only; its --no-build is load-bearing
-		// (guarded by sayt_ci_check.cue with the full rationale).
-		let _do_both = #"""
+		// profiles) — the canonical flatten call. The bake builds `bayt` and,
+		// as its contexts, the stack; `up --build` then builds what it starts
+		// from that cache and loads it. Without it, `up` starts whatever image
+		// the daemon holds under a service's tag, a stale one included.
+		// The inner stack is torn down before (a crashed run's leftovers) and
+		// after the up, whatever its verdict, under its own project name.
+		let _do = #"""
 			if [ -n "$BUILDKIT_SYNTAX" ]; then
 			  # depot frontend-pin workaround (full rationale in stacks/sayt/sayt.cue)
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
+			[ -n "$BKID_PROJECT" ] || { echo "bkid: BKID_PROJECT is unset; sayt integrate names the inner stack" >&2; exit 1; }
+			p="${BKID_PROJECT}_\#(C.#check)"
+			f=.bayt/compose.\#(C.#closure).closure.yaml
 			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
-			docker compose --profile '*' -f .bayt/compose.integrate.closure.yaml config | docker buildx bake --allow=fs.read=/monorepo -f - --print bayt | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} bayt
-			exec docker compose --profile '*' -f .bayt/compose.integrate.closure.yaml up bayt --abort-on-container-failure --exit-code-from bayt --remove-orphans
+			docker compose -p "$p" --profile '*' -f "$f" config | docker buildx bake --allow=fs.read=/monorepo -f - --print bayt | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} bayt
+			docker compose -p "$p" --profile '*' -f "$f" down -v --timeout 0 --remove-orphans
+			s=0
+			docker compose -p "$p" --profile '*' -f "$f" up bayt --build --abort-on-container-failure --exit-code-from bayt --remove-orphans --attach-dependencies || s=$?
+			docker compose -p "$p" --profile '*' -f "$f" down -v --timeout 0 --remove-orphans
+			exit "$s"
 			"""#
-		let _do_run = #"""
-			if [ -n "$BUILDKIT_SYNTAX" ]; then
-			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
-			fi
-			BAYT_PULL_POLICY=missing exec docker compose --profile '*' -f .bayt/compose.integrate.closure.yaml up bayt --no-build --abort-on-container-failure --exit-code-from bayt --remove-orphans
-			"""#
-		// Trailing "" is the catch-all: non-`_run` combinations emit no RUN.
-		let _do = [
-			if _build && _run {_do_both},
-			if !_build && _run {_do_run},
-			"",
-		][0]
 		do: *_do | string
 	}
-	dockerfile: from: ref: *":dindbox" | string
-}
-
-// ciRun — the run phase of a build/run split: compose-up the stack the build
-// phase pushed (pull_policy=missing), no bake. Declared here, in the same file
-// as ci's hidden `_build`/`_run`, so the override actually unifies (hidden
-// fields are package-scoped — `sayt.ci & {_build: false}` in a consumer's file
-// would mint a new field, not override this one). A consumer adds its deps:
-// `"ci-run": sayt.ciRun & {deps: [...]}`.
-//
-// The build phase has no target here anymore — it's a host `depot bake` of the
-// committed depot.hcl group (sayt/depot phase: build), driven from CI, not a
-// dindbox target. So `ciBuild` is gone.
-ciRun: ci & {cmd: "builtin": _build: false}
-
-// dindbox — thin FROM-base for sayt.ci. Pure preset wrap of
-// bayt.dindbox; nulls the cmd so no RUN line emits.
-dindbox: {
-	cmd: "builtin": null
-	dockerfile: bayt.dindbox
+	dockerfile: bayt.bkid
 }
 
 // =============================================================================
@@ -460,7 +433,7 @@ gradle: bayt.#project & {
 		// the integrate target rather than just merge.
 		//
 		// preamble (socat install + docker --help warmup) lives at the
-		// project level — dind is project-specific (only services that
+		// project level — bkid is project-specific (only services that
 		// hit the docker socket from inside the test). Where a project's
 		// `setup` preamble installs it, integrate reaches it via the
 		// FROM-chain; no preamble default here.
@@ -677,7 +650,7 @@ pnpm: bayt.#project & {
 // workspace-level pnpm state (pnpm-lock.yaml, pnpm-workspace.yaml,
 // root package.json, root .mise.toml) plus a few cross-stack
 // workspace files (gradle's libs.versions.toml, devserver's
-// dind.sh) that consumers depend on.
+// docker-bridge.sh) that consumers depend on.
 pnpmWorkspace: bayt.#project & {
 	// No activate prefix — wrapping wsroot's cmds in `mise x --`
 	// would resolve the ambient toolchain and blow up PATH for no
@@ -712,13 +685,13 @@ pnpmWorkspace: bayt.#project & {
 					// /monorepo/gradle/libs.versions.toml in their
 					// container.
 					"gradle/libs.versions.toml",
-					// dind.sh (Docker-in-Docker bootstrap) must be
+					// docker-bridge.sh (the bridge to the host daemon) must be
 					// present in any integrate container that wraps
 					// its RUN with it. Staging it here means it
 					// arrives via `COPY --from=workspaceroot-setup`
 					// without an extra explicit dep on a devserver
 					// project.
-					"plugins/devserver/dind.sh",
+					"plugins/devserver/docker-bridge.sh",
 				],
 			])
 			// Outs = srcs (so consumers get the exact files staged
