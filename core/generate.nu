@@ -456,7 +456,17 @@ def emit-depot-yaml [proj_dir: string, ws: string, --required, --group: record =
 		0 => { error make {msg: $"bayt: no compose base file in ($dir) — the depot flatten requires one"} }
 		_ => { error make {msg: $"bayt: ambiguous compose base files in ($dir): ($bases | str join ', ')"} }
 	})
-	let r = (do { cd $dir; ^docker compose -f $base --profile '*' config --no-interpolate } | complete)
+	let compose_stub = ($ws | path join plugins/sayt/compose.toml)
+	let r = (do {
+		cd $dir
+		if ($compose_stub | path exists) and (which mise | is-not-empty) {
+			with-env { MISE_LOCKED: "0" } {
+				^mise tool-stub $compose_stub -f $base --profile '*' config --no-interpolate
+			}
+		} else {
+			^docker compose -f $base --profile '*' config --no-interpolate
+		}
+	} | complete)
 	if $r.exit_code != 0 {
 		let detail = ($r.stderr | lines | last 3 | str join "\n")
 		# A depot opt-in declares docker a generate dependency; skipping

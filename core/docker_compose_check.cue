@@ -475,6 +475,15 @@ _d15: #project & {
 					{url: "https://example.com/model.gguf", sha256: "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d", dest: "/app/models/model.gguf"},
 					{url: "https://example.com/data.tar.gz", sha256: "95e3a3a2adeacd1b8dd704743c71eec8343dde472d3efe71101a62570c47cbbd", dest: "/data/", unpack: true},
 					{src: "vendor/tools.tar.gz", dest: "/opt/tools/"},
+					{url: "https://example.com/bin", checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111", dest: "/bin/bin"},
+					{
+						platforms: {
+							amd64: {url: "https://example.com/tool_amd64.tar.gz", checksum: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+							arm64: {url: "https://example.com/tool_arm64.tar.gz", checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+						}
+						dest:   "/usr/local/bin/tool"
+						unpack: true
+					},
 				]
 			}
 		}
@@ -485,6 +494,11 @@ _d15_body: _d15_dc.dockerfiles.release
 _d15_remote: strings.Contains(_d15_body, "ADD --checksum=sha256:2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d https://example.com/model.gguf /app/models/model.gguf") & true
 _d15_unpack: strings.Contains(_d15_body, "ADD --checksum=sha256:95e3a3a2adeacd1b8dd704743c71eec8343dde472d3efe71101a62570c47cbbd --unpack=true https://example.com/data.tar.gz /data/") & true
 _d15_local:  strings.Contains(_d15_body, "ADD vendor/tools.tar.gz /opt/tools/") & true
+_d15_checksum: strings.Contains(_d15_body, "ADD --checksum=sha256:1111111111111111111111111111111111111111111111111111111111111111 https://example.com/bin /bin/bin") & true
+_d15_multi_amd64: strings.Contains(_d15_body, "FROM scratch AS fetch_release_4_amd64\nADD --checksum=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --unpack=true https://example.com/tool_amd64.tar.gz /") & true
+_d15_multi_arm64: strings.Contains(_d15_body, "FROM scratch AS fetch_release_4_arm64\nADD --checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --unpack=true https://example.com/tool_arm64.tar.gz /") & true
+_d15_multi_sel: strings.Contains(_d15_body, "FROM fetch_release_4_$TARGETARCH AS fetch_release_4") & true
+_d15_multi_copy: strings.Contains(_d15_body, "COPY --from=fetch_release_4 /tool /usr/local/bin/tool") & true
 
 // --- D16: bare-`up` selection. A target runs iff it declares a compose
 // block AND isn't manual (launch, the release-* siblings); build-graph

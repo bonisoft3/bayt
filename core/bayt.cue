@@ -238,10 +238,13 @@ noop: #cmd & {
 	//                                 the archive). List the src in
 	//                                 target srcs too: the fingerprint
 	//                                 hashes worktree files via srcs.
-	//   remote: {url, sha256, dest} — BuildKit downloads, verifies, and
+	//   remote: {url, checksum (or sha256), dest} — BuildKit downloads, verifies, and
 	//                                 layer-caches by the digest; no
 	//                                 curl/CA tooling in the stage.
 	//                                 Extracts only with unpack: true.
+	//   multi-arch: {platforms, dest} — BuildKit downloads per-arch tarballs into
+	//                                 `FROM scratch` stages and selects $TARGETARCH,
+	//                                 avoiding cross-build emulation.
 	// Closed disjunction: mixing forms or omitting the remote checksum
 	// fails unification.
 	#add: close({
@@ -249,8 +252,26 @@ noop: #cmd & {
 		dest:    string
 		unpack?: bool
 	}) | close({
+		url:      string & =~"^https://"
+		dest:     string
+		unpack?:  bool
+		checksum: string & =~"^sha256:[0-9a-f]{64}$"
+	}) | close({
 		url:     string & =~"^https://"
+		dest:    string
+		unpack?: bool
 		sha256:  string & =~"^[0-9a-f]{64}$"
+	}) | close({
+		platforms: {
+			[Arch=string]: close({
+				url:      string & =~"^https://"
+				checksum: string & =~"^sha256:[0-9a-f]{64}$"
+			}) | close({
+				url:    string & =~"^https://"
+				sha256: string & =~"^[0-9a-f]{64}$"
+			})
+		}
+		src?:    string
 		dest:    string
 		unpack?: bool
 	})

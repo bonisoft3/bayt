@@ -42,6 +42,7 @@ package bayt
 import (
 	"encoding/json"
 	"list"
+	"path"
 	"strings"
 )
 
@@ -654,14 +655,44 @@ _copyLine: {
 			for k, v in t.env {"ENV \(k)=\(v)"},
 		]
 
+		// Multi-arch platform download stages: emit `FROM scratch AS _add_<t>_<i>_<arch>`
+		// stages followed by `FROM _add_<t>_<i>_$TARGETARCH AS _add_<t>_<i>` so BuildKit
+		// handles multi-arch binary fetching and unpacking with zero cross-build emulation.
+		_multiArchAddStages: list.FlattenN([
+			for i, a in t.dockerfile.add if a.platforms != _|_ {
+				let _unpack = [if a.unpack != _|_ && a.unpack {" --unpack=true"}, ""][0]
+				list.Concat([
+					[for aArch, p in a.platforms {
+						let _arch = strings.TrimPrefix(aArch, "linux-")
+						let _pchk = [if p.checksum != _|_ {p.checksum}, if p.sha256 != _|_ {"sha256:\(p.sha256)"}, ""][0]
+						let _dest = [if a.unpack != _|_ && a.unpack {"/"}, "/\(path.Base(a.dest))"][0]
+						"FROM scratch AS fetch_\(t.name)_\(i)_\(_arch)\nADD --checksum=\(_pchk)\(_unpack) \(p.url) \(_dest)"
+					}],
+					[
+						"FROM fetch_\(t.name)_\(i)_$TARGETARCH AS fetch_\(t.name)_\(i)",
+					],
+				])
+			},
+		], 1)
+
 		// dockerfile.add — pinned ADD stanzas (see #dockerfile.#add).
 		// `--unpack` emitted only when set, so unset keeps ADD's default
 		// (local tar extracts, remote never).
 		_addLines: [
-			for a in t.dockerfile.add {
+			for i, a in t.dockerfile.add {
 				let _unpack = [if a.unpack != _|_ {" --unpack=\(a.unpack)"}, ""][0]
+				let _chk = [if a.checksum != _|_ {a.checksum}, if a.sha256 != _|_ {"sha256:\(a.sha256)"}, ""][0]
 				[
-					if a.url != _|_ {"ADD --checksum=sha256:\(a.sha256)\(_unpack) \(a.url) \(a.dest)"},
+					if a.platforms != _|_ {
+						let _fromPath = [
+							if a.src != _|_ {a.src},
+							if a.unpack != _|_ && a.unpack && strings.HasSuffix(a.dest, "/") {"/"},
+							if a.unpack != _|_ && a.unpack {"/\(path.Base(a.dest))"},
+							"/\(path.Base(a.dest))",
+						][0]
+						"COPY --from=fetch_\(t.name)_\(i) \(_fromPath) \(a.dest)"
+					},
+					if a.url != _|_ {"ADD --checksum=\(_chk)\(_unpack) \(a.url) \(a.dest)"},
 					if a.src != _|_ {"ADD\(_unpack) \(a.src) \(a.dest)"},
 				][0]
 			},
@@ -942,24 +973,27 @@ _copyLine: {
 		// both repo-derived; a pinned COPY that a preamble RUN depends on
 		// belongs in the preamble's own copy arm. How far the guarantee
 		// actually reaches is on #dockerfile.preamble.
-		_lines: [
-			_from,
-			"WORKDIR \(_workdir)",
-			for p in t.dockerfile.preamble {p},
-			for l in _addLines {l},
-			for p in _copyLines {p},
-			for l in _depCopies {l},
-			for l in _srcCopies {l},
-			for l in _preRun {l},
-			for l in _envs {l},
-			for l in _runs {l},
-			for l in _postRun {l},
-			for l in _exposes {l},
-			for l in _entrypoint {l},
-			for l in _cmdLine {l},
-			for l in t.dockerfile.epilogue {l},
-			for l in _healthcheckLine {l},
-		]
+		_lines: list.Concat([
+			_multiArchAddStages,
+			[
+				_from,
+				"WORKDIR \(_workdir)",
+				for p in t.dockerfile.preamble {p},
+				for l in _addLines {l},
+				for p in _copyLines {p},
+				for l in _depCopies {l},
+				for l in _srcCopies {l},
+				for l in _preRun {l},
+				for l in _envs {l},
+				for l in _runs {l},
+				for l in _postRun {l},
+				for l in _exposes {l},
+				for l in _entrypoint {l},
+				for l in _cmdLine {l},
+				for l in t.dockerfile.epilogue {l},
+				for l in _healthcheckLine {l},
+			],
+		])
 		out: string
 		out: strings.Join(_lines, "\n") + "\n"
 	}
