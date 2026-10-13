@@ -100,10 +100,12 @@ export def scan-projects [workspace_root: string] {
 	# but define schemas, not projects. Anchor repo-relative paths to
 	# workspace_root so the downstream `cue export` works from any cwd.
 	let rel_paths = (workspace-files $workspace_root
-		| where ($it | str ends-with "/bayt.cue") or $it == "bayt.cue"
+		| where ($it | str ends-with "/bayt.cue") or ($it | str ends-with "\\bayt.cue") or $it == "bayt.cue"
 		| where not ($it | str starts-with "plugins/bayt/core/")
+		| where not ($it | str starts-with "plugins/bayt/core\\")
 		| where not ($it | str starts-with "plugins/bayt/stacks/")
-		| each { |p| $"($workspace_root)/($p)" }
+		| where not ($it | str starts-with "plugins/bayt/stacks\\")
+		| each { |p| $workspace_root | path join $p }
 	)
 	# The cue stub installs on its first run; concurrent first runs race that
 	# install and find it half-written ("http:cue.toml does not have an
@@ -161,12 +163,18 @@ export def partition-scan [scanned: table]: nothing -> record {
 	let rooted = ($scanned | where {|r| $r.rooted and $r.dir_rel != "." })
 	# By where each bayt.cue sits: a project below a nested root declares its
 	# dir relative to that root, not to this one.
-	let roots = ($rooted | each {|n| $n.path | path dirname })
-	let under = {|at| $roots | any {|n| $at == $n or ($at | str starts-with $"($n)/") } }
-	let below = {|at| $roots | any {|n| $at | str starts-with $"($n)/" } }
-	let local = ($scanned | where {|r| not (do $under ($r.path | path dirname)) })
+	let roots = ($rooted | each {|n| scan-dir ($n.path | str replace --all '\' '/' | path dirname) })
+	let under = {|at|
+		let at_norm = (scan-dir ($at | str replace --all '\' '/'))
+		$roots | any {|n| $at_norm == $n or ($at_norm | str starts-with $"($n)/") }
+	}
+	let below = {|at|
+		let at_norm = (scan-dir ($at | str replace --all '\' '/'))
+		$roots | any {|n| $at_norm | str starts-with $"($n)/" }
+	}
+	let local = ($scanned | where {|r| not (do $under ($r.path | str replace --all '\' '/' | path dirname)) })
 	# Only the outermost get a pass here; each generates its own nested roots.
-	let nested = ($rooted | where {|r| not (do $below ($r.path | path dirname)) })
+	let nested = ($rooted | where {|r| not (do $below ($r.path | str replace --all '\' '/' | path dirname)) })
 	let index = ($local | reduce -f {} { |row, acc| $acc | insert $row.name $row.dir_rel })
 	let index = ($rooted | reduce -f $index { |row, acc| $acc | insert $row.name {rooted: $row.dir_rel} })
 	{local: $local, nested: $nested, index: $index}
@@ -597,7 +605,9 @@ export def _dedup-x-bake [flat: string]: nothing -> string {
 
 # pass1 extracts the project.targets map from a bayt.cue.
 # bayt_cue — path to bayt.cue (relative or absolute).
-def pass1 [bayt_cue: string] {
+export def pass1 [bayt_cue: string] {
+	let json_path = ($bayt_cue | path dirname | path join "bayt.json")
+	if ($json_path | path exists) { return (open $json_path | get targets) }
 	let r = (do { run-cue export $bayt_cue -e project.targets --out json } | complete)
 	if $r.exit_code != 0 {
 		print -e $"bayt: pass-1 failed for ($bayt_cue)"
@@ -686,9 +696,9 @@ def load-dep-manifests [deps: list<string>, index: record, workspace_root: strin
 		let view = if ($parts | length) >= 3 { ($parts | get 2) } else { null }
 		let dep_dir_rel = (dep-to-dir $dep $index)
 		let manifest_path = if $dep_dir_rel == "." {
-			$"($workspace_root)/.bayt/bayt.($file_target).json"
+			$workspace_root | path join ".bayt" $"bayt.($file_target).json"
 		} else {
-			$"($workspace_root)/($dep_dir_rel)/.bayt/bayt.($file_target).json"
+			$workspace_root | path join $dep_dir_rel ".bayt" $"bayt.($file_target).json"
 		}
 		if not ($manifest_path | path exists) {
 			if ($dep in $optional) { continue }
@@ -750,7 +760,7 @@ export def workspace-module [from: string] {
 export def find-workspace-root [from: string] {
 	mut dir = $from
 	loop {
-		if ($"($dir)/cue.mod" | path exists) {
+		if ($dir | path join "cue.mod" | path exists) {
 			return $dir
 		}
 		let parent = ($dir | path dirname)
@@ -765,11 +775,15 @@ export def find-workspace-root [from: string] {
 # rooted at itself (dir ".") that contains it, or else the cue.mod root, which
 # is itself rooted when a project at it declares dir ".", as a mirror's root.
 export def root-for [scanned: table, workspace_root: string, here: string]: nothing -> record {
+	let here_norm = (scan-dir $here)
 	let containing = ($scanned
 		| where {|r| $r.rooted }
-		| each {|r| $r.path | path dirname }
-		| where {|at| $here == $at or ($here | str starts-with $"($at)/") }
-		| sort-by {|at| $at | str length })
+		| each {|r| $r.path | str replace --all '\' '/' | path dirname }
+		| where {|at|
+			let at_norm = (scan-dir $at)
+			$here_norm == $at_norm or ($here_norm | str starts-with $"($at_norm)/")
+		}
+		| sort-by {|at| (scan-dir $at) | str length })
 	if ($containing | is-empty) {
 		{root: $workspace_root, rooted: false}
 	} else {
@@ -968,7 +982,7 @@ def generate-root [workspace_root: string, scanned?: any, --rooted, --recursive 
 			# relative paths (used by --runtime injection) are computed
 			# against the right depth — same convention --recursive uses.
 			let project_rel = (scan-dir ((pwd) | path relative-to $workspace_root))
-			let bayt_cue = if $project_rel == "." { $"($workspace_root)/bayt.cue" } else { $"($workspace_root)/($project_rel)/bayt.cue" }
+			let bayt_cue = if $project_rel == "." { $workspace_root | path join "bayt.cue" } else { $workspace_root | path join $project_rel "bayt.cue" }
 			cd $workspace_root
 			# The row can be missing here (e.g. a gitignored dir escapes the
 			# scan's listing); regen-project's pass 1 covers it.

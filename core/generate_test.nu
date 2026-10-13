@@ -4,7 +4,7 @@
 # Run with: nu generate_test.nu (from this directory).
 
 use std/assert
-use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects, clear-bayt-dir, find-workspace-root, workspace-module, root-for, partition-scan, topo-schedule, check-dirs, custom-outputs]
+use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects, clear-bayt-dir, find-workspace-root, workspace-module, root-for, partition-scan, topo-schedule, check-dirs, custom-outputs, pass1]
 
 def main [] {
 	print "Running generate.nu tests...\n"
@@ -35,14 +35,17 @@ def main [] {
 	test_module_is_the_published_one
 	test_module_walk_stops_at_the_workspace_root
 	test_a_rooted_project_containing_here_is_the_root
+	test_root_for_handles_windows_paths
 	test_a_plain_project_runs_from_the_cue_mod_root
 	test_a_rooted_cue_mod_root_is_rooted
 	test_a_dir_where_the_project_sits_passes
 	test_a_dir_elsewhere_fails_naming_both
 	test_partition_keeps_a_nested_root_s_subtree_to_it
+	test_partition_handles_windows_paths
 	test_partition_marks_a_nested_root_in_the_index
 	test_a_ref_to_a_nested_root_is_refused
 	test_partition_passes_only_outermost_roots
+	test_pass1_reads_sibling_bayt_json
 
 	print "\nAll generate.nu tests passed!"
 }
@@ -284,6 +287,18 @@ def test_partition_marks_a_nested_root_in_the_index [] {
 	assert equal $got.index {root: ".", ws: {rooted: apps/ws}}
 }
 
+def test_partition_handles_windows_paths [] {
+	print "test partition-scan handles windows paths..."
+	let scanned = [
+		{path: 'D:\w\bayt.cue', name: "root", dir_rel: ".", targets: {}, rooted: false}
+		{path: 'D:\w\apps\ws\bayt.cue', name: "ws", dir_rel: "apps/ws", targets: {}, rooted: true}
+		{path: 'D:\w\apps\ws\svc\bayt.cue', name: "svc", dir_rel: "svc", targets: {}, rooted: false}
+	]
+	let got = (partition-scan $scanned)
+	assert equal ($got.local | get name) [root]
+	assert equal ($got.nested | get dir_rel) [apps/ws]
+}
+
 # A project rooted at itself has no siblings: its manifests state dir ".",
 # its own root, which a dependent here would read as this root.
 def test_a_ref_to_a_nested_root_is_refused [] {
@@ -357,6 +372,19 @@ def test_a_rooted_project_containing_here_is_the_root [] {
 	assert equal (root-for $scanned /w /w/apps/ws/inner) {root: /w/apps/ws/inner, rooted: true}
 }
 
+def test_root_for_handles_windows_paths [] {
+	print "test root-for handles windows paths..."
+	let scanned = [
+		{path: 'D:\w\apps\ws\bayt.cue', name: "ws", dir_rel: "apps/ws", targets: {}, rooted: true}
+	]
+	assert equal (root-for $scanned 'D:\w' 'D:\w\apps\ws\src') {root: 'D:/w/apps/ws', rooted: true}
+	assert equal (root-for $scanned 'D:\w' 'D:\w\apps\ws') {root: 'D:/w/apps/ws', rooted: true}
+	let scanned_posix = [
+		{path: 'D:/w/apps/ws/bayt.cue', name: "ws", dir_rel: "apps/ws", targets: {}, rooted: true}
+	]
+	assert equal (root-for $scanned_posix 'D:\w' 'D:\w\apps\ws\src') {root: 'D:/w/apps/ws', rooted: true}
+}
+
 def test_a_plain_project_runs_from_the_cue_mod_root [] {
 	print "test a plain project runs from the cue.mod root..."
 	let scanned = [(_row root "." false) (_row ws apps/ws true) (_row lib libs/x false)]
@@ -414,4 +442,17 @@ def test_custom_outputs [] {
 	} catch { true }
 	assert $repeated "accepted duplicate custom filenames"
 	print "  PASS custom outputs preserve data and reject path escapes and collisions"
+}
+
+def test_pass1_reads_sibling_bayt_json [] {
+	print "test pass1 reads sibling bayt.json directly..."
+	let dir = (mktemp -d)
+	{targets: {test: {cmd: "echo ok"}}} | to json | save ($dir | path join "bayt.json")
+	'@extern(embed)
+package fixture
+data: _ @embed(file="bayt.json")
+' | save ($dir | path join "bayt.cue")
+	let got = (pass1 ($dir | path join "bayt.cue"))
+	rm -rf $dir
+	assert equal $got {test: {cmd: "echo ok"}}
 }
