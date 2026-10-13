@@ -54,6 +54,15 @@ nubox: {
 		name: *lock.images.leap | string
 	})
 	defaultPreamble: _lazyboxOverlay & {
+		// Leap's OpenSSL configuration loads its distro-specific JITTER
+		// provider; Lazybox's static curl must use its own library defaults.
+		"static-curl-config": {priority: -8, line: """
+			RUN mv /root/.local/share/lazybox/libexec/static-curl /root/.local/share/lazybox/libexec/static-curl.bin
+			COPY --chmod=0755 <<'STATIC_CURL' /root/.local/share/lazybox/libexec/static-curl
+			#!/bin/sh
+			OPENSSL_CONF="${OPENSSL_CONF:-/dev/null}" exec "$(dirname "$0")/static-curl.bin" "$@"
+			STATIC_CURL
+			"""}
 		"mise-trusted": {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
 		"gnu-shell-utils": {priority: -7} & (zypper.#install & {
 			pkgs: ["findutils=4.10.0-160000.2.2", "which=2.23-160000.2.2", "git-core=2.51.0-160000.1.2", "libatomic1=15.3.0+git11272-160000.1.1"]
