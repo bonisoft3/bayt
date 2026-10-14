@@ -289,7 +289,7 @@ noop: #cmd & {
 	//   global  → shared   every project, concurrent
 	//
 	// `global` is the only concurrent arm and carries a precondition: the
-	// store must verify its own content (mise, go, pnpm, gradle do). One
+	// store must verify its own content (mise, go, pnpm do). One
 	// that doesn't takes `project` — four parallel apt installs against a
 	// concurrent mount fail three times out of four, while a lock at global
 	// scope would serialize every install in the monorepo.

@@ -12,13 +12,10 @@ import (
 // Toolchain concept library.
 // =============================================================================
 
-// gradle's dependency + build cache. scope: "global" (bare /root/.gradle,
-// shared across projects) so the wrapper dist + jars download once per builder.
-// Safe on sharing=shared: gradle file-locks $GRADLE_USER_HOME for concurrent
-// processes (docs.gradle.org/current/userguide/dependency_caching.html) — a
-// contended writer waits out its lock, never corrupts. Locks need a local fs;
-// buildkit mounts are builder-local.
-_cacheMount: {type: "cache", target: "/root/.gradle", scope: "global"}
+// Gradle's journal lock can time out across concurrent build containers.
+// A project-scoped mount serializes its targets without sharing the writable
+// user home with another project's JVM.
+_cacheMount: {type: "cache", target: "/root/.gradle", scope: "project"}
 
 // The read-only dependency cache's in-image home. Gradle consults it
 // natively (GRADLE_RO_DEP_CACHE) before the writable user home and never
