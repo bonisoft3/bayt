@@ -116,3 +116,42 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 		mounts: [_store, _archiveMount, _listsMount]
 	}
 }
+
+// #users holds standard system user identities for Debian / Ubuntu distributions.
+// On Debian/Ubuntu, nobody is UID 65534 and nogroup is GID 65534.
+#users: {
+	root: {
+		name:  "root"
+		group: "root"
+		uid:   0
+		gid:   0
+		chown: "0:0"
+		user:  "0:0"
+	}
+	nobody: {
+		name:  "nobody"
+		group: "nogroup"
+		uid:   65534
+		gid:   65534
+		chown: "65534:65534"
+		user:  "65534:65534"
+	}
+	vscode: {
+		name:  "vscode"
+		group: "vscode"
+		uid:   1000
+		gid:   1000
+		chown: "1000:1000"
+		user:  "1000:1000"
+	}
+	// postgres official Debian package / official postgres Docker image
+	postgres: {
+		name:  "postgres"
+		group: "postgres"
+		uid:   999
+		gid:   999
+		chown: "999:999"
+		user:  "999:999"
+	}
+}
+

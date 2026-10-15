@@ -38,3 +38,52 @@ _store: {type: "cache", target: "/apk-store", scope: "global"}
 		mounts: [_store, _cacheMount]
 	}
 }
+
+// #users holds standard system user identities for Alpine Linux distributions.
+// Note: on Alpine, nobody's default primary group is 'nobody' (GID 65534),
+// while 'nogroup' is GID 65533.
+#users: {
+	root: {
+		name:  "root"
+		group: "root"
+		uid:   0
+		gid:   0
+		chown: "0:0"
+		user:  "0:0"
+	}
+	nobody: {
+		name:  "nobody"
+		group: "nobody"
+		uid:   65534
+		gid:   65534
+		chown: "65534:65534"
+		user:  "65534:65534"
+	}
+	nogroup: {
+		name:  "nobody"
+		group: "nogroup"
+		uid:   65534
+		gid:   65533
+		chown: "65534:65533"
+		user:  "65534:65533"
+	}
+	vscode: {
+		name:  "vscode"
+		group: "vscode"
+		uid:   1000
+		gid:   1000
+		chown: "1000:1000"
+		user:  "1000:1000"
+	}
+	// Alpine postgresql package
+	postgres: {
+		name:  "postgres"
+		group: "postgres"
+		uid:   70
+		gid:   70
+		chown: "70:70"
+		user:  "70:70"
+	}
+}
+
+

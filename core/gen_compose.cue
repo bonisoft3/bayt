@@ -151,7 +151,11 @@ _copyLine: {
 	// override. Suppressing costs cache reuse and nothing else.
 	let _cLink    = [if c.link if c.from != null if !c.parents if len(c.srcs) == 1 if c.srcs[0] == c.dst {"--link "}, ""][0]
 	let _cChmod   = [if c.chmod != _|_ {"--chmod=\(c.chmod) "}, ""][0]
-	let _cChown   = [if c.chown != _|_ {"--chown=\(c.chown) "}, ""][0]
+	let _cChown   = [
+		if (c.chown & string) != _|_ {"--chown=\(c.chown) "},
+		if (c.chown & {uid: int}) != _|_ {"--chown=\(c.chown.uid):\(c.chown.gid) "},
+		"",
+	][0]
 	let _cParents = [if c.parents {"--parents "}, ""][0]
 	let _cExclude = strings.Join([for e in c.exclude {"--exclude=\(e) "}], "")
 	let _cFrom    = [
@@ -967,6 +971,12 @@ _copyLine: {
 			},
 		][0]
 
+		_userLine: [
+			if (t.dockerfile.user & string) != _|_ {["USER \(t.dockerfile.user)"]},
+			if (t.dockerfile.user & {uid: int}) != _|_ {["USER \(t.dockerfile.user.uid):\(t.dockerfile.user.gid)"]},
+			[],
+		][0]
+
 		// Ordered by volatility: repo-derived instructions emit below the
 		// preamble, so a source edit does not re-key what sits above it.
 		// `copy` is below because its ref arm and its in-context form are
@@ -991,6 +1001,7 @@ _copyLine: {
 				for l in _entrypoint {l},
 				for l in _cmdLine {l},
 				for l in t.dockerfile.epilogue {l},
+				for l in _userLine {l},
 				for l in _healthcheckLine {l},
 			],
 		])
@@ -1551,7 +1562,12 @@ _copyLine: {
 				if r.container_name != _|_ {container_name: r.container_name}
 				if r.restart != _|_ {restart: r.restart}
 				if r.working_dir != _|_ {working_dir: r.working_dir}
-				if r.user != _|_ {user: r.user}
+				if r.user != _|_ {
+					user: [
+						if (r.user & string) != _|_ {r.user},
+						if (r.user & {uid: int}) != _|_ {"\(r.user.uid):\(r.user.gid)"},
+					][0]
+				}
 				if r.ulimits != _|_ {ulimits: r.ulimits}
 				if r.shm_size != _|_ {shm_size: r.shm_size}
 				if r.security_opt != _|_ {security_opt: r.security_opt}

@@ -84,3 +84,33 @@ _store: {type: "cache", target: "/zypper-store", scope: "global"}
 		mounts: [_store, _cacheMount]
 	}
 }
+
+// #users holds standard system user identities for openSUSE / SLES distributions.
+#users: {
+	root: {
+		name:  "root"
+		group: "root"
+		uid:   0
+		gid:   0
+		chown: "0:0"
+		user:  "0:0"
+	}
+	nobody: {
+		name:  "nobody"
+		group: "nobody"
+		uid:   65534
+		gid:   65534
+		chown: "65534:65534"
+		user:  "65534:65534"
+	}
+	vscode: {
+		name:  "vscode"
+		group: "vscode"
+		uid:   1000
+		gid:   1000
+		chown: "1000:1000"
+		user:  "1000:1000"
+	}
+}
+
+

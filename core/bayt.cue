@@ -226,6 +226,60 @@ noop: #cmd & {
 	][0]
 }
 
+// #userIdentity defines a structured user/group identity for container
+// execution and file ownership.
+//
+// It couples symbolic names (for /etc/passwd and USER directives) with the
+// numeric UID/GID required for BuildKit --link cache-independent COPY --chown.
+#userIdentity: {
+	name:   string & !=""
+	uid:    int & >=0
+	gid:    int & >=0
+	group?: string
+	chown:  "\(uid):\(gid)"
+	user:   "\(uid):\(gid)"
+}
+
+// #nonroot represents the canonical unprivileged nonroot identity commonly
+// used in distroless and wolfi minimal containers (UID/GID 65532:65532).
+#nonroot: #userIdentity & {
+	name:  "nonroot"
+	group: "nonroot"
+	uid:   65532
+	gid:   65532
+}
+
+// #vscodeUser represents the canonical non-root user (UID/GID 1000:1000)
+// used in VS Code Dev Containers, Codespaces, and single-user container setups.
+#vscodeUser: #userIdentity & {
+	name:  "vscode"
+	group: "vscode"
+	uid:   1000
+	gid:   1000
+}
+
+// #users exposes universal container user identities.
+#users: {
+	root: {
+		name:  "root"
+		group: "root"
+		uid:   0
+		gid:   0
+		chown: "0:0"
+		user:  "0:0"
+	}
+	nobody: {
+		name:  "nobody"
+		group: "nobody"
+		uid:   65534
+		gid:   65534
+		chown: "65534:65534"
+		user:  "65534:65534"
+	}
+	vscode:  #vscodeUser
+	nonroot: #nonroot
+}
+
 #dockerfile: D={
 	// _project — injected by #target so the `from: ref: ":<target>"`
 	// shorthand can resolve same-project refs without the user passing
@@ -485,6 +539,11 @@ noop: #cmd & {
 	// Lines emitted after the cmd RUN, before EXPOSE.
 	epilogue: [...string]
 
+	// Container runtime user, emitted as USER in the Dockerfile after
+	// epilogue and before ENTRYPOINT/CMD.
+	// Accepts a raw string (e.g. "nobody", "10001:10001") or a #userIdentity.
+	user?: string | #userIdentity
+
 	// Structured COPY directives. Maps directly to Dockerfile COPY
 	// grammar; emitted after the preamble and `add`, before the dep and
 	// source COPYs.
@@ -521,7 +580,7 @@ noop: #cmd & {
 		srcs:    [...string]
 		dst:     string
 		chmod?:  string
-		chown?:  string
+		chown?:  string | #userIdentity
 		link:    *true  | bool
 		parents: *false | bool
 		exclude: [...string]
@@ -665,7 +724,7 @@ noop: #cmd & {
 	container_name?: string
 	restart?:        string
 	working_dir?:    string
-	user?:           string
+	user?:           string | #userIdentity
 	ulimits?: [string]: int | {soft: int, hard: int}
 	// shm_size: a size string ("2gb") or a byte count.
 	shm_size?:    string | int
