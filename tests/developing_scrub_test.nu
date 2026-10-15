@@ -40,7 +40,7 @@ def md-scrubs [cfg: string]: nothing -> list<record> {
         let window = ($lines | skip ($r.index + 1) | first 4 | str join "\n")
         let md = ($window | parse -r 'glob\(\["(?<f>[^"]*\.md)"\]\)' | get -o f.0)
         if $md == null { null } else {
-          {file: $md, before: (unescape ($r.item | str trim | str substring 10..<(($r.item | str trim | str length) - 2)))}
+          {file: $md, multiline: ($window | str contains "multiline = True"), before: (unescape ($r.item | str trim | str substring 10..<(($r.item | str trim | str length) - 2)))}
         }
       }
     | compact
@@ -57,5 +57,10 @@ def test_scrub_still_matches [root: string, s: record] {
   let candidates = (glob $"($root)/plugins/*/($s.file)")
   let hits = ($candidates | where { |c| (open --raw $c) | str contains $s.before })
   assert (($hits | length) > 0) $"no file matches the scrub for ($s.file) — copybara would silently ship the unscrubbed text"
+  # core.replace matches within one line unless told otherwise, so a scrub
+  # spanning lines without it matched nothing and bayt's tag mechanics shipped.
+  if ($s.before | str contains (char newline)) {
+    assert $s.multiline $"the scrub for ($s.file) spans lines without `multiline = True` — copybara matches nothing and ships the text"
+  }
   print $"  PASS  ($s.file): scrub matches ($hits | length) file\(s\)"
 }
