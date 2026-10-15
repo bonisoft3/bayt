@@ -216,7 +216,9 @@ def atomic-write [target: string, content: string] {
 
 # Rewrite the `bayt` build context from the published image to a
 # compose-YAML-relative path when BAYT_RUNTIME_DIR is set (monorepo-dev
-# mode).
+# mode). Unset, the image stays the default of `${BAYT_RUNTIME:-…}`: a
+# rooted project's committed composes serve its own repository too, so the
+# monorepo points them at its tree from the .bayt/.env its mirror leaves out.
 #
 # Operates on the record, not on the emitted text: the emitter folds a long
 # scalar onto a `>-` continuation line, so a pattern expecting
@@ -227,7 +229,6 @@ def atomic-write [target: string, content: string] {
 # would hash differently outer-vs-inner and break the depot cache.
 export def _inject-runtime [data: any, base: string]: nothing -> any {
 	let runtime_dir = ($env.BAYT_RUNTIME_DIR? | default "")
-	if ($runtime_dir | is-empty) { return $data }
 	# base arrives with OS separators when generation runs on Windows —
 	# normalize before splitting or the depth (and every ../ prefix)
 	# comes out short.
@@ -239,7 +240,8 @@ export def _inject-runtime [data: any, base: string]: nothing -> any {
 		$d.services | items {|name, svc|
 			let ctx = ($svc | get -o build.additional_contexts.bayt)
 			if $ctx != null and ($ctx | str starts-with "docker-image://") {
-				{$name: ($svc | update build.additional_contexts.bayt $rel_path)}
+				let to = if ($runtime_dir | is-empty) { $"${BAYT_RUNTIME:-($ctx)}" } else { $rel_path }
+				{$name: ($svc | update build.additional_contexts.bayt $to)}
 			} else {
 				{$name: $svc}
 			}

@@ -26,7 +26,7 @@ def main [] {
 	test_scan_honours_git_excludes_in_a_work_tree
 	test_inject_runtime_rewrites_the_published_image
 	test_inject_runtime_climbs_out_of_a_nested_project
-	test_inject_runtime_is_a_noop_without_the_env
+	test_inject_runtime_defaults_to_the_image_without_the_env
 	test_inject_runtime_keeps_service_order
 	test_clear_keeps_the_env_file
 	test_scan_places_a_nested_rooted_project_where_it_sits
@@ -133,12 +133,14 @@ def test_inject_runtime_climbs_out_of_a_nested_project [] {
 	assert equal $got.services.a.build.additional_contexts.bayt "../../../plugins/bayt/runtime"
 }
 
-# Unset is the published path: a consumer outside this repo has no local
-# runtime tree to point at.
-def test_inject_runtime_is_a_noop_without_the_env [] {
-	print "test an unset BAYT_RUNTIME_DIR leaves the image ref alone..."
+# Unset is the published path, overridable at compose time: a rooted
+# project's composes serve its own repository, which has no runtime tree,
+# and the monorepo, whose .bayt/.env names one through BAYT_RUNTIME.
+def test_inject_runtime_defaults_to_the_image_without_the_env [] {
+	print "test an unset BAYT_RUNTIME_DIR keeps the image as BAYT_RUNTIME's default..."
 	let got = (with-env {BAYT_RUNTIME_DIR: ""} { _inject-runtime (_svc $IMG) "." })
-	assert equal $got.services.a.build.additional_contexts.bayt $IMG
+	assert equal $got.services.a.build.additional_contexts.bayt $"${BAYT_RUNTIME:-($IMG)}"
+	assert equal $got.services.a.build.additional_contexts.other "service:x"
 }
 
 # On Windows compose spells the flattened contexts with backslashes, and the
