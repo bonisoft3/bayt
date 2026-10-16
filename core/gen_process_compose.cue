@@ -161,11 +161,12 @@ import (
 			port: string
 			out: (_ownPort & _me & {"port": port}).out
 		}
-		let _auth = [if _h.authorization != _|_ {
-			[if strings.Contains(_h.authorization, " ") {_h.authorization}, "Bearer \(_h.authorization)"][0]
+		let _authHeader = [if _h.authorization != null {
+			let val = _h.authorization
+			let auth = [if strings.Contains(val, " ") {val}, "Bearer \(val)"][0]
+			"Authorization: \(auth)"
 		}]
-		let _customHeaders = [if _h.headers != _|_ for h in _h.headers {h}]
-		let _allHeaders = [if len(_auth) > 0 {"Authorization: \(_auth[0])"}, for h in _customHeaders {h}]
+		let _allHeaders = list.Concat([_authHeader, [if _h.headers != null for h in _h.headers {h}]])
 		let _headerFlags = strings.Join([for h in _allHeaders {"-H \"\(h)\""}], " ")
 		let _httpArgs = [if len(_headerFlags) > 0 {"\(_headerFlags) "}, ""][0]
 		out: {

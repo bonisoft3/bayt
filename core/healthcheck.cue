@@ -47,8 +47,8 @@ healthcheck: {
 		// Which check this is, for gen_process_compose's host probe.
 		template: "http"
 		url: string
-		authorization?: string
-		headers?: [...string]
+		authorization: *null | string
+		headers:       *[] | [...string]
 		start_interval: *"200ms" | string
 		interval:       *"1s"    | string
 		timeout:        *"5s"    | string
@@ -59,11 +59,12 @@ healthcheck: {
 	http: T={
 		healthcheck: #http
 
-		let _auth = [if T.healthcheck.authorization != _|_ {
-			[if strings.Contains(T.healthcheck.authorization, " ") {T.healthcheck.authorization}, "Bearer \(T.healthcheck.authorization)"][0]
+		let _authHeader = [if T.healthcheck.authorization != null {
+			let val = T.healthcheck.authorization
+			let auth = [if strings.Contains(val, " ") {val}, "Bearer \(val)"][0]
+			"Authorization: \(auth)"
 		}]
-		let _customHeaders = [if T.healthcheck.headers != _|_ for h in T.healthcheck.headers {h}]
-		let _allHeaders = [if len(_auth) > 0 {"Authorization: \(_auth[0])"}, for h in _customHeaders {h}]
+		let _allHeaders = list.Concat([_authHeader, T.healthcheck.headers])
 		let _headerArgs = [for h in _allHeaders for x in ["-H", h] {x}]
 		let _cmd = list.Concat([["CMD", "httpcheck"], _headerArgs, [T.healthcheck.url]])
 
