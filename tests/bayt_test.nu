@@ -56,6 +56,20 @@ def export-fail-msg [label: string, files: list<string>, msg: string]: nothing -
 	}
 }
 
+# An interpolation over a field that is not there leaves the value
+# incomplete, which `cue eval` passes; only an export proves it renders.
+def export-pass [label: string, files: list<string>]: nothing -> int {
+	let r = (do { ^cue export ...$files } | complete)
+	if $r.exit_code == 0 {
+		print $"  PASS  ($label)"
+		0
+	} else {
+		print $"  FAIL  ($label) exit=($r.exit_code)"
+		print $r.stderr
+		1
+	}
+}
+
 # _dedup-x-bake guards: dedup only inside x-bake and only for pure
 # scalar items (a dropped mapping-item head re-attaches its continuation
 # to the previous item); blank lines and cross-field duplicates survive.
@@ -150,6 +164,7 @@ def main [] {
 	mut failed = 0
 	print "positive suites"
 	$failed = $failed + (eval-pass "core bayt" $core)
+	$failed = $failed + (export-pass "host probe of an embedded http check" [...$core "-e" "_proc_embedded"])
 	$failed = $failed + (dedup-suite)
 	$failed = $failed + (eval-pass "stacks/sayt" $sayt)
 	$failed = $failed + (eval-pass "stacks/go" $go)

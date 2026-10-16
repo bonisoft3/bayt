@@ -161,12 +161,15 @@ import (
 			port: string
 			out: (_ownPort & _me & {"port": port}).out
 		}
-		let _authHeader = [if _h.authorization != null {
-			let val = _h.authorization
+		// Read through its template, so a check embedded from a bayt.json
+		// written before a field was declared takes that field's default.
+		let _http = healthcheck.#http & _h
+		let _authHeader = [if _h.template == "http" if _http.authorization != null {
+			let val = _http.authorization
 			let auth = [if strings.Contains(val, " ") {val}, "Bearer \(val)"][0]
 			"Authorization: \(auth)"
 		}]
-		let _allHeaders = list.Concat([_authHeader, [if _h.headers != null for h in _h.headers {h}]])
+		let _allHeaders = list.Concat([_authHeader, [if _h.template == "http" for h in _http.headers {h}]])
 		let _headerFlags = strings.Join([for h in _allHeaders {"-H \"\(h)\""}], " ")
 		let _httpArgs = [if len(_headerFlags) > 0 {"\(_headerFlags) "}, ""][0]
 		out: {

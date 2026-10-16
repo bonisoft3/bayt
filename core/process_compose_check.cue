@@ -290,6 +290,22 @@ _proc_auth:         readiness_probe: exec: command: "\(_microcheckHost) httpchec
 _proc_auth_compose: (#dockerComposeGen & {project: _proc_auth_project, depManifests: {}}).compose.files.srv.services."auth_test-srv".healthcheck
 _proc_auth_compose: test: ["CMD", "httpcheck", "-H", "Authorization: Bearer secret", "-H", "X-Custom: 123", "http://localhost:3000/health"]
 
+// A check embedded from a bayt.json written before authorization and headers
+// were declared carries neither, and every app's own bayt.json embeds one.
+_proc_embedded_project: #project & {
+	name:     "embedded"
+	dir:      "apps/embedded"
+	activate: ""
+	targets: srv: {
+		healthcheck: {template: "http", url: "http://localhost:3000/health", start_interval: "200ms", interval: "1s", timeout: "5s", retries: 30, start_period: "30s"}
+		expose: api: port: 3000
+		entrypoint: do: "server"
+		compose: {}
+	}
+}
+_proc_embedded: (#processComposeGen & {project: _proc_embedded_project, depManifests: {}}).file.processes.srv
+_proc_embedded: readiness_probe: exec: command: "\(_microcheckHost) httpcheck http://localhost:3000/health"
+
 Tests: process_compose: {
 	host:    _proc
 	task:    _proc_tf
