@@ -270,6 +270,26 @@ _proc_rt: (#processComposeGen & {project: _proc_bare_project, depManifests: {}, 
 _proc_rt: "bayt:httpcheck": entrypoint: ["mise", "tool-stub", "../../plugins/bayt/runtime/nu.toml", "../../plugins/bayt/runtime/bayt.nu", "microcheck", "httpcheck", "--help"]
 _proc_rt: gpu: readiness_probe: exec: command: "mise tool-stub ../../../plugins/bayt/runtime/nu.toml ../../../plugins/bayt/runtime/bayt.nu microcheck httpcheck http://localhost:11434/api/tags"
 
+_proc_auth_project: #project & {
+	name:     "auth_test"
+	dir:      "apps/auth_test"
+	activate: ""
+	targets: srv: healthcheck.http & {
+		expose: api: port: 3000
+		healthcheck: {
+			url:           "http://localhost:3000/health"
+			authorization: "Bearer secret"
+			headers: ["X-Custom: 123"]
+		}
+		entrypoint: do: "server"
+		compose: {}
+	}
+}
+_proc_auth:         (#processComposeGen & {project: _proc_auth_project, depManifests: {}}).file.processes.srv
+_proc_auth:         readiness_probe: exec: command: "\(_microcheckHost) httpcheck -H \"Authorization: Bearer secret\" -H \"X-Custom: 123\" http://localhost:3000/health"
+_proc_auth_compose: (#dockerComposeGen & {project: _proc_auth_project, depManifests: {}}).compose.files.srv.services."auth_test-srv".healthcheck
+_proc_auth_compose: test: ["CMD", "httpcheck", "-H", "Authorization: Bearer secret", "-H", "X-Custom: 123", "http://localhost:3000/health"]
+
 Tests: process_compose: {
 	host:    _proc
 	task:    _proc_tf
@@ -282,4 +302,5 @@ Tests: process_compose: {
 	dockerfile: [_proc_dockerfile_ep, _proc_dockerfile_expose, _proc_bayt_scope]
 	compose: _proc_docker.compose.files.crud.services."native-crud"
 	bare: [_proc_bare, _proc_bare_image]
+	auth: [_proc_auth, _proc_auth_compose]
 }

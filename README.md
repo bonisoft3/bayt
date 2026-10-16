@@ -246,7 +246,10 @@ service-specific defaults where they are needed.
 
 ```cue
 "release-proxy": sayt.release & bayt.healthcheck.http & {
-    healthcheck: url: "http://127.0.0.1:8081/health"
+    healthcheck: {
+        url:           "http://127.0.0.1:8081/health"
+        authorization: "Bearer secret-token"
+    }
     dockerfile: from: name: "caddy:..."
 }
 

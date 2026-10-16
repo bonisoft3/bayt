@@ -161,9 +161,16 @@ import (
 			port: string
 			out: (_ownPort & _me & {"port": port}).out
 		}
+		let _auth = [if _h.authorization != _|_ {
+			[if strings.Contains(_h.authorization, " ") {_h.authorization}, "Bearer \(_h.authorization)"][0]
+		}]
+		let _customHeaders = [if _h.headers != _|_ for h in _h.headers {h}]
+		let _allHeaders = [if len(_auth) > 0 {"Authorization: \(_auth[0])"}, for h in _customHeaders {h}]
+		let _headerFlags = strings.Join([for h in _allHeaders {"-H \"\(h)\""}], " ")
+		let _httpArgs = [if len(_headerFlags) > 0 {"\(_headerFlags) "}, ""][0]
 		out: {
 			exec: command: [
-				if _h.template == "http" {"\(_microcheckHost) httpcheck \((_ownPortsInURL & _me & {url: _h.url}).out)"},
+				if _h.template == "http" {"\(_microcheckHost) httpcheck \(_httpArgs)\((_ownPortsInURL & _me & {url: _h.url}).out)"},
 				if _h.template == "tcp" {"\(_microcheckHost) portcheck --port \((_own & {port: "\(_h.port)"}).out)"},
 				if _h.template == "postgres" {"pg_isready -h \(_h.host) -p \((_own & {port: "\(_h.port)"}).out) -d \(_h.db) -U \(_h.user)"},
 				if _h.template == "redis" {"redis-cli -p \((_own & {port: "6379"}).out) ping | grep PONG"},
