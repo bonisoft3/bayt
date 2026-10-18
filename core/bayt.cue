@@ -1288,6 +1288,13 @@ _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 	// rooted at itself has no dir to name it after, so it states its name.
 	dir:  string
 	name: string
+	// Where the project's files sit under /monorepo in its images, when
+	// that is decided at build time rather than by `dir`: a compose
+	// interpolation, passed to every stage as the BAYT_DIR build arg. A
+	// project whose repository is laid out two ways (its own, and a
+	// workspace's) states which one an image takes from the environment
+	// its compose runs in.
+	imageDir?: string
 	if dir == "" {name: *"workspaceroot" | string}
 	if dir != "" && dir != "." {name: *strings.Replace(dir, "/", "_", -1) | string}
 

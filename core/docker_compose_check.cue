@@ -1005,3 +1005,61 @@ _d27_derived_dc: compose: files: door: services: "d27-door": environment: ORIGIN
 _d27_id:      (_d27 & {_module: "example.org/repo"})._portIdentity & "example.org/repo/d27"
 _d27_id_disc: (_d27 & {_module: "example.org/repo", discriminator: "ab12"})._portIdentity & "example.org/repo/d27/ab12"
 _d27_salted:  (_hostDefault & {project: _d27_id, target: "door", name: "tls", port: {port: 8443}}).out != _d27_port & true
+
+// --- D28: imageDir. A project laid out two ways (its own repository, and a
+// workspace's) takes its in-image root from the environment its compose runs
+// in: every stage declares the arg, every service passes it, and the clamp
+// walks ancestors it cannot count at generate time. A monorepo image of a
+// mirrored app at /monorepo would leave its siblings' relative paths
+// (mise.local.toml's, the mode files' includes) naming nothing.
+_d28: #project & {
+	name:     "d28"
+	dir:      "."
+	imageDir: "${MODE:+apps/d28}"
+	targets: {
+		"setup": {
+			srcs: globs: ["mise.toml"]
+			cmd: "builtin": do: "true"
+			dockerfile: busybox
+		}
+		"build": {
+			deps: [":setup:srcs"]
+			srcs: globs: ["src/**"]
+			outs: globs: ["out/d28"]
+			cmd: "builtin": do: "true"
+			dockerfile: busybox
+		}
+	}
+}
+_d28_dc:    (#dockerComposeGen & {project: _d28, depManifests: {}})
+_d28_body:  _d28_dc.dockerfiles.build
+_d28_arg:   strings.Contains(_d28_body, "AS build\nARG BAYT_DIR\nWORKDIR /monorepo/${BAYT_DIR}\n") & true
+_d28_dep:   strings.Contains(_d28_body, "COPY --from=d28-setup_srcs --parents /monorepo/${BAYT_DIR:+${BAYT_DIR}/}mise.toml /") & true
+_d28_outs:  strings.Contains(_d28_body, "--parents /monorepo/${BAYT_DIR:+${BAYT_DIR}/}out/d28 /") & true
+_d28_ctxs:  strings.Contains(_d28_body, "AS build_ctxs\nARG BAYT_DIR\nWORKDIR /monorepo/${BAYT_DIR}\n") & true
+_d28_clamp: strings.Contains(_d28_body, "&& { d=$(dirname /monorepo/${BAYT_DIR}); while [ \"$d\" != / ]; do touch -hd @${SOURCE_DATE_EPOCH:-0} \"$d\" || exit; d=$(dirname \"$d\"); done; }") & true
+_d28_args: [for s in ["d28-build", "d28-build_srcs", "d28-build_outs", "d28-build_bayt"] {_d28_dc.compose.files.build.services[s].build.args.BAYT_DIR}] & [for _ in [1, 2, 3, 4] {"${MODE:+apps/d28}"}]
+// A project without one spells its dir.
+_d28_static: strings.Contains(_d1_dc.dockerfiles.build, "ARG BAYT_DIR") & false
+
+// --- D29: the federation root carries #project.compose.includes, as every
+// closure does. It lists every fragment, and a fragment may name a service
+// only an include declares: a replay reading the root failed on a runner's
+// switched context that only the include's services defined.
+_d29_inc: _d17_dc.compose.bayt_root.include
+_d29_last: _d29_inc[len(_d29_inc)-1] & {path: "../compose.overlay.yaml", required: false}
+
+// --- D30: a target's own build args reach compose beside the frontend pin.
+// They were dropped, so an arg a runner's RUN needed never reached it.
+_d30: #project & {
+	name: "d30"
+	dir:  "d30"
+	targets: "build": {
+		cmd: "builtin": do: "true"
+		dockerfile: busybox
+		compose: build: args: MODE: "${MODE:-}"
+	}
+}
+_d30_args: (#dockerComposeGen & {project: _d30, depManifests: {}}).compose.files.build.services."d30-build".build.args
+_d30_mode: _d30_args.MODE & "${MODE:-}"
+_d30_pin:  _d30_args.BUILDKIT_SYNTAX & #buildkitSyntax

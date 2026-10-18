@@ -177,6 +177,13 @@ _copyLine: {
 
 	_m: _
 
+	// #project.imageDir: the project's own in-image paths are spelled with
+	// the BAYT_DIR build arg every one of its stages declares.
+	_argDir:   G.project.imageDir != _|_
+	_dirArg:   [if _argDir {["ARG BAYT_DIR"]}, []][0]
+	_argWorkdir: "/monorepo/${BAYT_DIR}"
+	_argPrefix:  "${BAYT_DIR:+${BAYT_DIR}/}"
+
 	// Only targets that declared a dockerfile block.
 	_emit: {for n, t in G._m.files if t.dockerfile != _|_ {(n): t}}
 
@@ -498,6 +505,7 @@ _copyLine: {
 		][0]
 		_workdir: [
 			if t.dockerfile.workdir != _|_  {t.dockerfile.workdir},
+			if G._argDir                    {G._argWorkdir},
 			if t.dir == ""                  {"/monorepo"},
 			"/monorepo/\(t.dir)",
 		][0]
@@ -588,8 +596,9 @@ _copyLine: {
 			//     scratch stage that only carries the filtered fileset.
 			// A root project spells no segment: `/monorepo/./x` under --parents
 			// pivots at `/./` and lands the file at `/x`.
-			let _dp          = [if d.dir != "" if d.dir != "." {"\(d.dir)/"}, ""][0]
-			let _bulkDest    = [if d.dir != "" {"/monorepo/\(d.dir)"}, "/monorepo"][0]
+			let _own         = G._argDir && d.project == G.project.name
+			let _dp          = [if _own {G._argPrefix}, if d.dir != "" if d.dir != "." {"\(d.dir)/"}, ""][0]
+			let _bulkDest    = [if _own {G._argWorkdir}, if d.dir != "" {"/monorepo/\(d.dir)"}, "/monorepo"][0]
 			let _isSynth     = strings.HasSuffix(d.name, "_srcs") || strings.HasSuffix(d.name, "_outs")
 			let _excludeTail = strings.Join([for e in d.outs.exclude {"--exclude=\(e)"}], " ")
 			let _excludeJ    = [if len(d.outs.exclude) > 0  {" \(_excludeTail)"}, ""][0]
@@ -987,6 +996,7 @@ _copyLine: {
 			_multiArchAddStages,
 			[
 				_from,
+				for a in G._dirArg {a},
 				"WORKDIR \(_workdir)",
 				for p in t.dockerfile.preamble {p},
 				for l in _addLines {l},
@@ -1024,6 +1034,7 @@ _copyLine: {
 		dir: string
 		out: string
 		out: [
+			if G._argDir   {G._argWorkdir},
 			if W.dir == "" {"/monorepo"},
 			"/monorepo/\(W.dir)",
 		][0]
@@ -1086,13 +1097,16 @@ _copyLine: {
 		_ancestors: [for i, _ in _wdSegs if i >= 2 {strings.Join(list.Slice(_wdSegs, 0, i), "/")}]
 
 		_epoch: "@${SOURCE_DATE_EPOCH:-0}"
+		// A build-arg workdir has its depth only at build time, so its
+		// ancestors are walked there.
 		_clamp: strings.Join(list.Concat([
 			["find \(F.workdir) -exec touch -hd \(_epoch) {} +"],
-			[if len(_ancestors) > 0 {"touch -hd \(_epoch) \(strings.Join(_ancestors, " "))"}],
+			[if G._argDir {"{ d=$(dirname \(F.workdir)); while [ \"$d\" != / ]; do touch -hd \(_epoch) \"$d\" || exit; d=$(dirname \"$d\"); done; }"}],
+			[if !G._argDir if len(_ancestors) > 0 {"touch -hd \(_epoch) \(strings.Join(_ancestors, " "))"}],
 		]), " && ")
 
 		out: strings.Join(list.Concat([
-			["FROM \(lock.images.busybox) AS \(F.ctxsStage)", "WORKDIR \(F.workdir)"],
+			["FROM \(lock.images.busybox) AS \(F.ctxsStage)"], G._dirArg, ["WORKDIR \(F.workdir)"],
 			F.bodyLines,
 			[
 				"ARG SOURCE_DATE_EPOCH",
@@ -1153,7 +1167,7 @@ _copyLine: {
 		_ctxsStage: "\(R.t.name)_outs_ctxs"
 		_excludeFlags: [for e in R.t.outs.exclude {"--exclude=\(e)"}]
 		_excludeJoin: [if len(_excludeFlags) > 0 {" \(strings.Join(_excludeFlags, " "))"}, ""][0]
-		_dirPath:  [if R.t.dir != "" if R.t.dir != "." {"\(R.t.dir)/"}, ""][0]
+		_dirPath:  [if G._argDir {G._argPrefix}, if R.t.dir != "" if R.t.dir != "." {"\(R.t.dir)/"}, ""][0]
 		_outsPaths: strings.Join([for g in R.t.outs.globs {"/monorepo/\(_dirPath)\(g)"}], " ")
 		_copy: [
 			if len(R.t.outs.globs) > 0 {
@@ -1296,7 +1310,13 @@ _copyLine: {
 				target:     n
 				tags: _tags
 
-				args: BUILDKIT_SYNTAX: #buildkitSyntax
+				// A target's own build args (compose.build.args) beside the
+				// frontend pin, which they cannot replace.
+				if G._argDir {args: BAYT_DIR: G.project.imageDir}
+				args: {
+					BUILDKIT_SYNTAX: #buildkitSyntax
+					if t.compose != _|_ if t.compose.build != _|_ if t.compose.build.args != _|_ {t.compose.build.args}
+				}
 
 				// Dep services become additional build contexts so the
 				// Dockerfile can `COPY --from=<svc>`. Same-project deps
@@ -1600,6 +1620,7 @@ _copyLine: {
 			// change usually affects the build (lockfiles, manifests).
 			let _hmrWorkdir = [
 				if t.dockerfile != _|_ && t.dockerfile.workdir != _|_ {t.dockerfile.workdir},
+				if G._argDir                                          {"/monorepo/\(G.project.imageDir)"},
 				if t.dir == ""                                        {"/monorepo"},
 				"/monorepo/\(t.dir)",
 			][0]
@@ -1672,6 +1693,7 @@ _copyLine: {
 				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
 				args: BUILDKIT_SYNTAX: #buildkitSyntax
+				if G._argDir {args: BAYT_DIR: G.project.imageDir}
 				if len(_depCtxEntries) > 0 {
 					additional_contexts: {
 						for e in _depCtxEntries {
@@ -1702,6 +1724,7 @@ _copyLine: {
 				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
 				args: BUILDKIT_SYNTAX: #buildkitSyntax
+				if G._argDir {args: BAYT_DIR: G.project.imageDir}
 				additional_contexts: {
 					(_parent): "service:\(_parent)"
 				}
@@ -1726,6 +1749,7 @@ _copyLine: {
 				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
 				target:     S.n
 				args: BUILDKIT_SYNTAX: #buildkitSyntax
+				if G._argDir {args: BAYT_DIR: G.project.imageDir}
 				if len(_chain) > 0 {
 					additional_contexts: {
 						for e in _chain {
@@ -1875,7 +1899,10 @@ _copyLine: {
 					(_includeEntry & {ownDir: G.project.dir, depDir: dep, file: "bayt"}).out
 				},
 			]
-			let _allIncludes = list.Concat([_localIncludes, _crossIncludes])
+			// The project's own includes, as every closure has them: a fragment
+			// here may name a service only they declare.
+			let _projectIncludes = [for o in G.project.compose.includes {{path: "../\(o)", required: false}}]
+			let _allIncludes = list.Concat([_localIncludes, _crossIncludes, _projectIncludes])
 			if len(_allIncludes) > 0 {
 				include: _allIncludes
 			}
