@@ -12,7 +12,11 @@ def build [fixture: path]: nothing -> record {
 def main [] {
 	cd $repo
 	let fixture = mktemp -d
-	let program = '
+	# The assertions read what the RUN printed, which a builder that already ran
+	# this command answers CACHED, printing nothing: the ARC fleet's shared
+	# BuildKit outlives every job. A run of its own makes the command its own.
+	let run = (random uuid)
+	let program = ('
 import bayt "bonisoft.org/plugins/bayt/core:bayt"
 _project: bayt.#project & {
   name: "inject-check", dir: ".", activate: ""
@@ -21,7 +25,7 @@ _project: bayt.#project & {
     dockerfile: {from: name: bayt.lock.images.lazybox, incremental: true, secrets: token: environment: "TOKEN"}
     cmd: builtin: {
       shell: "sh"
-      do: #"value=TASK_LEAF; tick=`printf TASK_BACKTICK`; test -n "$TOKEN" && echo "$value" && echo "$tick""#
+      do: #"value=TASK_LEAF; tick=`printf TASK_BACKTICK`; test -n "$TOKEN" && echo "$value" && echo "$tick"; : RUN_ID"#
       dockerfile: inject: {
         secrets: [{id: "token", var: contents: "TOKEN"}]
         steps: [{pre: "echo SETUP_MARKER", post: "echo CLEANUP_MARKER"}]
@@ -30,7 +34,7 @@ _project: bayt.#project & {
   }
 }
 out: bayt.#render & {project: _project, depManifests: {}}
-'
+' | str replace "RUN_ID" $run)
 	try {
 		let bundle = ($program | ^cue export - -e out | from json)
 		mkdir ($fixture | path join ".bayt")

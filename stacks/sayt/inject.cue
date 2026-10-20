@@ -184,12 +184,15 @@ inject: {
 		]
 		defaultSteps: "unix-socket-forward": {
 			priority: 10
+			// socat -t: docker's hijacked exec streams half-close (stdin EOF)
+			// while their other half still carries buildx's session, which
+			// socat's 0.5s default cuts (`forwarding Ping: no such job`).
 			pre: """
 				if [ -n "$DOCKER_HOST" ] && [ ! -e /var/run/docker.sock ]; then
 				  ulimit -n 1048576 2>/dev/null || true
 				  addr=${DOCKER_HOST#tcp://}
 				  [ -n "$addr" ] || { echo "bkid: DOCKER_HOST=$DOCKER_HOST has no tcp:// address" >&2; exit 1; }
-				  socat -d0 UNIX-LISTEN:/var/run/docker.sock,fork,backlog=1024,reuseaddr "TCP:$addr,keepalive,keepidle=30,keepintvl=15,keepcnt=4" &
+				  socat -d0 -t 86400 UNIX-LISTEN:/var/run/docker.sock,fork,backlog=1024,reuseaddr "TCP:$addr,keepalive,keepidle=30,keepintvl=15,keepcnt=4" &
 				  SOCAT_PID=$!
 				  trap 'kill $SOCAT_PID 2>/dev/null || true' EXIT INT TERM
 				  socat -u OPEN:/dev/null UNIX-CONNECT:/var/run/docker.sock,retry=20,interval=0.2 >/dev/null 2>&1 \\
