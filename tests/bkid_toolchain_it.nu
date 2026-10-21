@@ -26,8 +26,8 @@ out: bayt.#render & {project: _project, depManifests: {}}
 		$bundle.docker.dockerfiles.check | save ($fixture | path join "Dockerfile")
 		let result = (do { ^docker buildx build ...$platform_args --target check --no-cache --add-host api.github.com:127.0.0.1 --progress=plain --output type=cacheonly -f ($fixture | path join "Dockerfile") $fixture } | complete)
 		assert equal $result.exit_code 0 $result.stderr
-		assert ($result.stderr | str contains "3.49.1") $result.stderr
-		assert ($result.stderr | str contains "2.101.78") $result.stderr
+		assert ($result.stderr | str contains "3.54.0") $result.stderr
+		assert ($result.stderr | str contains "2.102.25") $result.stderr
 		assert (not ($result.stderr | str contains "ghcr.io")) $result.stderr
 	} catch { |error|
 		rm -rf $fixture

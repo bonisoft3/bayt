@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNTIME = ROOT / 'plugins/bayt/runtime'
+SAYT = ROOT / 'plugins/sayt'
 
 SERVER = {
     'expose': {'http': {'port': 8000, 'env': 'PORT'}},
@@ -25,12 +26,9 @@ class ProcessCompose(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.nu = subprocess.check_output(['nu', '-c', '$nu.current-exe'], text=True).strip()
-        # `mise exec` installs a missing tool, where `mise where` only reports one.
-        cls.task, cls.pc = (subprocess.check_output(
-            ['mise', 'exec', tool, '--', 'which', name], text=True,
-            env=dict(os.environ, MISE_LOCKED='0'), cwd=ROOT).strip()
-            for tool, name in [('github:go-task/task@v3.49.1', 'task'),
-                               ('github:F1bonacc1/process-compose@v1.122.0', 'process-compose')])
+        for stub, flag in [(SAYT / 'task.toml', '--version'), (SAYT / 'process-compose.toml', 'version')]:
+            subprocess.check_output(['mise', 'tool-stub', str(stub), flag],
+                                    env=dict(os.environ, MISE_LOCKED='0'), cwd=ROOT)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='bayt-process-compose-')
@@ -41,11 +39,13 @@ class ProcessCompose(unittest.TestCase):
         (self.project / 'input.txt').write_text('before\n')
         self.bin = self.base / 'bin'
         self.bin.mkdir()
-        launcher = self.bin / 'bayt'
-        launcher.write_text(f'#!/bin/sh\nexec {shlex.quote(self.nu)} {shlex.quote(str(RUNTIME / "bayt.nu"))} "$@"\n')
-        launcher.chmod(0o755)
+        for name, target in [('bayt', f'{shlex.quote(self.nu)} {shlex.quote(str(RUNTIME / "bayt.nu"))}'),
+                             ('task', f'mise tool-stub {shlex.quote(str(SAYT / "task.toml"))}')]:
+            launcher = self.bin / name
+            launcher.write_text(f'#!/bin/sh\nexec {target} "$@"\n')
+            launcher.chmod(0o755)
         self.env = dict(os.environ,
-                        PATH=f'{self.bin}:{Path(self.task).parent}:{Path(self.nu).parent}:' + os.environ['PATH'],
+                        PATH=f'{self.bin}:{Path(self.nu).parent}:' + os.environ['PATH'],
                         BAYT_CACHE_DIR=str(self.base / 'cache'), MISE_LOCKED='0')
 
     def generate(self, check, after=None, server=SERVER):
@@ -90,9 +90,11 @@ out: {
         return data['processes']
 
     def run_integrate(self, **env):
-        return subprocess.run([self.pc, '--no-server', '-f', '.bayt/process-compose.yaml', 'run', 'integrate'],
-                              cwd=self.project, env=dict(self.env, **env), text=True, capture_output=True,
-                              stdin=subprocess.DEVNULL, timeout=120)
+        return subprocess.run(
+            ['mise', 'tool-stub', str(SAYT / 'process-compose.toml'),
+             '--no-server', '-f', '.bayt/process-compose.yaml', 'run', 'integrate'],
+            cwd=self.project, env=dict(self.env, **env), text=True, capture_output=True,
+            stdin=subprocess.DEVNULL, timeout=120)
 
     FETCH = ('python3 -c "import os, urllib.request; open(\'result.txt\', \'wb\').write(urllib.request.urlopen(os.environ[\'SERVER_URL\']).read())"'
              ' && echo "$SERVER_URL" > url.txt')

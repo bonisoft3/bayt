@@ -13,9 +13,11 @@
 # BuildKit's `RUN --mount`, and `docker run` rejects it as an unknown type.
 # The volume is named rather than anonymous so `in-storage` can attach to it.
 
+use mirror.nu [load-image]
+
 # Multiplatform index (linux/amd64 + linux/arm64).
-const BR = "mirror.gcr.io/buchgr/bazel-remote-cache:latest@sha256:730699ebe2a203dec68af34656f07e2fceedc3c6f8814642a73f231e0c8357be"
-const BB = "mirror.gcr.io/library/busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
+const BR = "buchgr/bazel-remote-cache:latest@sha256:730699ebe2a203dec68af34656f07e2fceedc3c6f8814642a73f231e0c8357be"
+const BB = "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
 
 # Retry on a fresh port: the port is picked at random, and a taken one fails
 # the container start.
@@ -31,9 +33,10 @@ def start-remote-once []: nothing -> record {
 	let port = (random int 20000..39000)
 	let name = $"bayt-cas-test-($port)"
 	let volume = $"bayt-cas-vol-($port)"
+	let br = (load-image $BR)
 	^docker volume create $volume | ignore
-	(^docker run -d --rm --name $name -p $"($port):8080" -v $"($volume):/data"
-		$BR --dir /data --max_size 1 --disable_http_ac_validation --enable_endpoint_metrics) | ignore
+	(^docker run -d --rm --pull=never --name $name -p $"($port):8080" -v $"($volume):/data"
+		$br --dir /data --max_size 1 --disable_http_ac_validation --enable_endpoint_metrics) | ignore
 
 	# Poll rather than sleep a fixed interval — image pull time varies.
 	mut up = false
@@ -59,7 +62,8 @@ export def stop-remote [rc: record] {
 # ships no shell, so `docker exec` cannot reach the volume — a busybox
 # attached to the same volume is what makes it addressable.
 export def in-storage [rc: record, script: string]: nothing -> string {
-	(do { ^docker run --rm -v $"($rc.volume):/data" $BB sh -c $script } | complete).stdout
+	let bb = (load-image $BB)
+	(do { ^docker run --rm --pull=never -v $"($rc.volume):/data" $bb sh -c $script } | complete).stdout
 }
 
 # Every blob currently in the server's CAS.

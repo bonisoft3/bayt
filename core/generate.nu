@@ -466,6 +466,17 @@ def emit-depot-yaml [proj_dir: string, ws: string, --required, --group: record =
 		0 => { error make {msg: $"bayt: no compose base file in ($dir) — the depot flatten requires one"} }
 		_ => { error make {msg: $"bayt: ambiguous compose base files in ($dir): ($bases | str join ', ')"} }
 	})
+	# `config --no-interpolate` still runs compose-spec schema validation,
+	# whose anchored pull_policy pattern rejects `${BAYT_PULL_POLICY:-build}`.
+	let pull_var = "pull_policy: ${BAYT_PULL_POLICY:-build}"
+	let pull_tok = "pull_policy: every_0s"
+	let patched = (glob $"($dir)/.bayt/compose.*.yaml" | each { |f|
+		let raw = (open --raw $f)
+		if ($raw | str contains $pull_var) {
+			atomic-write $f ($raw | str replace --all $pull_var $pull_tok)
+			{file: $f, raw: $raw}
+		}
+	} | compact)
 	let compose_stub = ($ws | path join plugins/sayt/compose.toml)
 	let r = (do {
 		cd $dir
@@ -477,6 +488,7 @@ def emit-depot-yaml [proj_dir: string, ws: string, --required, --group: record =
 			^docker compose -f $base --profile '*' config --no-interpolate
 		}
 	} | complete)
+	for p in $patched { atomic-write $p.file $p.raw }
 	if $r.exit_code != 0 {
 		let detail = ($r.stderr | lines | last 3 | str join "\n")
 		# A depot opt-in declares docker a generate dependency; skipping
@@ -488,7 +500,7 @@ def emit-depot-yaml [proj_dir: string, ws: string, --required, --group: record =
 		print -e $detail
 		return
 	}
-	let flat = (relative-flat $r.stdout $ws | str replace --all "service:" "target:")
+	let flat = (relative-flat $r.stdout $ws | str replace --all "service:" "target:" | str replace --all $pull_tok $pull_var)
 	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header (_dedup-x-bake $flat))
 	if not ($group | is-empty) {
 		atomic-write $"($dir)/.bayt/depot.json" (depot-plan $flat $group | to json --indent 2)
