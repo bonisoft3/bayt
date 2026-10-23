@@ -22,6 +22,8 @@ def main [] {
 	# determinism + sensitivity
 	test_a_synthetic_dep_resolves_from_its_parent
 	test_a_compiler_source_view_invalidates_generation
+	test_an_output_view_tracks_its_producer_inputs
+	test_an_empty_output_view_preserves_its_boundary
 	test_an_unemitted_srcs_view_contributes_nothing
 	test_an_unemitted_other_view_is_an_error
 	test_a_dep_stamp_never_narrows_the_image_scope
@@ -115,6 +117,104 @@ def test_a_compiler_source_view_invalidates_generation [] {
 	assert equal $before.exit 0 $before.stderr
 	assert equal $after.exit 0 $after.stderr
 	assert not equal $before.stdout $after.stdout
+}
+
+def test_an_output_view_tracks_its_producer_inputs [] {
+	let tmp = (make-tmp)
+	let producer = ($tmp | path join "fixture")
+	let consumer = ($tmp | path join "database")
+	mkdir ($tmp | path join ".bayt") ($producer | path join ".bayt") ($consumer | path join ".bayt")
+	"streams before" | save ($tmp | path join "streams.yaml")
+	"generator before" | save ($producer | path join "generator.mjs")
+	"config before" | save ($producer | path join "generator.config")
+	"unrelated before" | save ($tmp | path join "unrelated.txt")
+	write-synthetic-owner ($tmp | path join ".bayt/bayt.inputs.json") --name inputs --view srcs --view-srcs ["streams.yaml"]
+	write-synthetic-owner ($producer | path join ".bayt/bayt.generate.json") --name generate --view outs --view-srcs ["source.sql"]
+	let owner = ($producer | path join ".bayt/bayt.generate.json")
+	open $owner
+		| update dir "fixture"
+		| update srcs.globs ["generator.mjs"]
+		| update outs.globs ["source.sql"]
+		| update synthetics.outs.dir "fixture"
+		| update chainedDeps [{name: "inputs_srcs", dir: ""}]
+		| update cmds [{name: "builtin", srcs: {globs: ["generator.config"], exclude: []}}]
+		| to json | save -f $owner
+	{name: "database", dir: "database", srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [{name: "generate_outs", dir: "fixture"}], cmds: []}
+		| to json | save ($consumer | path join ".bayt/bayt.database.json")
+
+	for mode in [[] ["--all-cmds"]] {
+		mut absent = ""
+		for materialized in [false true] {
+			if $materialized { "stale generated SQL" | save -f ($producer | path join "source.sql") }
+			let args = (["-q" "--manifest" ".bayt/bayt.database.json"] ++ $mode)
+			let before = (run-fp $consumer $args)
+			let repeated = (run-fp $consumer $args)
+			assert equal $before.exit 0 $before.stderr
+			assert equal $repeated.exit 0 $repeated.stderr
+			assert equal $before.stdout $repeated.stdout
+			if not $materialized {
+				$absent = $before.stdout
+			} else {
+				if ($mode | is-not-empty) { assert equal $absent $before.stdout "host artifacts must not change an image fingerprint" }
+				"different host SQL" | save -f ($producer | path join "source.sql")
+				let output = (run-fp $consumer $args)
+				assert equal $output.exit 0 $output.stderr
+				if ($mode | is-not-empty) {
+					assert equal $before.stdout $output.stdout
+				} else {
+					assert not equal $before.stdout $output.stdout "native scope must still observe artifact content"
+				}
+				"stale generated SQL" | save -f ($producer | path join "source.sql")
+			}
+
+			"generator after" | save -f ($producer | path join "generator.mjs")
+			let generated = (run-fp $consumer $args)
+			assert equal $generated.exit 0 $generated.stderr
+			assert not equal $before.stdout $generated.stdout "producer source edit must reach its output consumer"
+			"generator before" | save -f ($producer | path join "generator.mjs")
+
+			"streams after" | save -f ($tmp | path join "streams.yaml")
+			let transitive = (run-fp $consumer $args)
+			assert equal $transitive.exit 0 $transitive.stderr
+			assert not equal $before.stdout $transitive.stdout "cross-project input edit must reach the output consumer"
+			"streams before" | save -f ($tmp | path join "streams.yaml")
+
+			if ($mode | is-not-empty) {
+				"config after" | save -f ($producer | path join "generator.config")
+				let command = (run-fp $consumer $args)
+				assert equal $command.exit 0 $command.stderr
+				assert not equal $before.stdout $command.stdout "image scope must include producer command sources"
+				"config before" | save -f ($producer | path join "generator.config")
+			}
+			"unrelated after" | save -f ($tmp | path join "unrelated.txt")
+			let unrelated = (run-fp $consumer $args)
+			assert equal $unrelated.exit 0 $unrelated.stderr
+			assert equal $before.stdout $unrelated.stdout
+		}
+		rm -f ($producer | path join "source.sql")
+	}
+	rm -rf $tmp
+}
+
+def test_an_empty_output_view_preserves_its_boundary [] {
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	"producer before" | save ($tmp | path join "producer.txt")
+	write-synthetic-owner ($tmp | path join ".bayt/bayt.producer.json") --name producer --view outs
+	let owner = ($tmp | path join ".bayt/bayt.producer.json")
+	open $owner | update srcs.globs ["producer.txt"] | to json | save -f $owner
+	write-manifest ($tmp | path join ".bayt/bayt.consumer.json") [] --name consumer --deps [{name: "producer_outs", dir: ""}]
+	for mode in [[] ["--all-cmds"]] {
+		let args = (["-q" "--manifest" ".bayt/bayt.consumer.json"] ++ $mode)
+		let before = (run-fp $tmp $args)
+		"producer after" | save -f ($tmp | path join "producer.txt")
+		let after = (run-fp $tmp $args)
+		assert equal $before.exit 0 $before.stderr
+		assert equal $after.exit 0 $after.stderr
+		assert equal $before.stdout $after.stdout
+		"producer before" | save -f ($tmp | path join "producer.txt")
+	}
+	rm -rf $tmp
 }
 
 def make-tmp []: nothing -> string {

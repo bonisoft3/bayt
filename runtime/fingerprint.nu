@@ -462,14 +462,21 @@ export def resolve-manifest [manifest: string, cmd: string = "", view: string = 
     # whole records, each with its own dir.
     let same = (($syn.transitiveDeps? | default []) | each { |d| {name: $d, dir: $syn.dir} })
     let cross = (($syn.transitiveCrossDeps? | default []) | each { |d| {name: $d.name, dir: $d.dir} })
+    # A generated artifact may be absent or stale before its producer runs.
+    # Follow the producer's recipe here without widening the COPY interface.
+    let producer = if $view == "outs" and ($syn.outs.globs | is-not-empty) {
+      [{name: $file.name, dir: $file.dir}]
+    } else { [] }
     {
       name:        $syn.name
       dir:         $syn.dir
-      srcs:        $syn.outs
+      # Images consume the producer image; a host artifact may be absent,
+      # stale, or built for another platform. Native scope observes its bytes.
+      srcs:        (if $view == "outs" and $all_cmds { {globs: [], exclude: []} } else { $syn.outs })
       outs:        {globs: [], exclude: []}
       state:       {globs: [], exclude: []}
       cmds:        []
-      chainedDeps: ($same ++ $cross)
+      chainedDeps: ($same ++ $cross ++ $producer)
     }
   }
   let consumer_dir = $m.dir
