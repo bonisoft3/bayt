@@ -166,6 +166,17 @@ _copyLine: {
 	out: "COPY \(_cLink)\(_cChmod)\(_cChown)\(_cParents)\(_cExclude)\(_cFrom)\(_cSrcs) \(c.dst)"
 }
 
+_copyParents: P={
+	srcs: [...string]
+	excludes: [...string]
+	_parts: list.Concat([["COPY --parents"], [for e in P.excludes {"--exclude=\(e)"}], P.srcs, ["./"]])
+	_single: strings.Join(_parts, " ")
+	out: [
+		if len(_single) <= 60000 {_single},
+		strings.Join(_parts, " \\\n  "),
+	][0]
+}
+
 #dockerComposeGen: W={
 	#dockerComposeFrom
 	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
@@ -412,7 +423,7 @@ _copyLine: {
 			if c.dockerfile != _|_ && c.dockerfile.network != _|_ && (c.dockerfile.network & ("none" | "host")) != _|_ {
 				["--network=\(c.dockerfile.network)"]
 			},
-			[]
+			[],
 		][0]
 		let _allPrefixStrs = list.Concat([_allMountStrs, _net])
 		_prefix: [if len(_allPrefixStrs) > 0 {strings.Join(_allPrefixStrs, " ") + " "}, ""][0]
@@ -443,7 +454,8 @@ _copyLine: {
 						if s.var.path != _|_ {"if [ -s \"\(_path)\" ]; then mkdir -p \"$(dirname \"\(s.var.path)\")\"; cp -p \"\(_path)\" \"\(s.var.path)\"; fi"},
 					]
 				},
-			])},
+			])
+			},
 		][0]
 		let _defaultStepsList = [
 			if _inject != null && _inject.defaultSteps != _|_ && _inject.defaultSteps != null {
@@ -499,9 +511,10 @@ _copyLine: {
 		// `from != null` → `FROM <name> AS <target>` with the
 		// corresponding additional_contexts entry written below in
 		// _service.
+		_stage: [if t.dockerfile.finalCopy != _|_ if len(t.dockerfile.finalCopy) > 0 {"\(t.name)_build"}, t.name][0]
 		_from: [
-			if t.dockerfile.from == null {"FROM scratch AS \(t.name)"},
-			"FROM \(t.dockerfile.from.name) AS \(t.name)",
+			if t.dockerfile.from == null {"FROM scratch AS \(_stage)"},
+			"FROM \(t.dockerfile.from.name) AS \(_stage)",
 		][0]
 		_workdir: [
 			if t.dockerfile.workdir != _|_  {t.dockerfile.workdir},
@@ -631,11 +644,6 @@ _copyLine: {
 
 		_inheritedDepKeys: (G._inheritedDepKeys & {"t": t}).out
 
-		_excludeFlags: [
-			for e in t.srcs.exclude {"--exclude=\(e)"},
-		]
-		_excludeJoin: [if len(_excludeFlags) > 0 {strings.Join(_excludeFlags, " ") + " "}, ""][0]
-
 		// `--parents` preserves source path
 		// structure in the destination. Without it we'd have to emit
 		// `COPY src/**/*.kt ./src/**/*.kt` — the glob in the
@@ -646,21 +654,13 @@ _copyLine: {
 		// gracefully handling zero-match globs (e.g. libstoml has no
 		// *.java files — glob matches nothing, COPY succeeds silently).
 		//
-		// All target.srcs.globs land in a single COPY: they share the
-		// same `--exclude` flags and feed the same downstream RUN(s),
-		// so per-glob splitting buys nothing the BuildKit cache cares
-		// about — any glob's content change rebuilds the same
-		// downstream layer either way. Per-cmd cache reuse comes from
-		// cmd-level srcs (interleaved with each cmd's RUN below), not
-		// from splitting the target baseline.
-		//
 		// Srcs must stay inside the project dir (no `../` escapes).
 		// Files that live at the monorepo root belong to a workspace-
 		// root project — declare it as a target there and add a
 		// cross-project dep instead of reaching across with `..`.
 		_srcCopies: [
 			if len(t.srcs.globs) > 0 {
-				"COPY --parents \(_excludeJoin)\(strings.Join(t.srcs.globs, " ")) ./"
+				(_copyParents & {srcs: t.srcs.globs, excludes: t.srcs.exclude}).out
 			},
 		]
 
@@ -820,11 +820,9 @@ _copyLine: {
 					for c in t.cmds {
 						let _cmdOnlyGlobs = [for g in c.srcs.globs if !list.Contains(t.srcs.globs, g) {g}]
 						let _cmdOnlyExclude = [for e in c.srcs.exclude if !list.Contains(t.srcs.exclude, e) {e}]
-						let _cExcludeFlags = [for x in _cmdOnlyExclude {"--exclude=\(x)"}]
-						let _cExcludeJ = [if len(_cExcludeFlags) > 0 {strings.Join(_cExcludeFlags, " ") + " "}, ""][0]
 						let _cCopy = [
 							if len(_cmdOnlyGlobs) > 0 {
-								"COPY --parents \(_cExcludeJ)\(strings.Join(_cmdOnlyGlobs, " ")) ./"
+								(_copyParents & {srcs: _cmdOnlyGlobs, excludes: _cmdOnlyExclude}).out
 							},
 						]
 						list.Concat([_cCopy, [(_runLine & {"t": t, "c": c}).out]])
@@ -1014,6 +1012,7 @@ _copyLine: {
 				for l in _userLine {l},
 				for l in _healthcheckLine {l},
 			],
+			[if t.dockerfile.finalCopy != _|_ if len(t.dockerfile.finalCopy) > 0 {"FROM scratch AS \(t.name)"}, if t.dockerfile.finalCopy != _|_ for p in t.dockerfile.finalCopy {"COPY --from=\(_stage) \(p) \(p)"}],
 		])
 		out: string
 		out: strings.Join(_lines, "\n") + "\n"
@@ -1131,13 +1130,11 @@ _copyLine: {
 		// destabilise the outer bake cache key on deep graphs. See
 		// docs/bayt-synthetic-digest-investigation.md.
 		_ctxsStage: "\(R.t.name)_ctxs"
-		_excludeFlags: [for e in R.t.srcs.exclude {"--exclude=\(e)"}]
-		_excludeJoin: [if len(_excludeFlags) > 0 {strings.Join(_excludeFlags, " ") + " "}, ""][0]
 		// Each cmd's srcs already hold the target's (see gen_bayt's _ownSrcGlobs).
 		_globs: (_uniqStrings & {in: list.Concat([R.t.srcs.globs, for c in R.t.cmds {c.srcs.globs}])}).out
 		_srcCopy: [
 			if len(_globs) > 0 {
-				"COPY --parents \(_excludeJoin)\(strings.Join(_globs, " ")) ./"
+				(_copyParents & {srcs: _globs, excludes: R.t.srcs.exclude}).out
 			},
 		]
 		// Non-link: the clamp normalises mtimes anyway, and a `--link`
@@ -1846,7 +1843,8 @@ _copyLine: {
 				if len([for d in t2.chainedDeps if strings.HasSuffix(d.name, "_bayt") {d}]) == 0 {
 					t2.upClosure
 				},
-			], 1)}).out
+			], 1)
+			}).out
 			for n, t in _emit if t.compose != _|_ if t.compose.up {
 				let _svc = (_svcName & {pn: t.project, tn: n}).out
 				let _paths = [

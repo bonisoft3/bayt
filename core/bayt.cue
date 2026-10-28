@@ -538,6 +538,8 @@ noop: #cmd & {
 
 	// Lines emitted after the cmd RUN, before EXPOSE.
 	epilogue: [...string]
+	// Export only these absolute paths from a scratch final stage, discarding build history.
+	finalCopy?: [...(string & =~"^/")]
 
 	// Container runtime user, emitted as USER in the Dockerfile after
 	// epilogue and before ENTRYPOINT/CMD.
