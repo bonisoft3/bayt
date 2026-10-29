@@ -1875,7 +1875,12 @@ _copyParents: P={
 			let _svcPorts = {
 				for n, t in G._m.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ {
 					let _v = (_publishVar & {target: n, name: p, port: e}).out
-					((_svcName & {pn: G.project.name, tn: n}).out): "\(p)": "\(G._published[_v]):\(e.port)"
+					((_svcName & {pn: G.project.name, tn: n}).out): {
+						"\(p)": "\(G._published[_v]):\(e.port)"
+						if e.udp != _|_ if e.udp {
+							"\(p)_udp": "\(G._published[_v]):\(e.port)/udp"
+						}
+					}
 				}
 			}
 			if len(_svcPorts) > 0 {

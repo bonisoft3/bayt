@@ -23,6 +23,7 @@ import (
 // nothing can carry another number, so the port keeps its own.
 #port: {
 	port:  int & >0 & <65536
+	udp?:  *false | bool
 	env?:  string
 	host?: int & >0 & <65536
 	// A host process's fixed port reaches it through `env`; a published
