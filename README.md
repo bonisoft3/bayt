@@ -581,4 +581,4 @@ nu runtime/cache_test.nu       # 12 nu tests: miss / hit / hit-with-full
 
 ## License
 
-MIT. See the sayt repo for the license file.
+[MIT](LICENSE)
