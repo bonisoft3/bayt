@@ -316,7 +316,10 @@ An interactive caller can set `BAYT_INVOCATION` to JSON containing `manifest`
 That value contributes to both stamp and cache keys for the selected target;
 dependencies, synthetic source views and image fingerprints ignore it. Sayt
 sets this for the requested verb so changing arguments or platform runs the
-new invocation without invalidating its prerequisites.
+new invocation without invalidating its prerequisites. A `generate` with no
+arguments and no configured flags is the run its dependents make, its platform
+hidden in both, and sayt sends it as `{}` so both share one stamp and cache
+key.
 
 **`bayt cache run [--full] [--similar] -- <cmd>`** computes the same key and
 restores an exact hit's outs. With `--full` (`bayt.cache.full`) it skips the
