@@ -93,11 +93,16 @@ def test_invocation_is_target_scoped [] {
 	let first = with-env {BAYT_INVOCATION: ({manifest: $manifest, value: {args: ["first"], platform: ""}} | to json --raw)} { run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"] }
 	let second = with-env {BAYT_INVOCATION: ({manifest: $manifest, value: {args: ["second"], platform: ""}} | to json --raw)} { run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"] }
 	let unrelated = with-env {BAYT_INVOCATION: ({manifest: ($tmp | path join ".bayt/bayt.other.json"), value: {args: ["first"], platform: ""}} | to json --raw)} { run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"] }
+	# Run bare (sayt's `generate` with no args) is the same stamp as run as a dep.
+	let bare = with-env {BAYT_INVOCATION: ({manifest: $manifest, value: {args: [], platform: ""}} | to json --raw)} { run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"] }
+	let platformed = with-env {BAYT_INVOCATION: ({manifest: $manifest, value: {args: [], platform: "linux/arm64"}} | to json --raw)} { run-fp $tmp ["-q" "--manifest" ".bayt/bayt.test.json"] }
 	rm -rf $tmp
-	for result in [$base $first $second $unrelated] { assert equal $result.exit 0 $result.stderr }
+	for result in [$base $first $second $unrelated $bare $platformed] { assert equal $result.exit 0 $result.stderr }
 	assert not equal $first.stdout $base.stdout
 	assert not equal $first.stdout $second.stdout
 	assert equal $base.stdout $unrelated.stdout
+	assert equal $base.stdout $bare.stdout
+	assert not equal $base.stdout $platformed.stdout
 }
 
 def test_a_compiler_source_view_invalidates_generation [] {

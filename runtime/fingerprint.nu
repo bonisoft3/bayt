@@ -552,7 +552,11 @@ export def resolve-manifest [manifest: string, cmd: string = "", view: string = 
   }
   let invocation = if $all_cmds or ($view | is-not-empty) { [] } else {
     let selected = ($env.BAYT_INVOCATION? | default '{}' | from json)
-    if ($selected.manifest? | default "") == ($manifest | path expand) {
+    # An invocation with no args and no platform is the target run bare, the
+    # same as when it runs as another target's dep (BAYT_INVOCATION {}): it
+    # adds nothing, or the two stamps never match and each rebuilds the other.
+    let bare = (($selected.value?.args? | default [] | is-empty) and ($selected.value?.platform? | default "" | is-empty))
+    if ($selected.manifest? | default "") == ($manifest | path expand) and not $bare {
       [($selected.value | to json --raw | hash sha256)]
     } else { [] }
   }
