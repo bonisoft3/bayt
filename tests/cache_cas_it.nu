@@ -341,21 +341,24 @@ def test_non_utf8_payload_roundtrips [] {
 	stop-remote $rc
 }
 
-# The fetch names each blob's destination in a curl config file, where a
-# double quote or a backslash in a path has to be escaped.
+# The fetch and upload name each blob's path in a curl config file, where a
+# double quote or a backslash has to be escaped and brackets ([locale]) must
+# not be parsed as curl glob ranges.
 def test_quoted_path_roundtrips [] {
-	print "test quoted path roundtrips..."
+	print "test quoted and bracketed path roundtrips..."
 	let rc = (start-remote)
 	try {
 		let fix = (make-fixture)
-		let r1 = (run-cache $rc $fix [sh -c "mkdir -p 'out/a b' && echo q > 'out/a b/say \"hi\".txt'"])
+		let r1 = (run-cache $rc $fix [sh -c "mkdir -p 'out/a b' 'out/[locale]' && echo q > 'out/a b/say \"hi\".txt' && echo b > 'out/[locale]/page.js'"])
 		assert ($r1.exit == 0) $"first run exit: ($r1.exit) ($r1.stderr)"
 
 		rm -rf ($fix.project | path join "out")
 		let r2 = (run-cache $rc $fix [sh -c "exit 0"] --full)
 		assert ($r2.stderr | str contains "HIT") $"should HIT: ($r2.stderr)"
 		let f = ($fix.project | path join "out" "a b" 'say "hi".txt')
+		let b = ($fix.project | path join "out" "[locale]" "page.js")
 		assert ((open --raw $f | decode utf-8) == "q\n") "quoted path should restore"
+		assert ((open --raw $b | decode utf-8) == "b\n") "bracketed path should restore"
 		print "  ok\n"
 	} catch { |e| stop-remote $rc; error make { msg: $e.msg } }
 	stop-remote $rc

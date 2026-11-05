@@ -41,7 +41,7 @@ use ./ignore.nu [to-regex, walk-scope, enumerate-scopes]
 # Platform identity folded into every hash. Stops an arm64-mac stamp
 # from being trusted on an amd64-linux host when a worktree is cross-
 # mounted or shared. Matches Bazel's exec-platform action-key idea.
-def platform-key []: nothing -> string {
+export def platform-key []: nothing -> string {
   let host = sys host
   let arch = (uname | get machine)
   let flavor = (libc-flavor)
@@ -454,24 +454,26 @@ export def resolve-manifest [manifest: string, cmd: string = "", view: string = 
     } else {
       error make { msg: $"fingerprint: ($manifest) has no synthetic view '($view)'" }
     }
-    # A view's file set is its declared INTERFACE, which the generator emits as
-    # `outs`; its `srcs` is always empty. Its `chainedDeps` is empty too — the
-    # chain it actually carries is the transitive one. Reading the real
-    # manifest's fields here would fold in nothing and hash a constant.
-    # transitiveDeps names same-project targets; transitiveCrossDeps carries
-    # whole records, each with its own dir.
-    let same = (($syn.transitiveDeps? | default []) | each { |d| {name: $d, dir: $syn.dir} })
-    let cross = (($syn.transitiveCrossDeps? | default []) | each { |d| {name: $d.name, dir: $d.dir} })
-    {
-      name:        $syn.name
-      dir:         $syn.dir
-      srcs:        $syn.outs
-      outs:        {globs: [], exclude: []}
-      state:       {globs: [], exclude: []}
-      cmds:        []
-      chainedDeps: ($same ++ $cross)
+    # `_outs` is a product of its parent target, so its input closure is the
+    # producer's own. `srcs` and `bayt` are static file views whose file set
+    # lives in `synthetics.<view>.outs` and whose chain is `transitiveDeps`.
+    if $view == "outs" {
+      $file | upsert name $syn.name
+    } else {
+      let same = (($syn.transitiveDeps? | default []) | each { |d| {name: $d, dir: $syn.dir} })
+      let cross = (($syn.transitiveCrossDeps? | default []) | each { |d| {name: $d.name, dir: $d.dir} })
+      {
+        name:        $syn.name
+        dir:         $syn.dir
+        srcs:        $syn.outs
+        outs:        {globs: [], exclude: []}
+        state:       {globs: [], exclude: []}
+        cmds:        []
+        chainedDeps: ($same ++ $cross)
+      }
     }
   }
+  let is_static_view = ($view in ["srcs", "bayt"])
   let consumer_dir = $m.dir
   let hops = (dir-hops $consumer_dir)
   let up = (0..<$hops | each { "../" } | str join)
@@ -489,11 +491,11 @@ export def resolve-manifest [manifest: string, cmd: string = "", view: string = 
   # cross-project edges the Dockerfile COPYs from live in transitiveCrossDeps,
   # and the target's own bayt view enumerates the rendered files it COPYs in
   # (Dockerfile, compose fragment, Taskfiles).
-  let _cross = (if $all_cmds and ($view | is-empty) {
+  let _cross = (if $all_cmds and (not $is_static_view) {
     ($m.transitiveCrossDeps? | default [] | each { |d| {name: $d.name, dir: $d.dir} })
   } else { [] })
-  let _own_bayt = (if $all_cmds and ($view | is-empty) and (($file.synthetics? | default {} | get -o "bayt") != null) {
-    [{name: $"($m.name)_bayt", dir: $m.dir}]
+  let _own_bayt = (if $all_cmds and (not $is_static_view) and (($file.synthetics? | default {} | get -o "bayt") != null) {
+    [{name: $"($file.name)_bayt", dir: $m.dir}]
   } else { [] })
   let dep_nodes = (($m.chainedDeps ++ $_cross ++ $_own_bayt) | each { |d|
     let base = (if ($d.dir | is-empty) { $root } else { $"($root)/($d.dir)" })
@@ -501,6 +503,7 @@ export def resolve-manifest [manifest: string, cmd: string = "", view: string = 
     let owner = (if ($view | is-empty) { $d.name } else {
       $d.name | str substring ..<(($d.name | str length) - ($view | str length) - 1)
     })
+    let stamp_target = (if $view == "outs" { $owner } else { $d.name })
     {
       manifest: $"($base)/.bayt/bayt.($owner).json"
       view:     $view
@@ -508,8 +511,9 @@ export def resolve-manifest [manifest: string, cmd: string = "", view: string = 
       # once for the whole invocation.
       dir:      $d.dir
       # The stamp keeps the dep's own name: it is a memo of this node, and the
-      # parent's stamp is a different value.
-      stamp:    $"($base)/.task/bayt/($d.name).hash"
+      # parent's stamp is a different value. `_outs` maps to the producer's
+      # stamp since the producer task is what materializes it on host.
+      stamp:    $"($base)/.task/bayt/($stamp_target).hash"
     }
   })
   # A context the target COPYs --from is a build input. An image ref needs no
@@ -517,27 +521,21 @@ export def resolve-manifest [manifest: string, cmd: string = "", view: string = 
   # directory does: the path is fixed while its contents are not. It folds in
   # as its own hash rather than as a glob, because the srcs walk is rooted at
   # the project and a context lives outside it.
-  let contexts = (if $all_cmds and ($view | is-empty) {
+  let contexts = (if $all_cmds and (not $is_static_view) {
     ($file | get -o dockerfile.preambleCopyContexts | default [])
       | each { |c| $c | get -o image }
-      | where { |i| $i != null and (($root | path join $i) | path type) == "dir" }
+      | where { |i| $i != null and (not ($i | str contains ":")) and (($root | path join $i) | path type) == "dir" }
   } else { [] })
 
-  let scope = if ($cmd | is-empty) and $all_cmds {
-    # The image's source set. A Dockerfile COPYs the target's own srcs AND
-    # every cmd's, so a per-cmd scope answers a narrower question than "what
-    # goes into this image" — a target whose srcs live only under cmds would
-    # otherwise hash over nothing.
+  let scope = if ($cmd | is-empty) {
+    # Target-level and image-level scope both union the target's own srcs AND
+    # every cmd's srcs: a target whose srcs live under cmds (such as
+    # `mise.install` on `setup`) or a multi-cmd wrapper stamp must observe all
+    # of its cmds' inputs.
     {
       stamp_name: $m.name
       srcs:       ($m.srcs.globs   ++ ($m.cmds | each { |c| $c.srcs.globs }   | flatten) | uniq)
       excludes:   ($m.srcs.exclude ++ ($m.cmds | each { |c| $c.srcs.exclude } | flatten) | uniq)
-    }
-  } else if ($cmd | is-empty) {
-    {
-      stamp_name: $m.name
-      srcs:       $m.srcs.globs
-      excludes:   $m.srcs.exclude
     }
   } else {
     let entry = ($m.cmds | where name == $cmd | first)

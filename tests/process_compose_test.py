@@ -46,7 +46,9 @@ class ProcessCompose(unittest.TestCase):
             launcher.chmod(0o755)
         self.env = dict(os.environ,
                         PATH=f'{self.bin}:{Path(self.nu).parent}:' + os.environ['PATH'],
-                        BAYT_CACHE_DIR=str(self.base / 'cache'), MISE_LOCKED='0')
+                        BAYT_CACHE_DIR=str(self.base / 'cache'),
+                        BAYT_CACHE_URL='', BAYT_CACHE_REGISTRY='', BAYT_CACHE_TOKEN='',
+                        MISE_LOCKED='0')
 
     def generate(self, check, after=None, server=SERVER):
         targets = {

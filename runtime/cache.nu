@@ -403,7 +403,7 @@ def bazel-curl [flags: list<string>, lines: list<string>]: nothing -> record {
 	let dir = (mktemp -d)
 	let cfg = ($dir | path join "curl.cfg")
 	$auth ++ $lines | str join "\n" | save -f $cfg
-	let res = (do { run-curl --parallel --parallel-max 64 --silent --show-error ...$flags --config $cfg } | complete)
+	let res = (do { run-curl --globoff --parallel --parallel-max 64 --silent --show-error ...$flags --config $cfg } | complete)
 	rm -rf $dir
 	$res
 }

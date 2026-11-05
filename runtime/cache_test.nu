@@ -17,6 +17,7 @@ const cache_nu = (path self | path dirname | path join "cache.nu")
 const fingerprint_nu = (path self | path dirname | path join "fingerprint.nu")
 
 def main [] {
+	hide-env -i BAYT_CACHE_URL BAYT_CACHE_TOKEN BAYT_CACHE_REGISTRY BAYT_CACHE_ENABLED
 	print "Running cache.nu tests...\n"
 
 	test_miss_runs_cmd_and_stores

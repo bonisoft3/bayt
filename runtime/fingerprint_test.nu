@@ -24,6 +24,7 @@ def main [] {
 	test_a_compiler_source_view_invalidates_generation
 	test_an_unemitted_srcs_view_contributes_nothing
 	test_an_unemitted_other_view_is_an_error
+	test_outs_view_chains_through_producer_and_cmd_srcs
 	test_a_dep_stamp_never_narrows_the_image_scope
 	test_hash_stable_across_runs
 	test_hash_changes_with_content
@@ -254,6 +255,43 @@ def test_an_unemitted_other_view_is_an_error [] {
 
 	let r = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.consumer.json"])
 	assert ($r.exit != 0) "an absent `outs` view must not be treated as empty"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+# An `outs` view is a product of its producer target, so a consumer depending
+# on `:launch:outs` must observe changes to `launch`'s upstream `:setup` target
+# even when `:setup`'s sources live in `cmds[*].srcs.globs`.
+def test_outs_view_chains_through_producer_and_cmd_srcs [] {
+	print "test an outs view chains through its producer and cmd srcs..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join ".bayt")
+	"v1\n" | save -f ($tmp | path join ".mise.toml")
+	"own\n" | save -f ($tmp | path join "own.txt")
+	{
+		name: "setup", dir: "", emitsSrcs: true
+		srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}
+		state: {globs: []}, chainedDeps: []
+		cmds: [{name: "builtin", srcs: {globs: ["[.]mise.toml"], exclude: []}}]
+		synthetics: {outs: {name: "setup_outs", dir: "", srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}, chainedDeps: [], cmds: []}}
+	} | to json | save -f ($tmp | path join ".bayt/bayt.setup.json")
+	{
+		name: "launch", dir: "", emitsSrcs: false
+		srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}
+		state: {globs: []}, cmds: []
+		chainedDeps: [{name: "setup_outs", dir: ""}]
+		synthetics: {outs: {name: "launch_outs", dir: "", srcs: {globs: [], exclude: []}, outs: {globs: [], exclude: []}, chainedDeps: [], cmds: []}}
+	} | to json | save -f ($tmp | path join ".bayt/bayt.launch.json")
+	write-manifest ($tmp | path join ".bayt/bayt.integrate.json") ["own.txt"] --name "integrate" --deps [
+		{name: "launch_outs", dir: ""}
+	]
+
+	let before = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.integrate.json"])
+	assert ($before.exit == 0) $"unexpected exit: ($before.stderr)"
+	"v2\n" | save -f ($tmp | path join ".mise.toml")
+	let after = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.integrate.json"])
+	assert ($after.exit == 0) $"unexpected exit: ($after.stderr)"
+	assert ($before.stdout != $after.stdout) "editing .mise.toml in setup.cmds[*].srcs did not move integrate's hash through launch_outs"
 	rm -rf $tmp
 	print "  ok\n"
 }
