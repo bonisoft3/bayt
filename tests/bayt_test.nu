@@ -113,9 +113,11 @@ def main [] {
 	# stacks/sayt holds the sayt-verb conventions + standard sayt.gradle
 	# / sayt.pnpm / sayt.pnpmWorkspace mappings; sibling stacks (gradle,
 	# pnpm, mise) hold pure toolchain concepts.
-	let sayt = ["./stacks/sayt/"]
-	let go   = ["./stacks/go/"]
-	let mise = ["./stacks/mise/"]
+	let sayt  = ["./stacks/sayt/"]
+	let go    = ["./stacks/go/"]
+	let mise  = ["./stacks/mise/"]
+	let deno  = ["./stacks/deno/"]
+	let cargo = ["./stacks/cargo/"]
 	let neg  = ["./tests/_negative/"]
 	let neg_add = ["./tests/_negative_add/"]
 	let neg_view = ["./tests/_negative_from_view/"]
@@ -169,6 +171,8 @@ def main [] {
 	$failed = $failed + (eval-pass "stacks/sayt" $sayt)
 	$failed = $failed + (eval-pass "stacks/go" $go)
 	$failed = $failed + (eval-pass "stacks/mise" $mise)
+	$failed = $failed + (eval-pass "stacks/deno" $deno)
+	$failed = $failed + (eval-pass "stacks/cargo" $cargo)
 	$failed = $failed + (eval-pass "ci `:X:bayt` with `:X:srcs` must pass" $pos_ci_srcs)
 	$failed = $failed + (eval-pass "distros fragment in both positions" $pos_preamble)
 	print "negative suites"

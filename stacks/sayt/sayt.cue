@@ -65,6 +65,7 @@ import (
 	// Capitalized aliases for the toolchain-stack imports so the
 	// lowercase `gradle:` / `pnpm:` umbrella exports below don't
 	// shadow them.
+	Cargo  "github.com/bonisoft3/bayt/stacks/cargo"
 	Go     "github.com/bonisoft3/bayt/stacks/go"
 	Gradle "github.com/bonisoft3/bayt/stacks/gradle"
 	Mise   "github.com/bonisoft3/bayt/stacks/mise"
@@ -338,7 +339,7 @@ ci: C={
 			p="${BKID_PROJECT}_\#(C.#check)"
 			f=.bayt/compose.\#(C.#closure).closure.yaml
 			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
-			docker compose -p "$p" --profile '*' -f "$f" config | docker buildx bake --allow=fs.read=/monorepo -f - --print bayt | $bake -f - ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} bayt
+			docker compose -p "$p" --profile '*' -f "$f" config | docker buildx bake --allow=fs.read=/monorepo -f - --print bayt | $bake -f - --set "*.output=type=cacheonly" ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} bayt
 			docker compose -p "$p" --profile '*' -f "$f" down -v --timeout 0 --remove-orphans
 			s=0
 			docker compose -p "$p" --profile '*' -f "$f" up bayt --build --abort-on-container-failure --exit-code-from bayt --remove-orphans --attach-dependencies || s=$?
@@ -554,6 +555,49 @@ go: bayt.#project & {
 
 // The stock layout, for a project that wants it.
 uv: (#uv).out
+
+// sayt.cargo — Rust project on Cargo + mise, shaped like sayt.uv: a
+// non-verb `deps` target pre-fetches the locked crate graph (Cargo.fetch)
+// into the project's locked registry/git cache mounts (and seeds/publishes
+// immutable `.crate` archives through the global `/cargo-crate-store`).
+#cargo: {
+	srcDir:         *"src" | string
+	integrationDir: *"tests" | string
+	out: bayt.#project & {
+		activate: *"mise x --" | string
+		targets: {
+			"setup": *(Mise.install & {
+				srcs: globs: Mise.installFiles.globs
+				outs: globs: list.Concat([Mise.installFiles.globs, [".task/bayt/setup.hash"]])
+				taskfile: setup.taskfile
+				deps:     setup.deps
+			}) | null
+			"doctor": *(doctor & Mise.doctor) | null
+			"deps": *(Cargo.fetch & Mise.exec & {
+				deps: *[] | [...string]
+				taskfile: run: "when_changed"
+				dockerfile: from: ref: ":setup"
+			}) | null
+			"build": *(build & Mise.exec & (Cargo.#build & {"srcDir": srcDir}).out & {
+				_depsDefault: [":setup", ":deps"]
+				dockerfile: from: ref: ":deps"
+			}) | null
+			"test": *(test & Mise.exec & (Cargo.#test & {"srcDir": srcDir}).out & {
+				dockerfile: from: ref: ":build"
+			}) | null
+			"integrate": *(integrate & Mise.exec & (Cargo.#integrationTest & {"integrationDir": integrationDir}).out & {
+				dockerfile: from: ref: ":build"
+			}) | null
+			"launch":   *(launch  & Mise.exec) | null
+			"release":  *(release & Mise.exec) | null
+			"verify":   *(verify  & Mise.exec & Cargo.clippy) | null
+			"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
+			"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+		}
+	}
+}
+
+cargo: (#cargo).out
 
 // sayt.pnpm — per-project Pnpm. Project-local sources only;
 // workspace-root files (pnpm-lock.yaml, etc.) belong to a separate
