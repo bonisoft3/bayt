@@ -14,16 +14,15 @@
 #   use ./generate.nu
 #   generate [--recursive]
 #
-# bayt.cue MUST expose:
-#   - project: <#project>         (first-pass dep extraction)
-#   - depManifestsIn: {[string]: _} (second-pass injection point)
-#   - _render: (bayt.#render & {project: ..., depManifests: depManifestsIn})
+# bayt.cue MUST expose `project: <#project>`, or sit beside a bayt.json that
+# is the project value.
 #
 # Two-pass evaluation:
 #   Pass 1: cue export ./bayt.cue -e project.targets --out json
 #           Fast — no generators run. Extracts cross-project dep strings.
-#   Pass 2: echo '{"depManifestsIn":{...}}' | cue export - ./bayt.cue -e _render --out json
-#           Full render with resolved dep manifests injected via stdin.
+#   Pass 2: echo '{"depManifestsIn":{...}}' | cue export - [./bayt.cue] .bayt/render.cue -e _render --out json
+#           Full render from the generated driver, with resolved dep
+#           manifests injected via stdin.
 #
 # Every run walks up to the workspace root (cue.mod/ marker) and scans it;
 # a project rooted at itself (dir ".") containing the cwd is the run's root
