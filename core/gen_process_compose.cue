@@ -72,6 +72,15 @@ import (
 		out: N.value == N.target || N.value == (_serviceName & {project: G.project.name, target: N.target}).out
 	}
 
+	_peers: {
+		for other, _ in G._m.files {
+			(other): {
+				name: (_peerName & {project: G.project.name, peer: other}).out
+				host: (_peerHost & {project: G.project.name, peer: other}).out
+			}
+		}
+	}
+
 	// What a probe or a value needs to spell a target's own ports.
 	_self: S={
 		t: _
@@ -81,7 +90,7 @@ import (
 	// Only a rule whose alias and port appear can match.
 	_rewrite: W={
 		in: string
-		let _live = [for r in G._rewrites if strings.Contains(W.in, r.needle) {r}]
+		let _live = [if strings.Contains(W.in, ":") for r in G._rewrites if strings.Contains(W.in, r.needle) {r}]
 		_steps: [W.in, for i, r in _live {regexp.ReplaceAll(r.from, W._steps[i], r.to)}]
 		out: W._steps[len(_live)]
 	}
@@ -132,17 +141,19 @@ import (
 				}
 
 				// A service the host does not run has no address there at all.
-				for other, ot in G._m.files if _hostKey if G._procs[other] == _|_
+				if _hostKey for other, ot in G._m.files if G._procs[other] == _|_
 				if ot.expose != _|_ || ot.compose != _|_
 				if (G._names & {value: _rewritten, target: other}).out {
 					(k): error("\(H.t.name): \(k) names \(other), which does not run on the host")
 				}
 				let _v = [if _pairs[k] != _|_ {_pairs[k].ref}, if len(_bare) > 0 {"127.0.0.1"}, _rewritten][0]
-				for other, _ in G._m.files if strings.Contains(_v, other) {
-					if regexp.Match((_peerName & {project: G.project.name, peer: other}).out, _v) {
+				let _vNoUser = (_noUserinfo & {in: _v}).out
+				if strings.Contains(_v, ":") || strings.Contains(_v, "@")
+				for other, p in G._peers if strings.Contains(_v, other) {
+					if regexp.Match(p.name, _v) {
 						(k): error("\(H.t.name): \(k) names a port of \(other) that \(other) does not expose on the host")
 					}
-					if regexp.Match((_peerHost & {project: G.project.name, peer: other}).out, (_noUserinfo & {in: _v}).out) {
+					if regexp.Match(p.host, _vNoUser) {
 						(k): error("\(H.t.name): \(k) names \(other) as a host the rewrite cannot place; name it as \(other):<port> with a port it exposes on the host")
 					}
 				}
@@ -264,10 +275,13 @@ import (
 
 				// Only `env` is rewritten for the host; a command naming a peer
 				// would reach for a compose hostname there.
-				for other, _ in G._m.files if strings.Contains(_e.do, other)
-				if regexp.Match((_peerHost & {project: G.project.name, peer: other}).out, (_noUserinfo & {in: _e.do}).out) {
+				let _doNoUser = (_noUserinfo & {in: _e.do}).out
+				if strings.Contains(_doNoUser, "://") || strings.Contains(_doNoUser, "@")
+				for other, p in G._peers if strings.Contains(_doNoUser, other)
+				if regexp.Match(p.host, _doNoUser) {
 					(n): error("\(n): its command names \(other); pass the address through env")
 				}
+				if strings.Contains(_e.do, ":")
 				for r in G._rewrites if strings.Contains(_e.do, r.needle) if regexp.Match(r.from, _e.do) {
 					(n): error("\(n): its command names \(r.peer) by a port it exposes; pass the address through env")
 				}

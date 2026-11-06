@@ -350,31 +350,40 @@ noop: #cmd & {
 	//
 	// Secret/ssh mounts take `id` (the secret / key name).
 	#mount: {
-		type:   "cache"
-		target: string
-		scope: *"target" | "project" | "global"
+		type:     "cache" | "secret" | "bind" | "ssh" | "tmpfs"
 		required: *false | bool
-	} | {
-		type:     "secret"
-		target?:  string
-		source?:  string
-		id?:      string
-		required: *false | bool
-	} | {
-		type:     "bind"
-		target?:  string
-		source?:  string
-		required: *false | bool
-	} | {
-		type:     "ssh"
-		target?:  string
-		source?:  string
-		id?:      string
-		required: *false | bool
-	} | {
-		type:     "tmpfs"
-		target?:  string
-		required: *false | bool
+		if type == "cache" {
+			close({
+				type:     "cache"
+				target:   string
+				scope:    *"target" | "project" | "global"
+				required: bool
+			})
+		}
+		if type == "secret" || type == "ssh" {
+			close({
+				type:     "secret" | "ssh"
+				target?:  string
+				source?:  string
+				id?:      string
+				required: bool
+			})
+		}
+		if type == "bind" {
+			close({
+				type:     "bind"
+				target?:  string
+				source?:  string
+				required: bool
+			})
+		}
+		if type == "tmpfs" {
+			close({
+				type:     "tmpfs"
+				target?:  string
+				required: bool
+			})
+		}
 	}
 
 	// Field order intentionally mirrors Dockerfile statement order so

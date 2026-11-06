@@ -187,7 +187,7 @@ _peerHost: P={
 // A URL with its userinfo removed, so only its host is left to read.
 _noUserinfo: U={
 	in:  string
-	out: regexp.ReplaceAll("://[^/@\\s]*@", U.in, "://")
+	out: [if strings.Contains(U.in, "://") {regexp.ReplaceAll("://[^/@\\s]*@", U.in, "://")}, U.in][0]
 }
 
 // The way from a project at `depth` to the repository root.
@@ -275,7 +275,7 @@ _ownPortsInURL: U={
 	project: string
 	target:  string
 	url:     string
-	let _rules = [for n, e in U.expose if e.env != _|_ {
+	let _rules = [if strings.Contains(U.url, ":") for n, e in U.expose if e.env != _|_ {
 		// A loopback host carries no image tag or password, so any non-digit
 		// ends its port.
 		needle: ":\(e.port)"
