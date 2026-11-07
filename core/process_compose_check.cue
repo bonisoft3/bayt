@@ -319,7 +319,6 @@ _proc_host_only_project: #project & {
 		}
 		dockerfile: {
 			from: name: "alpine:3"
-			cmd: ["./gradlew", "run"]
 		}
 		compose: {
 			command: ["mise", "x", "--", "./gradlew", "run"]

@@ -858,10 +858,22 @@ _copyParents: P={
 			if _ep != null && (_ep & [...string]) != _|_ && (_ep & string) == _|_ {_ep},
 			[],
 		][0]
+		let _hasComposeCmd = [
+			if t.compose != _|_ if t.compose.command != _|_ if t.compose.command != null {
+				json.Marshal(t.compose.command) != "\"\"" && json.Marshal(t.compose.command) != "[]"
+			},
+			false,
+		][0]
+		let _hasComposeEp = [
+			if t.compose != _|_ if t.compose.entrypoint != _|_ if t.compose.entrypoint != null {
+				json.Marshal(t.compose.entrypoint) != "\"\"" && json.Marshal(t.compose.entrypoint) != "[]"
+			},
+			false,
+		][0]
 		let _epSugarEnabled = [
 			if t.entrypoint == _|_ {false},
 			if t.entrypoint != _|_ if t.entrypoint.dockerfile != _|_ if t.entrypoint.dockerfile == null {false},
-			len(_epStr) == 0 && len(_epList) == 0 && len(_cmStr) == 0 && len(_cmList) == 0,
+			len(_epStr) == 0 && len(_epList) == 0 && len(_cmStr) == 0 && len(_cmList) == 0 && !_hasComposeCmd && !_hasComposeEp,
 		][0]
 		let _sugarArgv = [if _epSugarEnabled {(_containerArgv & {"t": t}).out}, []][0]
 		_entrypoint: [
@@ -876,7 +888,8 @@ _copyParents: P={
 				error("\(t.name): an entrypoint carries no windows/linux/darwin variants: a container selects none, and process-compose cannot")
 			},
 			// The entrypoint sugar is the base; an explicit dockerfile.entrypoint,
-			// dockerfile.cmd, or entrypoint.dockerfile: null overrides it.
+			// dockerfile.cmd, compose.entrypoint, compose.command, or
+			// entrypoint.dockerfile: null overrides it.
 			if _epSugarEnabled {
 				"ENTRYPOINT \(json.Marshal(_sugarArgv))"
 			},
