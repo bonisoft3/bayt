@@ -133,9 +133,10 @@ resolved to targets.
 `.bayt/depot.hcl` names the images a CI build phase must push: a bake `group
 "depot-build"` of `integrate` plus its transitive `compose.depends_on`, in its
 own file because `bake.hcl` binds `tags = [IMAGE]` onto every matrix member and
-HCL cannot say "leave unset". `.bayt/depot.yaml` is the graph pre-flattened at
-generate time, kept as compose because `buildx bake --print` would resolve the
-`${…}` CI still has to bind.
+HCL cannot say "leave unset". The build phase resolves the live Compose graph
+with CI's environment, then pipes `buildx bake --print` JSON into Depot. The
+same evaluated targets supply image repositories and Dockerfile-stage manifests
+to `bayt depot-plan`; neither the plan nor flattened Compose is committed.
 
 **Image tags and refs.** An explicit `image:` on every emitted service prevents
 compose from inventing `<project>-<service>` and forcing a rebuild on `up`/`run`

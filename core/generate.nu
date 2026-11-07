@@ -277,7 +277,7 @@ def _json-header  [d: any]: nothing -> any { {_generated_from: "bayt.cue (do not
 
 
 export def custom-outputs [bundle: record]: nothing -> list<record> {
-	let reserved = ["bayt.json" "Taskfile.yml" "Taskfile.bayt.yml" "compose.yaml" "compose.bayt.yaml" "compose.bayt.ports.yaml" "process-compose.yaml" "bake.hcl" "init.gradle.kts" "depot.yaml" "depot.hcl" "depot.json"]
+	let reserved = ["bayt.json" "Taskfile.yml" "Taskfile.bayt.yml" "compose.yaml" "compose.bayt.yaml" "compose.bayt.ports.yaml" "process-compose.yaml" "bake.hcl" "init.gradle.kts" "depot.hcl"]
 	let generated = [
 		...($bundle.manifest.files | columns | each { |n| $"bayt.($n).json" })
 		...($bundle.taskfile.files | columns | each { |n| $"Taskfile.($n).yaml" })
@@ -429,10 +429,9 @@ def write-bundle [bundle: record, base: string, --depot] {
 ')
 	}
 
-	# --- depot.{yaml,hcl,json}: after the compose files depot.yaml flattens.
+	# --- depot build selection
 	let depot_opted = ($bundle.manifest.projectManifest.depot? | default false)
 	if $depot or $depot_opted {
-		emit-depot-yaml $base $ws --required=$depot_opted --group=($bundle.bake.depotGroup? | default {})
 		if ($bundle.bake.depotHcl? | is-not-empty) {
 			atomic-write $"($prefix).bayt/depot.hcl" (_slash-header $bundle.bake.depotHcl)
 		}
@@ -443,177 +442,6 @@ def write-bundle [bundle: record, base: string, --depot] {
 	}
 
 	print $"bayt: wrote files for project ($bundle.manifest.projectManifest.name)"
-}
-
-# emit-depot-yaml writes <proj>/.bayt/depot.yaml: the integration graph
-# flattened by `docker compose config --no-interpolate`, so ${VARS} stay literal
-# for bake to resolve in CI. compose
-# absolutizes contexts and emits `service:` refs, so rewrite to
-# repo-root-relative and `service:X` -> `target:X` — depot bake stats a
-# `service:` context as a path. Needs docker; hence the opt-in.
-def emit-depot-yaml [proj_dir: string, ws: string, --required, --group: record = {}] {
-	let dir = if $proj_dir == "." or $proj_dir == "" { $ws } else { $"($ws)/($proj_dir)" }
-	# Explicit -f: default project-file resolution auto-loads
-	# docker-compose.override.yml (and honors $COMPOSE_FILE) — local-only
-	# dev config that must not flatten into a committed artifact. The
-	# anchored regex admits exactly compose's base-name family and
-	# nothing else; zero or several bases is a misconfigured project
-	# (compose warns-and-picks on ambiguity — emission refuses).
-	let bases = (ls $dir | get name | each { |p| $p | path basename } | where { |f| $f =~ '^(docker-)?compose\.ya?ml$' })
-	let base = (match ($bases | length) {
-		1 => ($bases | first)
-		0 => { error make {msg: $"bayt: no compose base file in ($dir) — the depot flatten requires one"} }
-		_ => { error make {msg: $"bayt: ambiguous compose base files in ($dir): ($bases | str join ', ')"} }
-	})
-	# `config --no-interpolate` still runs compose-spec schema validation,
-	# whose anchored pull_policy pattern rejects `${BAYT_PULL_POLICY:-build}`.
-	let pull_var = "pull_policy: ${BAYT_PULL_POLICY:-build}"
-	let pull_tok = "pull_policy: every_0s"
-	let patched = (glob $"($dir)/.bayt/compose.*.yaml" | each { |f|
-		let raw = (open --raw $f)
-		if ($raw | str contains $pull_var) {
-			atomic-write $f ($raw | str replace --all $pull_var $pull_tok)
-			{file: $f, raw: $raw}
-		}
-	} | compact)
-	let compose_stub = ($ws | path join plugins/sayt/compose.toml)
-	let r = (do {
-		cd $dir
-		if ($compose_stub | path exists) and (which mise | is-not-empty) {
-			with-env { MISE_LOCKED: "0" } {
-				^mise tool-stub $compose_stub -f $base --profile '*' config --no-interpolate
-			}
-		} else {
-			^docker compose -f $base --profile '*' config --no-interpolate
-		}
-	} | complete)
-	for p in $patched { atomic-write $p.file $p.raw }
-	if $r.exit_code != 0 {
-		let detail = ($r.stderr | lines | last 3 | str join "\n")
-		# A depot opt-in declares docker a generate dependency; skipping
-		# would leave the committed depot.yaml silently stale.
-		if $required {
-			error make {msg: $"bayt: depot flatten failed for ($proj_dir) — `docker compose config` exited ($r.exit_code)\n($detail)"}
-		}
-		print -e $"bayt: depot.yaml skipped for ($proj_dir) — `docker compose config` exited ($r.exit_code) \(deps not generated? run with --recursive\)"
-		print -e $detail
-		return
-	}
-	let flat = (relative-flat $r.stdout $ws | str replace --all "service:" "target:" | str replace --all $pull_tok $pull_var)
-	atomic-write $"($dir)/.bayt/depot.yaml" (_hash-header (_dedup-x-bake $flat))
-	if not ($group | is-empty) {
-		atomic-write $"($dir)/.bayt/depot.json" (depot-plan $flat $group | to json --indent 2)
-	}
-}
-
-# relative-flat — the flattened compose with the workspace's absolute paths made
-# repo-root-relative. On Windows compose spells them with backslashes, so only
-# the lines that carry the workspace path are rewritten to forward slashes; a
-# backslash anywhere else is content and stays.
-export def relative-flat [flat: string, ws: string]: nothing -> string {
-	let fwd = ($ws | str replace --all '\' '/')
-	let native = ($ws | str replace --all '/' '\')
-	$flat
-	| lines
-	| each { |l|
-		if ($native != $fwd) and ($l | str contains $native) {
-			$l | str replace --all $native $fwd | str replace --all '\' '/'
-		} else { $l }
-	}
-	| str join "\n"
-	| $"($in)\n"
-	| str replace --all $"($fwd)/" ""
-	| str replace --all $fwd "."
-}
-
-# repo-of — a compose `image:` minus its tag. A tag cannot contain '/', so only
-# a ':' after the last '/' separates one, and neither counts inside a `${...}`.
-export def repo-of [ref: string]: nothing -> string {
-	mut depth = 0
-	mut cut = -1
-	mut i = 0
-	for c in ($ref | split chars) {
-		if $c == "{" { $depth = $depth + 1 }
-		if $c == "}" { $depth = $depth - 1 }
-		if $depth == 0 and $c == "/" { $cut = -1 }
-		if $depth == 0 and $c == ":" and $cut == -1 { $cut = $i }
-		$i = $i + 1
-	}
-	if $cut < 0 { $ref } else { $ref | str substring ..<$cut }
-}
-
-# depot-plan — .bayt/depot.json: the bake group as data, one row per leaf
-# carrying where the build phase pushes it and which manifest fingerprints
-# it. Lets a caller decide per leaf instead of baking the group whole.
-#
-# Both facts are read off the flattened compose, never derived from a leaf's
-# name: a group member may be an overlay service whose `extends` names a
-# different target, and that indirection lives in hand-authored YAML the CUE
-# model never sees — only the flatten resolves it. Paths are repo-root-
-# relative and `${VAR:-default}` stays literal, as in depot.yaml.
-def depot-plan [flat: string, group: record]: nothing -> record {
-	let svcs = ($flat | from yaml | get services)
-	_json-header {
-		group: $group.name
-		targets: ($group.targets | each { |t|
-			let s = ($svcs | get -o $t)
-			# A member the flatten cannot describe is an error, not an
-			# omission: the caller bakes the misses it is handed, so a
-			# dropped leaf is one that never builds and never publishes.
-			if $s == null {
-				error make {msg: $"bayt: depot group member ($t) is not a service in the flattened compose"}
-			}
-			if ($s | get -o build) == null or ($s | get -o image) == null {
-				error make {msg: $"bayt: depot group member ($t) has no build or image block"}
-			}
-			{
-				target:   $t
-				repo:     (repo-of $s.image)
-				manifest: $"($s.build.context)/.bayt/bayt.($s.build.target).json"
-			}
-		})
-	}
-}
-
-# compose >= v5 re-concatenates x-* extension lists once per include
-# path on diamond re-inclusion (compose-spec/compose-go#906; version
-# pin: plugins/sayt/compose.toml) — and the flattening binary floats
-# with the host, so emission dedups regardless. Line-wise surgery
-# scoped to x-bake blocks, not a YAML round-trip: nu's emitter leaves
-# 1.1-ambiguous scalars unquoted (`restart: "no"` re-parses as false).
-# Only pure-scalar items dedup — dropping a duplicate mapping-item head
-# would re-attach its continuation lines to the previous item — and
-# only inside x-bake: elsewhere duplicate list items are meaningful
-# (repeated command args).
-export def _dedup-x-bake [flat: string]: nothing -> string {
-	mut out = []
-	mut xb_indent = -1        # indent of the open `x-bake:` line; -1 = outside
-	mut seen: list<string> = []
-	for line in ($flat | lines) {
-		let stripped = ($line | str trim -l)
-		let indent = (($line | str length) - ($stripped | str length))
-		if $xb_indent >= 0 and ($stripped | is-not-empty) and $indent <= $xb_indent {
-			$xb_indent = -1
-		}
-		if $xb_indent < 0 {
-			if $stripped == "x-bake:" { $xb_indent = $indent; $seen = [] }
-			$out = ($out ++ [$line])
-			continue
-		}
-		if ($stripped | is-empty) {
-			$out = ($out ++ [$line])
-			continue
-		}
-		if ($stripped | str starts-with "- ") and not ($stripped | str contains ": ") {
-			if $line in $seen { continue }
-			$seen = ($seen ++ [$line])
-		} else {
-			# a new field key inside the block scopes its own list
-			$seen = []
-		}
-		$out = ($out ++ [$line])
-	}
-	$out | str join "\n" | $in + "\n"
 }
 
 # pass1 extracts the project.targets map from a bayt.cue.

@@ -1343,9 +1343,7 @@ _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 	// siblings. Optional — non-release projects leave this unset.
 	bake?: #bake
 
-	// Emit `.bayt/{depot.yaml,depot.hcl}`, the pair a host `depot bake` build
-	// phase consumes. Only depot.yaml needs docker (a `compose config`
-	// flatten), so default off keeps generation docker-free elsewhere.
+	// Emit the runtime-image build group in `.bayt/depot.hcl`.
 	depot: *false | bool
 
 	// compose.includes — project-root-relative compose files (any name;

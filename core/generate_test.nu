@@ -4,7 +4,8 @@
 # Run with: nu generate_test.nu (from this directory).
 
 use std/assert
-use ./generate.nu [repo-of, scan-dir, _inject-runtime, relative-flat, scan-projects, clear-bayt-dir, find-workspace-root, workspace-module, root-for, partition-scan, topo-schedule, check-dirs, custom-outputs, pass1]
+use ./depot.nu [repo-of]
+use ./generate.nu [scan-dir, _inject-runtime, scan-projects, clear-bayt-dir, find-workspace-root, workspace-module, root-for, partition-scan, topo-schedule, check-dirs, custom-outputs, pass1]
 
 def main [] {
 	print "Running generate.nu tests...\n"
@@ -19,9 +20,6 @@ def main [] {
 	test_scan_dir_answers_the_scan_s_spelling
 	test_scan_dir_answers_dot_at_the_root
 	test_scan_dir_leaves_a_posix_dir_alone
-	test_relative_flat_on_windows
-	test_relative_flat_leaves_other_backslashes
-	test_relative_flat_on_posix
 	test_scan_finds_projects_outside_a_repository
 	test_scan_honours_git_excludes_in_a_work_tree
 	test_inject_runtime_rewrites_the_published_image
@@ -141,27 +139,6 @@ def test_inject_runtime_defaults_to_the_image_without_the_env [] {
 	let got = (with-env {BAYT_RUNTIME_DIR: ""} { _inject-runtime (_svc $IMG) "." })
 	assert equal $got.services.a.build.additional_contexts.bayt $"${BAYT_RUNTIME:-($IMG)}"
 	assert equal $got.services.a.build.additional_contexts.other "service:x"
-}
-
-# On Windows compose spells the flattened contexts with backslashes, and the
-# prefix strip missed them: depot.json named `.\apps\primer/.bayt/...` and
-# depot.yaml `.\apps\primer`, so the cross job's stale-tree check failed.
-def test_relative_flat_on_windows [] {
-	print "test a Windows context comes out repo-relative with forward slashes..."
-	let flat = "services:\n  a:\n    build:\n      context: D:\\a\\trash\\trash\\apps\\primer\n"
-	assert equal (relative-flat $flat 'D:\a\trash\trash') "services:\n  a:\n    build:\n      context: apps/primer\n"
-}
-
-def test_relative_flat_leaves_other_backslashes [] {
-	print "test a backslash outside a workspace path is content..."
-	let flat = "      command: echo a\\nb\n"
-	assert equal (relative-flat $flat 'D:\a\trash\trash') $flat
-}
-
-def test_relative_flat_on_posix [] {
-	print "test a POSIX context loses the workspace prefix..."
-	let flat = "      context: /home/r/trash/apps/primer\n      root: /home/r/trash\n"
-	assert equal (relative-flat $flat '/home/r/trash') "      context: apps/primer\n      root: .\n"
 }
 
 # A scan that asked git alone came back empty outside a work tree, and every
@@ -431,7 +408,7 @@ def test_custom_outputs [] {
 	assert equal ($emitted.0.body | from yaml) $bundle.passthrough.files.0.data
 	assert equal ($emitted.1.body | from json) {enabled: true}
 	assert equal $emitted.2.body "exact bytes"
-	for name in ["../say.yaml" "/say.yaml" "Taskfile.build.yaml" "compose.yaml" "depot.yaml"] {
+	for name in ["../say.yaml" "/say.yaml" "Taskfile.build.yaml" "compose.yaml" "depot.hcl"] {
 		let rejected = try {
 			custom-outputs ($bundle | update passthrough.files [{name: $name, data: {}}])
 			false

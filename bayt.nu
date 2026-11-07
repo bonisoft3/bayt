@@ -5,7 +5,7 @@ use core/generate.nu
 # --runtime <path>: workspace-rooted path to bayt's source tree.
 # Generated compose embeds a relative path to bayt-runtime instead of
 # the default `${BAYT_RUNTIME:-docker-image://…}`.
-# --depot: emit .bayt/{depot.yaml,depot.hcl} for every project, not just the
+# --depot: emit .bayt/depot.hcl for every project, not just the
 # `#project.depot` opt-ins.
 def "main generate" [--recursive (-r), --all, --runtime: string = "", --depot] {
 	generate --recursive=$recursive --all=$all --runtime $runtime --depot=$depot
@@ -70,15 +70,14 @@ def "main fingerprint" [
 # sayt/plan treats as a miss and builds. Erroring the whole plan instead would
 # turn one unhashable leaf into a full rebuild of the closure.
 def "main depot-plan" [
-	--manifest: string = ""      # a project's .bayt/depot.json
+	--plan: string              # evaluated Bake JSON file
 	--out: string = ""           # write here instead of stdout
 ] {
-	if ($manifest | is-empty) {
-		error make { msg: "bayt depot-plan: --manifest is required" }
-	}
+	use core/depot.nu [depot-targets]
 	use runtime/fingerprint.nu [closure-hash, load-index]
-	let targets = (open $manifest | get targets)
-	# All targets in one depot manifest share the repo root; load the stat index once.
+	let evaluated = (open $plan)
+	let targets = (depot-targets $evaluated)
+	# All targets in one plan share the repo root; load the stat index once.
 	let root = ("." | path expand)
 	let index = (load-index $root)
 

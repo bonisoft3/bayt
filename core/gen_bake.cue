@@ -127,13 +127,5 @@ import (
 
 			"""
 
-		// Same membership as the HCL, for a caller that must decide per
-		// leaf rather than bake the group whole. generate.nu joins it
-		// with the flattened compose to reach each leaf's push repo,
-		// which only that flatten resolves — see emit-depot-yaml.
-		depotGroup: {
-			name:    _depotGroupName
-			targets: _rtGroupNames
-		}
 	}
 }

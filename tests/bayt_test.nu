@@ -70,24 +70,6 @@ def export-pass [label: string, files: list<string>]: nothing -> int {
 	}
 }
 
-# _dedup-x-bake guards: dedup only inside x-bake and only for pure
-# scalar items (a dropped mapping-item head re-attaches its continuation
-# to the previous item); blank lines and cross-field duplicates survive.
-def dedup-suite []: nothing -> int {
-	use ../core/generate.nu [_dedup-x-bake]
-	let diamond = "services:\n  s:\n    build:\n      x-bake:\n        cache-from:\n          - a=1\n          - a=1\n\n          - a=1\n        cache-to:\n          - a=1\n    command:\n      - -v\n      - -v\n"
-	let got = (_dedup-x-bake $diamond)
-	let want = "services:\n  s:\n    build:\n      x-bake:\n        cache-from:\n          - a=1\n\n        cache-to:\n          - a=1\n    command:\n      - -v\n      - -v\n"
-	let mapping = "x-bake:\n  contexts:\n    - id: one\n    - id: one\n      src: /p2\n"
-	if $got == $want and (_dedup-x-bake $mapping) == $mapping and (_dedup-x-bake $want) == $want {
-		print "  PASS  x-bake dedup (scalar-only, blank-safe, idempotent)"
-		0
-	} else {
-		print $"  FAIL  x-bake dedup\n($got)"
-		1
-	}
-}
-
 # Non-zero is not enough when the point of a rule is the error it names: an
 # unrelated break in the fixture keeps a bare eval-fail green while the
 # message regresses to something that locates nothing.
@@ -158,7 +140,6 @@ def main [] {
 	print "positive suites"
 	$failed = $failed + (eval-pass "core bayt" $core)
 	$failed = $failed + (export-pass "host probe of an embedded http check" [...$core "-e" "_proc_embedded"])
-	$failed = $failed + (dedup-suite)
 	$failed = $failed + (eval-pass "stacks/sayt" $sayt)
 	$failed = $failed + (eval-pass "stacks/go" $go)
 	$failed = $failed + (eval-pass "stacks/mise" $mise)

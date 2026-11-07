@@ -44,8 +44,8 @@ def main [] {
   let source = (repo-root)
   # No skip arm: the image scope and the context walk have no other coverage,
   # so a missing fixture must fail rather than silently disarm the only guard.
-  let depot = ($source | path join "guis/iris/.bayt/depot.json")
-  assert ($depot | path exists) "guis/iris/.bayt/depot.json is missing - this suite is the only coverage for the image scope"
+  let depot = ($source | path join "guis/iris/.bayt/bayt.integrate.json")
+  assert ($depot | path exists) "guis/iris/.bayt/bayt.integrate.json is missing - this suite is the only coverage for the image scope"
   let root = (private-copy $source)
 
   # manifest, the file a change lands in, and what reaches it.
