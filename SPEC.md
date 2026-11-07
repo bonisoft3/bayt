@@ -376,3 +376,22 @@ collisions before clearing the previous output tree. Only `.bayt/.env` survives
 the normal sweep; removed custom files do not. Target-level declarations ride
 in their target manifest. Consumers of project-level files declare the emitted
 paths as inputs.
+
+## HMR projections
+
+A target's `hmr` classifies project-relative paths into `code`, `configs`,
+`assets`, `tools`, and `docs`. Compose syncs code and configs, syncs and
+restarts for assets, rebuilds for tools, and ignores docs. The `native` flag
+is stack metadata; it does not start a watcher.
+
+`hmr.reactions` can override code, configs, or assets with `native`, `none`,
+`restart`, or `{command: ["program", "arg"]}`. Compose syncs for `native`
+and `none`, syncs and restarts for `restart`, and syncs then executes the
+command for the command reaction. An absent reaction retains the defaults
+above. Sync rules request initial synchronization. A command must exist in the
+container when Compose executes it.
+
+`#hmrCompose` projects the metadata to Compose watch entries using a supplied
+`workdir` and an optional source prefix (default `../`). Host watch projection
+is deferred; Process Compose output does not acquire file watchers or reload
+helpers. See [[../pronto/docs/pronto-hmr|Pronto HMR]] for the lifecycle choices.

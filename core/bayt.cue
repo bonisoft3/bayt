@@ -670,7 +670,7 @@ noop: #cmd & {
 	// #watch — develop.watch entry. Compose-domain (sync/rebuild action
 	// vocab is compose-specific), so nested here rather than top-level.
 	#watch: {
-		action: "sync" | "sync+restart" | "rebuild"
+		action: "sync" | "sync+restart" | "sync+exec" | "rebuild"
 		path:   string
 		// Required even on rebuild entries, where compose ignores it —
 		// authors supply the in-image destination as documentation.
@@ -678,6 +678,7 @@ noop: #cmd & {
 		// Optional — compose rejects `ignore: []` on rebuild entries.
 		// Either pass a non-empty list or omit.
 		ignore?: [...string]
+		exec?: command: string | [string, ...string]
 	}
 
 	// up / manual — bayt control flags (consumed by the emitter, never
@@ -1223,26 +1224,9 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 	entrypoint?: #entrypoint
 	expose?: [Name=string]: #port
 
-	// hmr — destination-side classification of srcs entries for the
-	// dev loop. Each kind maps to a compose.develop.watch action:
-	//   code    → sync (framework HMR if `native: true`, else watchexec --restart)
-	//   configs → sync + SIGHUP (watchexec wraps cmd to signal-reload)
-	//   assets  → sync+restart (compose-managed full container restart)
-	//   tools   → rebuild (compose-managed image rebuild)
-	//   docs    → ignored everywhere (no sync, no rebuild)
-	// `native` is set by the stack (Pnpm.dev sets it to true since Vite/Next
-	// handle their own watching internally). When false, bayt wraps the
-	// launch cmd in nested watchexec layers for code-restart and configs-
-	// SIGHUP. The watchexec binary comes from lazybox via the standard
-	// nubox overlay (no extra dockerfile.copy needed for nubox-based stages).
-	hmr?: {
-		native:  *false | bool
-		code:    [...string]
-		configs: [...string]
-		assets:  [...string]
-		tools:   [...string]
-		docs:    [...string]
-	}
+	// HMR paths are relative to the project root. Reactions are optional;
+	// absent reactions retain the legacy Compose projection.
+	hmr?: #hmr
 
 	// Resolved cmd list (priority-sorted, nulls removed).
 	cmds: (#MapToList & {in: cmd}).out

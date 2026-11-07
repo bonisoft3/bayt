@@ -267,20 +267,6 @@ _copyParents: P={
 		out: (_serviceName & {project: pn, target: tn}).out
 	}
 
-	// Helper: strip the common trailing glob suffix from an hmr entry
-	// so the result is a literal directory (or single file) compose's
-	// develop.watch can use as `path` / `target`. compose recurses
-	// into directories automatically — `app/**/*` and `app` watch the
-	// same set, but only the latter is a valid `target` value.
-	_hmrBase: {
-		g: string
-		out: [
-			if strings.HasSuffix(g, "/**/*") {strings.TrimSuffix(g, "/**/*")},
-			if strings.HasSuffix(g, "/**")   {strings.TrimSuffix(g, "/**")},
-			if strings.HasSuffix(g, "/*")    {strings.TrimSuffix(g, "/*")},
-			g,
-		][0]
-	}
 
 	// Combined emit set: user-target dockerfiles + synthetic `_srcs` /
 	// `_outs` per target + the per-project `bayt` synthetic. Used to
@@ -1610,41 +1596,15 @@ _copyParents: P={
 				}
 			}
 
-			// HMR: derive compose.develop.watch entries from
-			// t.hmr.{code, configs, assets, tools, docs}. compose's
-			// develop.watch wants directory paths, not globs — strip
-			// trailing glob suffix from each entry so e.g. `app/**/*`
-			// becomes `app` (compose recurses into directories
-			// automatically). docs is excluded from emission.
-			//
-			// configs uses `sync` (not sync+restart) so the container
-			// stays alive for an in-container watchexec wrapper to
-			// SIGHUP the process. assets uses sync+restart for processes
-			// that load at startup. tools rebuilds the image since the
-			// change usually affects the build (lockfiles, manifests).
 			let _hmrWorkdir = [
 				if t.dockerfile != _|_ && t.dockerfile.workdir != _|_ {t.dockerfile.workdir},
-				if G._argDir                                          {"/monorepo/\(G.project.imageDir)"},
-				if t.dir == ""                                        {"/monorepo"},
+				if G._argDir {"/monorepo/\(G.project.imageDir)"},
+				if t.dir == "" {"/monorepo"},
 				"/monorepo/\(t.dir)",
 			][0]
-			// Watch paths use `../` to point at the project root from
-			// the bayt-emitted compose file's location (.bayt/). Compose
-			// resolves develop.watch's `path` relative to the source
-			// file's directory, so a bare `./app` would land inside
-			// .bayt/ — wrong both standalone and when an outer
-			// compose.yaml extends this service. `../<glob>` resolves
-			// to the project root in both cases (build context is the
 			if t.hmr != _|_ {
-				let _hmrWatch = list.Concat([
-					[for g in t.hmr.code    {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
-					[for g in t.hmr.configs {let b = (_hmrBase & {"g": g}).out, {action: "sync",         path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
-					[for g in t.hmr.assets  {let b = (_hmrBase & {"g": g}).out, {action: "sync+restart", path: "../\(b)", target: "\(_hmrWorkdir)/\(b)"}}],
-					[for g in t.hmr.tools   {let b = (_hmrBase & {"g": g}).out, {action: "rebuild",      path: "../\(b)"}}],
-				])
-				if len(_hmrWatch) > 0 {
-					develop: watch: _hmrWatch
-				}
+				let _watch = (#hmrCompose & {hmr: t.hmr, workdir: _hmrWorkdir}).watch
+				if len(_watch) > 0 {develop: watch: _watch}
 			}
 		}
 	}
