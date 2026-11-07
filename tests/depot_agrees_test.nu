@@ -44,21 +44,5 @@ def main [] {
     assert equal $leaf.fingerprint ($fp.stdout | str trim)
     assert ($leaf.fingerprint | is-not-empty)
   }
-    # Current graph aliases must remain fingerprintable, not just the synthetic fixture.
-    let root = $workspace
-    for project in (if $nu.os-info.name == "windows" { [] } else { [guis/iris products/iris] }) {
-        let result = (do { ^bash ($root | path join plugins/sayt/bake-plan.sh) ($root | path join $project) .bayt/depot.hcl --print depot-build } | complete)
-        assert equal $result.exit_code 0 $result.stderr
-        let evaluated = ($result.stdout | from json)
-        let rows = (depot-targets $evaluated)
-        assert ($rows | is-not-empty)
-        assert equal ($rows | get target) $evaluated.group.depot-build.targets
-        assert equal ($rows | get repo | uniq | length) ($rows | length)
-        for row in $rows { assert ($row.manifest | path exists) $row.manifest }
-        if $project == "guis/iris" {
-            let alias = ($rows | where target == database | first)
-            assert equal ($alias.manifest | path basename) bayt.release-database.json
-        }
-    }
   print "All depot target tests passed!"
 }

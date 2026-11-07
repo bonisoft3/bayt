@@ -269,9 +269,11 @@ decoration.
 ## depot.dev builds
 
 Set `depot: true` on a `#project` to emit `.bayt/depot.hcl`, whose group
-selects the runtime-image closure. At build time, `sayt/depot` resolves the
-project's Compose graph through Sayt's `bake-plan.sh` and pipes an evaluated Bake plan into Depot.
-The pipeline pins Compose and Buildx and preserves `x-bake` through YAML. Required
+selects the runtime-image closure. At build time, resolve the project's Compose
+graph with `docker compose --profile '*' -f compose.yaml config`, feed its YAML
+to `docker buildx bake -f - -f .bayt/depot.hcl --print depot-build`, then pass
+the evaluated plan to `depot bake -f - depot-build`. YAML preserves `x-bake`.
+The optional `sayt/depot` action orchestrates this with pinned Compose and Buildx. Required
 `env_file` inputs must exist when planning a build; keep runtime-only env files in
 a separate Compose overlay passed only to runtime commands. Generation
 needs no Docker or Compose, and CI supplies image tags, cache settings, and outputs.
