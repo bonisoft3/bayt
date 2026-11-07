@@ -6,7 +6,6 @@ package bayt
 
 import (
 	"list"
-	"regexp"
 	"strings"
 )
 
@@ -46,119 +45,56 @@ import (
 		for i, x in _all for j, y in _all if i < j if x.port == y.port {(x.who): error("\(x.who) and \(y.who) both default to port \(x.port)")}
 	}
 
-	// A value names a peer as compose does, by its bare alias or its service
-	// name. The service name contains the alias, one alias can end another and
-	// a dotted hostname can end in one, so each match is anchored on both sides;
-	// anchoring consumes a neighbour, so every rewrite runs twice to reach
-	// adjacent names. Its output names no alias, so the second pass changes
-	// nothing else.
-	_rewrites: list.FlattenN([
-		for n, t in G._procs if t.expose != _|_ for p, e in t.expose
-		for alias in [(_serviceName & {project: G.project.name, target: n}).out, n] {
-			let _rule = {
-				peer:   n
-				needle: "\(alias):\(e.port)"
-				from:   "(^|[^A-Za-z0-9_.-])\((_reQuote & {in: alias}).out):\(e.port)\(_portEnd)"
-				to:     "${1}127.0.0.1:\(strings.Replace((_hostPort & {project: G.project._portIdentity, target: n, name: p, port: e}).out, "$", "$$", -1))${2}"
-			}
-			[_rule, _rule]
+	let _pubs = [
+		for n, t in G._m.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ {
+			let _var = (_publishVar & {target: n, name: p, port: e}).out
+			let _port = (_hostDefault & {project: G.project._portIdentity, target: n, name: p, port: e}).out
+			var:      _var
+			spelling: "${\(_var):-\(_port)}"
 		},
-	], 1)
-
-	// Whether a whole value names a target, by its alias or its service name.
-	_names: N={
-		value:  string
-		target: string
-		out: N.value == N.target || N.value == (_serviceName & {project: G.project.name, target: N.target}).out
+	]
+	_published: {for i, x in _pubs if len([for j, y in _pubs if j < i if y.var == x.var {y}]) == 0 {(x.var): x.spelling}}
+	let _pubVars = [for v, _ in _published {v}]
+	_withPublished: F={
+		in: string
+		_steps: [F.in, for i, v in _pubVars {strings.Replace(F._steps[i], "${\(v)}", _published[v], -1)}]
+		out: F._steps[len(_pubVars)]
 	}
 
-	_peers: {
-		for other, _ in G._m.files {
-			(other): {
-				name: (_peerName & {project: G.project.name, peer: other}).out
-				host: (_peerHost & {project: G.project.name, peer: other}).out
-			}
-		}
-	}
-
-	// What a probe or a value needs to spell a target's own ports.
+	// What a probe needs to spell a target's own ports.
 	_self: S={
 		t: _
 		out: {expose: [if S.t.expose != _|_ {S.t.expose}, {}][0], project: G.project._portIdentity, target: S.t.name}
 	}
 
-	// Only a rule whose alias and port appear can match.
-	_rewrite: W={
-		in: string
-		let _live = [if strings.Contains(W.in, ":") for r in G._rewrites if strings.Contains(W.in, r.needle) {r}]
-		_steps: [W.in, for i, r in _live {regexp.ReplaceAll(r.from, W._steps[i], r.to)}]
-		out: W._steps[len(_live)]
-	}
-
-	// The host environment: the entrypoint's, peers rewritten, plus each own
-	// port's variable. A key set by both must agree, or generation fails.
+	// The host environment: the entrypoint's, overridden per key by
+	// process-compose.env, plus each own port's variable.
 	_hostEnv: H={
 		t: _
-		let _raw = {
-			H.t.entrypoint.env
-			if H.t.expose != _|_ for p, e in H.t.expose if e.env != _|_ {
-				(e.env): (_hostPort & {project: G.project._portIdentity, target: H.t.name, name: p, port: e}).out
-			}
+		let _pcEnv = [if H.t["process-compose"] != _|_ if H.t["process-compose"].env != _|_ {H.t["process-compose"].env}, {}][0]
+		let _merged = {
+			for k, v in H.t.entrypoint.env if _pcEnv[k] == _|_ {(k): v}
+			for k, v in _pcEnv {(k): v}
 		}
-		let _own = (G._self & {t: H.t}).out
-
-		// A host key and its port key naming one peer and a port it exposes,
-		// as PGHOST and PGPORT: the port is that peer's on the host too, moved
-		// or fixed.
-		let _pairs = {
-			for hk, hv in _raw if regexp.Match(_hostKeys, hk) if (_portKey & {in: hk}).out != hk
-			for peer, pt in G._procs if (G._names & {value: hv, target: peer}).out
-			let _pk = (_portKey & {in: hk}).out
-			if _raw[_pk] != _|_ if pt.expose != _|_
-			for p, e in pt.expose if _raw[_pk] == "\(e.port)" {
-				(_pk): {host: hk, ref: (_hostPort & {project: G.project._portIdentity, target: peer, name: p, port: e}).out}
+		let _epEnv = {
+			for k, v in _merged {
+				(k): (G._withPublished & {
+					in: (#_renderEnvValue & {
+						target:   H.t
+						files:    G._m.files
+						procs:    G._procs
+						identity: G.project._portIdentity
+						key:      k
+						in:       v
+					}).out
+				}).out
 			}
 		}
 		out: {
-			for k, v in _raw {
-				// A process names its own ports on loopback, and they move too.
-				let _rewritten = (G._rewrite & {in: (_ownPortsInURL & _own & {url: v}).out}).out
-
-				// Under a key naming a host, as DB_HOST or PGHOST, and only there, a
-				// whole value naming a target is that target's address: elsewhere
-				// it may as well be a user or a driver called the same.
-				let _hostKey = regexp.Match(_hostKeys, k)
-				let _bare = [if _hostKey for peer, pt in G._procs if (G._names & {value: _rewritten, target: peer}).out {
-					name: peer
-					moves: len([if pt.expose != _|_ for _, e in pt.expose if e.env != _|_ {e}]) > 0
-				}]
-
-				// A port beside it, as a DB_PORT, holds a bare number no rewrite
-				// can tell from any other, so a peer whose ports move on the host
-				// is named with its port, as `<peer>:<port>`.
-				if len(_bare) > 0 if _bare[0].moves if len([for _, x in _pairs if x.host == k {x}]) == 0 {
-					(k): error("\(H.t.name): \(k) names \(_bare[0].name) alone, whose ports move on the host; name it as \(_bare[0].name):<port>\([if (_portKey & {in: k}).out != k {", or pair it with \((_portKey & {in: k}).out) holding a port \(_bare[0].name) exposes"}, ""][0])")
-				}
-
-				// A service the host does not run has no address there at all.
-				if _hostKey for other, ot in G._m.files if G._procs[other] == _|_
-				if ot.expose != _|_ || ot.compose != _|_
-				if (G._names & {value: _rewritten, target: other}).out {
-					(k): error("\(H.t.name): \(k) names \(other), which does not run on the host")
-				}
-				let _v = [if _pairs[k] != _|_ {_pairs[k].ref}, if len(_bare) > 0 {"127.0.0.1"}, _rewritten][0]
-				let _vNoUser = (_noUserinfo & {in: _v}).out
-				if strings.Contains(_v, ":") || strings.Contains(_v, "@")
-				for other, p in G._peers if strings.Contains(_v, other) {
-					if regexp.Match(p.name, _v) {
-						(k): error("\(H.t.name): \(k) names a port of \(other) that \(other) does not expose on the host")
-					}
-					if regexp.Match(p.host, _vNoUser) {
-						(k): error("\(H.t.name): \(k) names \(other) as a host the rewrite cannot place; name it as \(other):<port> with a port it exposes on the host")
-					}
-				}
-				(k): _v
+			if H.t.expose != _|_ for p, e in H.t.expose if e.env != _|_ if _epEnv[e.env] == _|_ {
+				(e.env): (_hostPort & {project: G.project._portIdentity, target: H.t.name, name: p, port: e}).out
 			}
+			_epEnv
 		}
 	}
 
@@ -183,9 +119,16 @@ import (
 		let _allHeaders = list.Concat([_authHeader, [if _h.template == "http" for h in _http.headers {h}]])
 		let _headerFlags = strings.Join([for h in _allHeaders {"-H \"\(h)\""}], " ")
 		let _httpArgs = [if len(_headerFlags) > 0 {"\(_headerFlags) "}, ""][0]
+		let _httpURL = [
+			if _h.template == "http" if _http.port != _|_ {
+				"\(_http.scheme)://\(_http.host):\((_own & {port: "\(_http.port)"}).out)\(_http.path)"
+			},
+			if _h.template == "http" {_http.url},
+			"",
+		][0]
 		out: {
 			exec: command: [
-				if _h.template == "http" {"\(_microcheckHost) httpcheck \(_httpArgs)\((_ownPortsInURL & _me & {url: _h.url}).out)"},
+				if _h.template == "http" {"\(_microcheckHost) httpcheck \(_httpArgs)\(_httpURL)"},
 				if _h.template == "tcp" {"\(_microcheckHost) portcheck --port \((_own & {port: "\(_h.port)"}).out)"},
 				if _h.template == "postgres" {"pg_isready -h \(_h.host) -p \((_own & {port: "\(_h.port)"}).out) -d \(_h.db) -U \(_h.user)"},
 				if _h.template == "redis" {"redis-cli -p \((_own & {port: "6379"}).out) ping | grep PONG"},
@@ -217,15 +160,30 @@ import (
 		}
 	}
 
-	// Each process's readiness probe before activation, or null. A template's
-	// probe and the block's own must agree, as the rest of the sugar must with
-	// its projection.
+	// Each process's readiness probe before activation, or null. The
+	// process-compose block's own readiness_probe overrides the template's
+	// per field.
 	_probes: {
 		for n, t in G._procs {
 			let _pc = [if t["process-compose"] != _|_ {t["process-compose"]}, {}][0]
-			(n): [
-				if t.healthcheck.template != _|_ if _pc.readiness_probe != _|_ {(G._templateProbe & {"t": t}).out & _pc.readiness_probe},
+			let _base = [
 				if t.healthcheck.template != _|_ {(G._templateProbe & {"t": t}).out},
+				null,
+			][0]
+			(n): [
+				if _base != null && _pc.readiness_probe != _|_ {
+					for k, v in _base if _pc.readiness_probe[k] == _|_ {(k): v}
+					for k, v in _pc.readiness_probe if k != "exec" {(k): v}
+					if _pc.readiness_probe.exec != _|_ {
+						exec: {
+							if _base.exec != _|_ {
+								for k, v in _base.exec if _pc.readiness_probe.exec[k] == _|_ {(k): v}
+							}
+							for k, v in _pc.readiness_probe.exec {(k): v}
+						}
+					}
+				},
+				if _base != null {_base},
 				if _pc.readiness_probe != _|_ {_pc.readiness_probe},
 				null,
 			][0]
@@ -272,19 +230,6 @@ import (
 				if _e.windows != _|_ || _e.linux != _|_ || _e.darwin != _|_ {
 					(n): error("\(n): process-compose has no OS selection; the entrypoint cannot carry windows/linux/darwin variants")
 				}
-
-				// Only `env` is rewritten for the host; a command naming a peer
-				// would reach for a compose hostname there.
-				let _doNoUser = (_noUserinfo & {in: _e.do}).out
-				if strings.Contains(_doNoUser, "://") || strings.Contains(_doNoUser, "@")
-				for other, p in G._peers if strings.Contains(_doNoUser, other)
-				if regexp.Match(p.host, _doNoUser) {
-					(n): error("\(n): its command names \(other); pass the address through env")
-				}
-				if strings.Contains(_e.do, ":")
-				for r in G._rewrites if strings.Contains(_e.do, r.needle) if regexp.Match(r.from, _e.do) {
-					(n): error("\(n): its command names \(r.peer) by a port it exposes; pass the address through env")
-				}
 				for k, _ in _e.after if G._procs[k] == _|_ {
 					(n): error("\(n): waits on \(k), which does not run on the host")
 				}
@@ -296,12 +241,13 @@ import (
 				}
 				(n): {
 					// process-compose expands `${VAR}` at load, from the launcher's
-					// environment, and reads `$$` as `$`. Every `$` doubled reaches the
-					// process's own shell as written, as it does in a container.
-					entrypoint: [for a in (_argv & {do: _e.do, shell: _e.shell, activate: _act}).out {strings.Replace(a, "$", "$$", -1)}]
+					// environment, and reads `$$` as `$` and `\\` as `\`. Every `$`
+					// doubled reaches the process's own shell as written, and every `\`
+					// doubled reaches its argv and environment intact.
+					entrypoint: [for a in (_argv & {do: _e.do, shell: _e.shell, activate: _act}).out {strings.Replace(strings.Replace(a, "\\", "\\\\", -1), "$", "$$", -1)}]
 					let _env = (G._hostEnv & {"t": t}).out
 					if len(_env) > 0 {
-						environment: [for k in list.SortStrings([for k, _ in _env {k}]) {"\(k)=\(_env[k])"}]
+						environment: [for k in list.SortStrings([for k, _ in _env {k}]) {"\(k)=\(strings.Replace(_env[k], "\\", "\\\\", -1))"}]
 					}
 					let _waits = {
 						for k, c in _e.after {(k): condition: _processCondition[c]}

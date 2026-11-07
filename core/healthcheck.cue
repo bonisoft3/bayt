@@ -43,9 +43,16 @@ import (
 
 healthcheck: {
 	// http — HTTP GET status check via microcheck httpcheck.
-	#http: {
+	#http: H={
 		// Which check this is, for gen_process_compose's host probe.
 		template: "http"
+		scheme:   *"http" | "https"
+		host:     *"127.0.0.1" | string
+		port?:    int & >0 & <65536
+		path:     *"/" | string
+		if H.port != _|_ {
+			url: *"\(H.scheme)://\(H.host):\(H.port)\(H.path)" | string
+		}
 		url: string
 		authorization: *null | string
 		headers:       *[] | [...string]
@@ -78,20 +85,20 @@ healthcheck: {
 				chmod: "755"
 			}
 			healthcheck: {
-				test:         _cmd
-				interval:     T.healthcheck.interval
-				timeout:      T.healthcheck.timeout
-				retries:      T.healthcheck.retries
-				start_period: T.healthcheck.start_period
+				test:         *_cmd | [...string]
+				interval:     *T.healthcheck.interval | string
+				timeout:      *T.healthcheck.timeout | string
+				retries:      *T.healthcheck.retries | int
+				start_period: *T.healthcheck.start_period | string
 			}
 		}
 		compose: healthcheck: {
-			test:           _cmd
-			interval:       T.healthcheck.interval
-			timeout:        T.healthcheck.timeout
-			retries:        T.healthcheck.retries
-			start_period:   T.healthcheck.start_period
-			start_interval: T.healthcheck.start_interval
+			test:           *_cmd | _
+			interval:       *T.healthcheck.interval | string
+			timeout:        *T.healthcheck.timeout | string
+			retries:        *T.healthcheck.retries | int
+			start_period:   *T.healthcheck.start_period | string
+			start_interval: *T.healthcheck.start_interval | string
 		}
 	}
 
@@ -118,20 +125,20 @@ healthcheck: {
 				chmod: "755"
 			}
 			healthcheck: {
-				test:         ["CMD", "portcheck", "--port", "\(T.healthcheck.port)"]
-				interval:     T.healthcheck.interval
-				timeout:      T.healthcheck.timeout
-				retries:      T.healthcheck.retries
-				start_period: T.healthcheck.start_period
+				test:         *["CMD", "portcheck", "--port", "\(T.healthcheck.port)"] | [...string]
+				interval:     *T.healthcheck.interval | string
+				timeout:      *T.healthcheck.timeout | string
+				retries:      *T.healthcheck.retries | int
+				start_period: *T.healthcheck.start_period | string
 			}
 		}
 		compose: healthcheck: {
-			test:           ["CMD", "portcheck", "--port", "\(T.healthcheck.port)"]
-			interval:       T.healthcheck.interval
-			timeout:        T.healthcheck.timeout
-			retries:        T.healthcheck.retries
-			start_period:   T.healthcheck.start_period
-			start_interval: T.healthcheck.start_interval
+			test:           *["CMD", "portcheck", "--port", "\(T.healthcheck.port)"] | _
+			interval:       *T.healthcheck.interval | string
+			timeout:        *T.healthcheck.timeout | string
+			retries:        *T.healthcheck.retries | int
+			start_period:   *T.healthcheck.start_period | string
+			start_interval: *T.healthcheck.start_interval | string
 		}
 	}
 
@@ -158,19 +165,19 @@ healthcheck: {
 		healthcheck: #postgres
 
 		dockerfile: healthcheck: {
-			test:         ["CMD", "pg_isready", "-h", T.healthcheck.host, "-p", "\(T.healthcheck.port)", "-d", T.healthcheck.db, "-U", T.healthcheck.user]
-			interval:     T.healthcheck.interval
-			timeout:      T.healthcheck.timeout
-			retries:      T.healthcheck.retries
-			start_period: T.healthcheck.start_period
+			test:         *["CMD", "pg_isready", "-h", T.healthcheck.host, "-p", "\(T.healthcheck.port)", "-d", T.healthcheck.db, "-U", T.healthcheck.user] | [...string]
+			interval:     *T.healthcheck.interval | string
+			timeout:      *T.healthcheck.timeout | string
+			retries:      *T.healthcheck.retries | int
+			start_period: *T.healthcheck.start_period | string
 		}
 		compose: healthcheck: {
-			test:           ["CMD", "pg_isready", "-h", T.healthcheck.host, "-p", "\(T.healthcheck.port)", "-d", T.healthcheck.db, "-U", T.healthcheck.user]
-			interval:       T.healthcheck.interval
-			timeout:        T.healthcheck.timeout
-			retries:        T.healthcheck.retries
-			start_period:   T.healthcheck.start_period
-			start_interval: T.healthcheck.start_interval
+			test:           *["CMD", "pg_isready", "-h", T.healthcheck.host, "-p", "\(T.healthcheck.port)", "-d", T.healthcheck.db, "-U", T.healthcheck.user] | _
+			interval:       *T.healthcheck.interval | string
+			timeout:        *T.healthcheck.timeout | string
+			retries:        *T.healthcheck.retries | int
+			start_period:   *T.healthcheck.start_period | string
+			start_interval: *T.healthcheck.start_interval | string
 		}
 	}
 
@@ -189,19 +196,19 @@ healthcheck: {
 		healthcheck: #redis
 
 		dockerfile: healthcheck: {
-			test:         ["CMD-SHELL", "redis-cli ping | grep PONG"]
-			interval:     T.healthcheck.interval
-			timeout:      T.healthcheck.timeout
-			retries:      T.healthcheck.retries
-			start_period: T.healthcheck.start_period
+			test:         *["CMD-SHELL", "redis-cli ping | grep PONG"] | [...string]
+			interval:     *T.healthcheck.interval | string
+			timeout:      *T.healthcheck.timeout | string
+			retries:      *T.healthcheck.retries | int
+			start_period: *T.healthcheck.start_period | string
 		}
 		compose: healthcheck: {
-			test:           ["CMD-SHELL", "redis-cli ping | grep PONG"]
-			interval:       T.healthcheck.interval
-			timeout:        T.healthcheck.timeout
-			retries:        T.healthcheck.retries
-			start_period:   T.healthcheck.start_period
-			start_interval: T.healthcheck.start_interval
+			test:           *["CMD-SHELL", "redis-cli ping | grep PONG"] | _
+			interval:       *T.healthcheck.interval | string
+			timeout:        *T.healthcheck.timeout | string
+			retries:        *T.healthcheck.retries | int
+			start_period:   *T.healthcheck.start_period | string
+			start_interval: *T.healthcheck.start_interval | string
 		}
 	}
 
@@ -225,19 +232,19 @@ healthcheck: {
 		healthcheck: #ollama
 
 		dockerfile: healthcheck: {
-			test:         ["CMD-SHELL", "ollama list | grep -q \(T.healthcheck.model)"]
-			interval:     T.healthcheck.interval
-			timeout:      T.healthcheck.timeout
-			retries:      T.healthcheck.retries
-			start_period: T.healthcheck.start_period
+			test:         *["CMD-SHELL", "ollama list | grep -q \(T.healthcheck.model)"] | [...string]
+			interval:     *T.healthcheck.interval | string
+			timeout:      *T.healthcheck.timeout | string
+			retries:      *T.healthcheck.retries | int
+			start_period: *T.healthcheck.start_period | string
 		}
 		compose: healthcheck: {
-			test:           ["CMD-SHELL", "ollama list | grep -q \(T.healthcheck.model)"]
-			interval:       T.healthcheck.interval
-			timeout:        T.healthcheck.timeout
-			retries:        T.healthcheck.retries
-			start_period:   T.healthcheck.start_period
-			start_interval: T.healthcheck.start_interval
+			test:           *["CMD-SHELL", "ollama list | grep -q \(T.healthcheck.model)"] | _
+			interval:       *T.healthcheck.interval | string
+			timeout:        *T.healthcheck.timeout | string
+			retries:        *T.healthcheck.retries | int
+			start_period:   *T.healthcheck.start_period | string
+			start_interval: *T.healthcheck.start_interval | string
 		}
 	}
 }

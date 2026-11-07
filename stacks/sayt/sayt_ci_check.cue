@@ -36,6 +36,7 @@ _c2_builds: strings.Contains(_c2_both_do, "--no-build") & false
 // `target "release"` binds `tags = [IMAGE]`, stripping every matrix member's
 // compose-supplied tag.
 _c4_both_do: (ci & {name: "c4", project: "p", dir: "d", deps: [":integrate:srcs"]}).cmd.builtin.do
-_c4_alias:  strings.Contains(_c4_both_do, "--print bayt | $bake") & true
-_c4_fresh:  strings.Contains(_c4_both_do, "up bayt --build ") & true
-_c4_no_hcl: strings.Contains(_c4_both_do, ".hcl") & false
+_c4_alias:     strings.Contains(_c4_both_do, "--print bayt | $bake") & true
+_c4_cacheonly: strings.Contains(_c4_both_do, "--set \"*.output=type=cacheonly\"") & true
+_c4_fresh:     strings.Contains(_c4_both_do, "up bayt --build ") & true
+_c4_no_hcl:    strings.Contains(_c4_both_do, ".hcl") & false

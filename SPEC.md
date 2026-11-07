@@ -44,7 +44,7 @@ from the target and merged at evaluation. Keyed entries (`defaultGlobs`,
     windows?: {do?, shell?}         // OS axis: each fully overrides do/shell
     linux?:   {do?, shell?}
     darwin?:  {do?, shell?}
-    dockerfile?: {                  // format axis: only the Dockerfile emitter reads it
+    dockerfile?: null | {           // format axis: only the Dockerfile emitter reads it; null skips RUN
         inject?, mounts?, secrets?, network?
         do?:      string            // RUN-only form; with no base `do`, no task is emitted
     }
@@ -155,23 +155,24 @@ that registry ref. A target's explicit `compose.image` overrides both.
 runs to completion: a `#cmd` (so `do`, `shell` and the `dockerfile` axis) plus
 `env`, `after` and `host`, without the `windows`/`linux`/`darwin` variants a
 container would ignore and process-compose cannot select. `expose` names the ports it listens on, each
-`{port, env}`. Like `healthcheck`, both are sugar over every projection; a field
-set both ways must agree, or generation fails. `host: false` keeps a process only
+`{port, env}`. Like `healthcheck`, both are the base across projections; a
+more-specific projection (`dockerfile`, `compose`, `"process-compose"`) overrides
+the base per field or key where set. `host: false` keeps a process only
 its image can run out of `.bayt/process-compose.yaml` and every host rule below.
 
 | | container | host |
 |---|---|---|
 | process | Dockerfile `ENTRYPOINT`, exec form | a process in `.bayt/process-compose.yaml` |
-| `env` | compose `environment` | process `environment`, peers rewritten |
+| `env` | compose `environment` | process `environment`, `#portRef` lowered to loopback |
 | `after` | compose `depends_on`, `service_*` | process `depends_on`, `process_*` |
 | `expose` | `EXPOSE`; `env` set to the canonical port | `env` set to the port's variable |
 
 **The process.** An image whose own entrypoint does work, as postgres's initdb
 and user switch, has that wrapper lifted into `do` (`docker-entrypoint.sh
-postgres`), so both sides run it. `ENTRYPOINT` resets only the `CMD` a base image
-carries, so `dockerfile.cmd` or `compose.command` beside the sugar fails
-generation rather than becoming its arguments, and a `dockerfile.entrypoint` or
-`compose.entrypoint` must be the same argv, as a list. A container's process
+postgres`), so both sides run it; an image whose upstream `ENTRYPOINT`/`CMD` runs
+the container sets `entrypoint.dockerfile: null` (or sets `dockerfile.entrypoint`
+/ `dockerfile.cmd` / `compose.command` / `compose.entrypoint`, which take
+precedence over the base `entrypoint`). A container's process
 starts from what its image baked in; an image whose process needs a wrapper
 says so in `dockerfile.do`. On the host the target's `activate` wraps the
 entrypoint and its probes, whole command and shell included, and
@@ -181,9 +182,11 @@ every process and probe: host toolchains are pinned by version in `activate`,
 which no lockfile lists.
 
 **Containers.** The compose side lowers only into a target with a `compose`
-block, which is what runs a container. A container's `after` names only peers
-that have one, and that its `deps` name, since a compose file includes only what
-its target depends on.
+block, which is what runs a container; `compose.environment` and
+`compose.depends_on` override the base `entrypoint.env` and `entrypoint.after`
+per key, and `"process-compose".env` overrides `entrypoint.env` per key on the
+host. A container's `after` names only peers that have one, and that its `deps`
+name, since a compose file includes only what its target depends on.
 
 **Ports.** A port reaches its process only through `env`, read directly or by
 the entrypoint's shell (`-p "$PORT"`), which expands at run time on both sides.
@@ -211,30 +214,23 @@ with another target's host process, or when the target publishing it has no
 compose service. A target that is both a host process and a container may
 publish the port its process moves by: launch starts it one way or the other.
 
-**Addresses.** A value names a peer as compose does, `<target>:<port>` or
-`<project>-<target>:<port>`, and the host projection rewrites it to `127.0.0.1`
-and the peer's variable; a process's own loopback references
-(`http://localhost:3000`) move with its ports. A port ends where a port ends, so
-`redis:7-alpine` is an image, `user:1234@` a password, `tcp(db:3306)` an address
-and `mirror.database:5432` another host; a whole value such as `postgres:18`
-beside a target named `postgres` still reads as an address. Under a key naming a
-host (a `_HOST`, `_HOSTNAME`, `_ADDR` or `_SERVER` suffix, or libpq's `PGHOST`), a
-whole value naming a peer becomes `127.0.0.1`. When the peer's ports move, a host
-key's port key (`DB_HOST`'s `DB_PORT`) must hold a port the peer exposes, and is
-rewritten with it; other host keys name such a peer as `<peer>:<port>`. Elsewhere a target's name
-is just a word, as a `POSTGRES_USER` of `postgres`. Only `env` is rewritten:
-generation fails on a value naming a port the peer does not expose, a peer as a
-URL host the rewrite cannot place, a service the host does not run, or an
-entrypoint command naming a peer. These rules read the project's own targets: a
-process-compose file runs one project, so another project's services are not
-peers.
+**Addresses.** `entrypoint.env` values are `#envValue` (`string | #portRef |
+[...(string | #portRef)]`). A `#portRef` (`{peer?, port, part, host?, prefix,
+suffix}`) names a port in the project's `expose` maps (a peer's when `peer` is
+set, else the target's own) and is composed into `<peer>:<port>` in compose and
+`127.0.0.1:${<VAR>:-<default>}` in `process-compose` (`part: "host"` or `"port"`
+selects the host or port alone; `host` overrides the hostname on both sides).
+Plain string values pass through untouched. Generation fails when a `#portRef`
+names an unknown target, a port the target does not expose, or (on the host) a
+peer that does not run on the host.
 
 **Expansion and probes.** process-compose expands `${…}` at load, from the
 launching environment, and reads `$$` as `$`; it renders a probe's command as a
 Go template too. Environment values and probes use that, as compose does; the
 entrypoint has every `$` doubled, so its own shell expands it at run time, as in
 a container. A host process using a `healthcheck` template gets the container's
-check as its readiness probe, on the host's spelling of each own port. A target
+check as its readiness probe, on the host's spelling of each own port (for HTTP,
+`healthcheck: {port, path, host?, scheme?}`). A target
 with no image takes the check alone, `healthcheck: bayt.healthcheck.#<kind> &
 {…}`, since the template also writes the Dockerfile and compose checks.
 microcheck's run through `bayt microcheck`, from checksum-pinned stubs that a
@@ -244,7 +240,8 @@ terminates a process that misses `failure_threshold` and skips what waits on it,
 so the threshold covers `start_period` as well as the retries; a duration compose
 would refuse fails generation. It waits forever for health a process has no probe
 to report, so `after: X: "healthy"` fails generation when X has none. A
-`process-compose.readiness_probe` beside a template's must agree with it.
+`dockerfile.healthcheck`, `compose.healthcheck`, or `process-compose.readiness_probe`
+overrides the template's check per field.
 
 **Running.** process-compose runs the file from the project directory, which
 `working_dir` and the in-tree paths resolve against: `process-compose -f

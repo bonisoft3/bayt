@@ -22,9 +22,9 @@ say:
   build:
     do: "nu tests/bayt_test.nu"
   test:
-    do: 'glob "**/*_test.nu" | par-each { |t| let r = (do { ^nu $t } | complete); print $"($r.stdout)($r.stderr)"; $r.exit_code } | math max | exit $in'
+    do: 'hide-env -i BAYT_CACHE_URL BAYT_CACHE_TOKEN BAYT_CACHE_REGISTRY BAYT_CACHE_ENABLED; glob "**/*_test.nu" | par-each { |t| let r = (do { ^nu $t } | complete); print $"($r.stdout)($r.stderr)"; $r.exit_code } | math max | exit $in'
   integrate:
-    do: 'glob "**/*_it.nu" | par-each { |t| let r = (do { ^nu $t } | complete); print $"($r.stdout)($r.stderr)"; $r.exit_code } | math max | exit $in'
+    do: 'hide-env -i BAYT_CACHE_URL BAYT_CACHE_TOKEN BAYT_CACHE_REGISTRY BAYT_CACHE_ENABLED; glob "**/*_it.nu" | par-each { |t| let r = (do { ^nu $t } | complete); print $"($r.stdout)($r.stderr)"; $r.exit_code } | math max | exit $in'
   # The frontend digest is stated in both images, in the arg every generated
   # build carries, and in four integration fixtures. They must agree or a
   # generated build and bayt's own build interpret Dockerfiles differently —

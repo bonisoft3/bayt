@@ -82,7 +82,8 @@ import (
 	darwin?:  {do?: string, shell?: #shell}
 
 	// Output-format axis — decorations applied only when emitting that format.
-	dockerfile?: {
+	// Set `dockerfile: null` to opt a host task cmd out of Dockerfile RUN emission.
+	dockerfile?: null | {
 		// Structured wrap. When set, the RUN line gets `--mount=type=
 		// secret,…` flags for each entry in `secrets`, and the cmd body
 		// is wrapped in a /bin/sh -c '<setup>; trap <teardown> EXIT;
@@ -149,7 +150,7 @@ import (
 	// runs. Enforce at the schema level so authors can't declare
 	// `shell: "exec"` (or "nu", "bash", etc.) alongside an inject
 	// block without a clear CUE error.
-	if dockerfile != _|_ && dockerfile.inject != _|_ {
+	if dockerfile != _|_ if dockerfile != null if dockerfile.inject != _|_ {
 		shell: "sh"
 	}
 }
@@ -1249,7 +1250,7 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 	// form-less one trips the empty-list index and fails generation. On the
 	// concrete list, not #cmd — the bare definition legitimately has neither.
 	_cmdForms: [for c in cmds {
-		[if c.do != _|_ {c.do}, if c.dockerfile != _|_ && c.dockerfile.do != _|_ {c.dockerfile.do}][0]
+		[if c.do != _|_ {c.do}, if c.dockerfile != _|_ if c.dockerfile != null if c.dockerfile.do != _|_ {c.dockerfile.do}][0]
 	}]
 
 	// cache — content-addressable cache.nu wrap behavior. Two

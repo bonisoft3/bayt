@@ -15,7 +15,7 @@ SAYT = ROOT / 'plugins/sayt'
 
 SERVER = {
     'expose': {'http': {'port': 8000, 'env': 'PORT'}},
-    'healthcheck': {'url': 'http://127.0.0.1:8000/', 'interval': '1s', 'start_period': '10s'},
+    'healthcheck': {'port': 8000, 'path': '/', 'interval': '1s', 'start_period': '10s'},
     'entrypoint': {'do': 'echo $$ > server.pid; exec python3 -m http.server "$PORT" --bind 127.0.0.1', 'shell': 'sh'},
     # The http template's probe binary is copied into an image; this one is never built.
     'dockerfile': {'from': {'name': 'python:3'}},
@@ -57,7 +57,7 @@ class ProcessCompose(unittest.TestCase):
             'integrate': {'taskfile': {}, 'srcs': {'globs': ['input.txt']},
                           'cmd': {'stage': {'do': 'cp input.txt staged.txt'}}, 'entrypoint': {
                 'do': check, 'shell': 'sh',
-                'env': {'SERVER_URL': 'http://server:8000/input.txt'},
+                'env': {'SERVER_URL': {'peer': 'server', 'port': 'http', 'prefix': 'http://', 'suffix': '/input.txt'}},
                 'after': after if after is not None else {'server': 'healthy'},
             }},
         }

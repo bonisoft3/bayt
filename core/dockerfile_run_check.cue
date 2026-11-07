@@ -72,3 +72,23 @@ _dr2_task: strings.Contains(_dr2_body, "task -t .bayt/Taskfile.yml bayt:check") 
 _dr2_not_inline: strings.Contains(_dr2_body, "echo leaf-command") & false
 _dr2_staged: strings.Contains(_dr2_body, "COPY .bayt/Taskfile.yml") & true
 _dr2_leaf: (#taskfileGen & {project: _dr2, depManifests: {}}).files.check.tasks.default.cmds & ["sh -c \"echo leaf-command\""]
+
+// Host-only cmd (`dockerfile: null`): emits a go-task in Taskfile, but no
+// RUN in Dockerfile (e.g. host binary provisioning when Dockerfile gets the
+// binary from its base image).
+_dr3: #project & {
+	name: "dr3"
+	dir:  "dr3"
+	activate: ""
+	targets: browser: {
+		taskfile: {}
+		dockerfile: from: name: "playwright:v1"
+		cmd: "mise":       {do: "mise install", shell: "sh"}
+		cmd: "playwright": {priority: 1, do: "playwright install chromium", shell: "sh", dockerfile: null}
+	}
+}
+_dr3_body: (#dockerComposeGen & {project: _dr3, depManifests: {}}).dockerfiles.browser
+_dr3_has_mise:       strings.Contains(_dr3_body, "mise install") & true
+_dr3_no_playwright:  strings.Contains(_dr3_body, "playwright install chromium") & false
+_dr3_tf:             (#taskfileGen & {project: _dr3, depManifests: {}}).files.browser.tasks
+_dr3_tf_playwright:  _dr3_tf._cmd_playwright.cmds & ["sh -c \"playwright install chromium\""]

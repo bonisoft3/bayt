@@ -302,8 +302,8 @@ _expandCopy: {
 			(n): (_uniqStrings & {in: list.Concat([
 				(_expandGlobs & {in: t.srcs.defaultGlobs}).out,
 				t.srcs.globs,
-				for _, c in t.cmd if c != null {(_expandGlobs & {in: c.srcs.defaultGlobs}).out},
-				for _, c in t.cmd if c != null {c.srcs.globs},
+				for _, c in t.cmd if c != null if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {(_expandGlobs & {in: c.srcs.defaultGlobs}).out},
+				for _, c in t.cmd if c != null if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c.srcs.globs},
 			])}).out
 		}
 	}
@@ -405,9 +405,13 @@ _expandCopy: {
 		// to bar in same-project.
 		for n, t in G.project.targets if t != null
 			if t.dockerfile != _|_ {
-			"\(n)_srcs": (_uniqStrings & {in: [
-				for dep in _transitiveDeps[n] {"\(dep)_srcs"}
-			]}).out
+			"\(n)_srcs": (_uniqStrings & {in: list.Concat([
+				[for dep in _transitiveDeps[n] if strings.HasSuffix(dep, "_srcs") {dep}],
+				[for dep in _transitiveDeps[n]
+					if !strings.HasSuffix(dep, "_srcs")
+					if !strings.HasSuffix(dep, "_outs")
+					if !strings.HasSuffix(dep, "_bayt") {"\(dep)_srcs"}],
+			])}).out
 		}
 	}
 
@@ -771,9 +775,12 @@ _expandCopy: {
 						host:  _e.host
 						for os in ["windows", "linux", "darwin"] if _e[os] != _|_ {(os): _e[os]}
 						if _e.dockerfile != _|_ {
-							dockerfile: {
-								if _e.dockerfile.do != _|_ {do: _e.dockerfile.do}
-								if _e.dockerfile.shell != _|_ {shell: _e.dockerfile.shell}
+							if _e.dockerfile == null {dockerfile: null}
+							if _e.dockerfile != null {
+								dockerfile: {
+									if _e.dockerfile.do != _|_ {do: _e.dockerfile.do}
+									if _e.dockerfile.shell != _|_ {shell: _e.dockerfile.shell}
+								}
 							}
 						}
 					}
@@ -781,6 +788,7 @@ _expandCopy: {
 					// The host probe derives from it (gen_process_compose).
 					if t.healthcheck != _|_ {healthcheck: t.healthcheck}
 				}
+				if t.entrypoint == _|_ if t["process-compose"] != _|_ {"process-compose": t["process-compose"]}
 				if t.expose != _|_ if len(t.expose) > 0 {expose: t.expose}
 				if t.dockerfile != _|_ {
 					// Merge defaultPreamble (framework #MapAsList, keyed)

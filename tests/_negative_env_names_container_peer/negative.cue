@@ -15,7 +15,7 @@ _p: bayt.#project & {
 		}
 		crud: entrypoint: {
 			do: "postgrest"
-			env: PG_URI: "postgres://database:5432/app"
+			env: PG_URI: {peer: "database", port: "pg", prefix: "postgres://", suffix: "/app"}
 		}
 	}
 }

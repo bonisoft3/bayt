@@ -22,7 +22,7 @@ _proc_project: #project & {
 			compose: {}
 		}
 		crud: healthcheck.http & {
-			healthcheck: url: "http://127.0.0.1:3001/ready"
+			healthcheck: {port: 3001, path: "/ready"}
 			expose: {
 				// Pinned where people type it; run mode still moves it.
 				http: {port: 3000, env: "PGRST_SERVER_PORT", host: 3300}
@@ -31,24 +31,17 @@ _proc_project: #project & {
 			entrypoint: {
 				do: "postgrest"
 				env: {
-					PGRST_DB_URI: "postgres://u:p@database:5432/app"
-					// A whole value naming a peer is a host; a word inside one is not.
-					DB_HOST: "database"
+					PGRST_DB_URI: {peer: "database", port: "pg", prefix: "postgres://u:p@", suffix: "/app"}
+					DB_HOST: {peer: "database", port: "pg", part: "host"}
 					DB_NOTE: "database migrations ran"
-					// A dotted hostname ending in a target's name is not the peer.
 					MIRROR: "mirror.database:5432"
-					// Under a key naming no host, a target's name is just a word.
 					DB_NAME: "database"
-					// A process names its own ports on loopback; they move too.
-					SELF: "http://localhost:3000/rpc"
-					// An image tag and a password are not addresses.
+					// A process names its own ports via #portRef without `peer`.
+					SELF: {port: "http", host: "localhost", prefix: "http://", suffix: "/rpc"}
 					CACHE_IMAGE: "database:18-alpine"
-					// ...not even on a port the peer exposes.
 					PG_IMAGE: "database:5432-alpine"
-					DB_ADDR:  "database"
-					// An address inside parentheses, as Go's MySQL DSN writes one.
-					GO_DSN: "u:p@tcp(database:5432)/app"
-					// A key ending in letters that spell a host is not a host key.
+					DB_ADDR: {peer: "database", port: "pg", part: "host"}
+					GO_DSN: ["u:p@tcp(", {peer: "database", port: "pg"}, ")/app"]
 					OBSERVER:  "database"
 					ADMIN_DSN: "postgres://database:1234@127.0.0.1:5432/app"
 				}
@@ -113,13 +106,13 @@ _proc_project: #project & {
 			taskfile: {}
 			deps: [":crud", ":worker"]
 			entrypoint: {
-				do:    "deno run check.ts ${CRUD_URL}"
+				do:    #"deno run check.ts ${CRUD_URL} \d+"#
 				shell: "sh"
 				env: {
-					CRUD_URL: "http://native-crud:3000/x"
-					// A host and its port key, both naming crud, whose port moves.
-					CRUD_HOST: "crud"
-					CRUD_PORT: "3000"
+					CRUD_URL:  {peer: "crud", port: "http", prefix: "http://", suffix: "/x"}
+					CRUD_HOST: {peer: "crud", port: "http", part: "host"}
+					CRUD_PORT: {peer: "crud", port: "http", part: "port"}
+					PATTERN:   #"{"refuse":"\\x00"}"#
 				}
 				after: crud: "healthy"
 			}
@@ -174,12 +167,14 @@ _proc: crud: {
 }
 _proc: database: readiness_probe: exec: command: "pg_isready -h localhost -p \(_proc_ref.pg) -d app -U postgres"
 _proc: integrate: {
-	// The process's own shell expands its variables, not process-compose.
-	entrypoint: ["sh", "-c", "deno run check.ts $${CRUD_URL}"]
+	// The process's own shell expands its variables, not process-compose, and
+	// backslashes reach argv and environment without process-compose collapsing `\\`.
+	entrypoint: ["sh", "-c", #"deno run check.ts $${CRUD_URL} \\d+"#]
 	environment: [
 		"CRUD_HOST=127.0.0.1",
 		"CRUD_PORT=\(_proc_ref.http)",
 		"CRUD_URL=http://127.0.0.1:\(_proc_ref.http)/x",
+		#"PATTERN={"refuse":"\\\\x00"}"#,
 	]
 }
 
@@ -306,17 +301,71 @@ _proc_embedded_project: #project & {
 _proc_embedded: (#processComposeGen & {project: _proc_embedded_project, depManifests: {}}).file.processes.srv
 _proc_embedded: readiness_probe: exec: command: "\(_microcheckHost) httpcheck http://localhost:3000/health"
 
+// More-specific projections (dockerfile, compose, process-compose) override
+// the base entrypoint, expose, and healthcheck per field or key.
+_proc_host_only_project: #project & {
+	name:     "host_only"
+	dir:      "services/host_only"
+	activate: ""
+	targets: launch: healthcheck.http & {
+		expose: http: {port: 8080, env: "PORT", host: 8080}
+		healthcheck: {port: 8080, path: "/health"}
+		entrypoint: {
+			do: "java -jar app.jar"
+			env: {
+				DB_URL: "jdbc:postgresql://127.0.0.1:5432/postgres"
+				MODE:   "base"
+			}
+		}
+		dockerfile: {
+			from: name: "alpine:3"
+			cmd: ["./gradlew", "run"]
+		}
+		compose: {
+			command: ["mise", "x", "--", "./gradlew", "run"]
+			environment: MODE: "container"
+			healthcheck: test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
+		}
+		"process-compose": {
+			env: MODE: "host"
+			readiness_probe: exec: command: "curl -sf http://127.0.0.1:8080/health"
+		}
+	}
+}
+_proc_host_only_pc: (#processComposeGen & {project: _proc_host_only_project, depManifests: {}}).file.processes.launch
+_proc_host_only_pc: {
+	entrypoint: ["java", "-jar", "app.jar"]
+	environment: ["DB_URL=jdbc:postgresql://127.0.0.1:5432/postgres", "MODE=host", "PORT=${LAUNCH_HTTP_PORT:-8080}"]
+	readiness_probe: {
+		exec: command: "curl -sf http://127.0.0.1:8080/health"
+		period_seconds: 1
+	}
+}
+_proc_host_only_dc: #dockerComposeGen & {project: _proc_host_only_project, depManifests: {}}
+_proc_host_only_no_ep: !strings.Contains(_proc_host_only_dc.dockerfiles.launch, "ENTRYPOINT") & true
+_proc_host_only_ex:    strings.Contains(_proc_host_only_dc.dockerfiles.launch, "EXPOSE 8080") & true
+_proc_host_only_svc:   _proc_host_only_dc.compose.files.launch.services."host_only-launch"
+_proc_host_only_svc: {
+	environment: {
+		DB_URL: "jdbc:postgresql://127.0.0.1:5432/postgres"
+		MODE:   "container"
+		PORT:   "8080"
+	}
+	healthcheck: test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
+}
+
 Tests: process_compose: {
-	host:    _proc
-	task:    _proc_tf
-	file:    _proc_file
-	runtime: _proc_rt
-	seconds: _proc_seconds
-	argv:    _proc_argv
+	host:      _proc
+	task:      _proc_tf
+	file:      _proc_file
+	runtime:   _proc_rt
+	seconds:   _proc_seconds
+	argv:      _proc_argv
 	container: [_proc_container, _proc_inc, _proc_pinned, _proc_bake]
-	door: _proc_docker.dockerfiles.door
+	door:       _proc_docker.dockerfiles.door
 	dockerfile: [_proc_dockerfile_ep, _proc_dockerfile_expose, _proc_bayt_scope]
-	compose: _proc_docker.compose.files.crud.services."native-crud"
-	bare: [_proc_bare, _proc_bare_image]
-	auth: [_proc_auth, _proc_auth_compose]
+	compose:    _proc_docker.compose.files.crud.services."native-crud"
+	bare:       [_proc_bare, _proc_bare_image]
+	auth:       [_proc_auth, _proc_auth_compose]
+	host_only:  [_proc_host_only_pc, _proc_host_only_no_ep, _proc_host_only_ex, _proc_host_only_svc]
 }

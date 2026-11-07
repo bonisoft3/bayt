@@ -6,7 +6,8 @@ const repo = ($source | path join ".." ".." ".." | path expand)
 def invoke [fixture: path, verb: string]: nothing -> record {
 	do {
 		cd $fixture
-		with-env {MISE_TRUSTED_CONFIG_PATHS: $repo} {
+		hide-env -i BAYT_CACHE_URL BAYT_CACHE_TOKEN BAYT_CACHE_REGISTRY BAYT_CACHE_ENABLED
+		with-env {MISE_TRUSTED_CONFIG_PATHS: $repo, BAYT_CACHE_DIR: ($fixture | path join ".cache")} {
 			^nu ($repo | path join "plugins/sayt/sayt.nu") $verb
 		}
 	} | complete

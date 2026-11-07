@@ -754,6 +754,8 @@ _copyParents: P={
 			if !t.dockerfile.incremental {[]},
 		])
 
+		let _dockerCmds = [for c in t.cmds if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c}]
+
 		// Mounts collected from target level + every cmd in the rulemap.
 		// Incremental mode runs all cmds through `task`, so its single
 		// RUN must carry every mount any cmd needs (gradle cache, pnpm
@@ -761,8 +763,8 @@ _copyParents: P={
 		// only that cmd's mounts.
 		_targetMountStrs: [for m in t.dockerfile.mounts {(_mount & {"m": m, project: t.project, name: t.name}).out}]
 		_cmdMountStrs: [
-			for c in t.cmds
-			if c.dockerfile != _|_ && c.dockerfile.mounts != _|_
+			for c in _dockerCmds
+			if c.dockerfile != _|_ if c.dockerfile.mounts != _|_
 			for m in c.dockerfile.mounts {
 				(_mount & {"m": m, project: t.project, name: t.name}).out
 			},
@@ -782,12 +784,13 @@ _copyParents: P={
 		_baytCacheMount: {type: "cache", target: "/root/.cache/bayt"}
 		_baytCacheMountStr: (_mount & {m: _baytCacheMount, project: t.project, name: t.name}).out
 
-		_injectedCommands: [for c in t.cmds if c.dockerfile != _|_ if c.dockerfile.inject != _|_ {c}]
+		_injectedCommands: [for c in _dockerCmds if c.dockerfile != _|_ if c.dockerfile.inject != _|_ {c}]
 		_incrementalExecution: [
 			if t.dockerfile.incremental && len(_injectedCommands) > 0 && len(t.cmds) != 1 {error("incremental RUN injection requires a single task command")},
 			for c in t.cmds if t.dockerfile.incremental if c.do == _|_ {error("incremental RUN requires a host task command")},
-			for c in t.cmds if t.dockerfile.incremental if c.dockerfile != _|_ if c.dockerfile.do != _|_ if c.do != c.dockerfile.do {error("incremental RUN cannot replace a task with dockerfile.do")},
-			for c in t.cmds if t.dockerfile.incremental if c.dockerfile != _|_ if c.dockerfile.shell != _|_ if c.shell != c.dockerfile.shell {error("incremental RUN cannot replace a task shell")},
+			for c in t.cmds if t.dockerfile.incremental if c.dockerfile != _|_ if c.dockerfile == null {error("incremental RUN cannot skip a task with dockerfile: null")},
+			for c in _dockerCmds if t.dockerfile.incremental if c.dockerfile != _|_ if c.dockerfile.do != _|_ if c.do != c.dockerfile.do {error("incremental RUN cannot replace a task with dockerfile.do")},
+			for c in _dockerCmds if t.dockerfile.incremental if c.dockerfile != _|_ if c.dockerfile.shell != _|_ if c.shell != c.dockerfile.shell {error("incremental RUN cannot replace a task shell")},
 			true,
 		][0]
 
@@ -817,7 +820,7 @@ _copyParents: P={
 				// list.FlattenN(_, 1) flattens the per-cmd
 				// [optional-COPY, RUN] sublists into one flat list.
 				list.FlattenN([
-					for c in t.cmds {
+					for c in _dockerCmds {
 						let _cmdOnlyGlobs = [for g in c.srcs.globs if !list.Contains(t.srcs.globs, g) {g}]
 						let _cmdOnlyExclude = [for e in c.srcs.exclude if !list.Contains(t.srcs.exclude, e) {e}]
 						let _cCopy = [
@@ -855,7 +858,12 @@ _copyParents: P={
 			if _ep != null && (_ep & [...string]) != _|_ && (_ep & string) == _|_ {_ep},
 			[],
 		][0]
-		let _sugarArgv = [if t.entrypoint != _|_ {(_containerArgv & {"t": t}).out}, []][0]
+		let _epSugarEnabled = [
+			if t.entrypoint == _|_ {false},
+			if t.entrypoint != _|_ if t.entrypoint.dockerfile != _|_ if t.entrypoint.dockerfile == null {false},
+			len(_epStr) == 0 && len(_epList) == 0 && len(_cmStr) == 0 && len(_cmList) == 0,
+		][0]
+		let _sugarArgv = [if _epSugarEnabled {(_containerArgv & {"t": t}).out}, []][0]
 		_entrypoint: [
 			if len(_epStr) > 0 {
 				"ENTRYPOINT \(_epStr)"
@@ -864,24 +872,12 @@ _copyParents: P={
 				let quoted = [for a in _epList {(_execArg & {in: a}).out}]
 				"ENTRYPOINT [\(strings.Join(quoted, ", "))]"
 			},
-			// The entrypoint sugar. The block's own entrypoint must be the same
-			// argv, written as a list, or the container and the host would run
-			// different processes; a CMD in the same Dockerfile would become its
-			// arguments, since Docker resets only the CMD a base image carries.
-			// "" and [] emit no instruction, so neither is a second process.
 			if t.entrypoint != _|_ if t.entrypoint.windows != _|_ || t.entrypoint.linux != _|_ || t.entrypoint.darwin != _|_ {
 				error("\(t.name): an entrypoint carries no windows/linux/darwin variants: a container selects none, and process-compose cannot")
 			},
-			if t.entrypoint != _|_ if len(_epStr) > 0 {
-				error("\(t.name): beside entrypoint, write dockerfile.entrypoint as a list")
-			},
-			if t.entrypoint != _|_ if len(_epList) > 0 if json.Marshal(_ep) != json.Marshal(_sugarArgv) {
-				error("\(t.name): dockerfile.entrypoint and entrypoint name different processes")
-			},
-			if t.entrypoint != _|_ if len(_cmStr) > 0 || len(_cmList) > 0 {
-				error("\(t.name): entrypoint and dockerfile.cmd together would run the CMD as the entrypoint's arguments")
-			},
-			if t.entrypoint != _|_ if len(_epStr) == 0 if len(_epList) == 0 {
+			// The entrypoint sugar is the base; an explicit dockerfile.entrypoint,
+			// dockerfile.cmd, or entrypoint.dockerfile: null overrides it.
+			if _epSugarEnabled {
 				"ENTRYPOINT \(json.Marshal(_sugarArgv))"
 			},
 		]
@@ -1131,7 +1127,7 @@ _copyParents: P={
 		// docs/bayt-synthetic-digest-investigation.md.
 		_ctxsStage: "\(R.t.name)_ctxs"
 		// Each cmd's srcs already hold the target's (see gen_bayt's _ownSrcGlobs).
-		_globs: (_uniqStrings & {in: list.Concat([R.t.srcs.globs, for c in R.t.cmds {c.srcs.globs}])}).out
+		_globs: (_uniqStrings & {in: list.Concat([R.t.srcs.globs, for c in R.t.cmds if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c.srcs.globs}])}).out
 		_srcCopy: [
 			if len(_globs) > 0 {
 				(_copyParents & {srcs: _globs, excludes: R.t.srcs.exclude}).out
@@ -1381,7 +1377,13 @@ _copyParents: P={
 				// pull_policy=missing.
 				let _runtimeDeps = [
 					if t.compose == _|_ {[]},
-					if t.compose != _|_ {[for k, _ in t.compose.depends_on & _waits {k}]},
+					if t.compose != _|_ {
+						let _mergedDeps = {
+							for k, v in _waits if t.compose.depends_on[k] == _|_ {(k): v}
+							for k, v in t.compose.depends_on {(k): v}
+						}
+						[for k, _ in _mergedDeps {k}]
+					},
 				][0]
 				// Preamble copy arms feed the same collector as
 				// `dockerfile.copy`: they render at a different position but
@@ -1541,27 +1543,19 @@ _copyParents: P={
 				pull_policy: "${BAYT_PULL_POLICY:-build}"
 			}
 			// A compose block is what runs a container, so the sugar's
-			// environment and waits join it there, and only there; a key both
-			// set must agree, or generation fails.
+			// environment and waits join it there, overridden per key by the
+			// compose block's own.
 			if t.compose != _|_ {
-				let _environment = t.compose.environment & (_containerEnv & {"t": t}).out
-				let _dependsOn = t.compose.depends_on & _waits
-				let r = t.compose
-				// The image's ENTRYPOINT is the sugar's: a compose command would
-				// become its arguments, and a compose entrypoint another process.
-				if t.entrypoint != _|_ {
-					if r.command != _|_ if r.command != null if json.Marshal(r.command) != "\"\"" if json.Marshal(r.command) != "[]" {
-						error("\(t.name): entrypoint and compose.command together would run the command as the entrypoint's arguments")
-					}
-					// Compose splits a string by shell words, which no comparison here
-					// can repeat; a list is compared as written.
-					if r.entrypoint != _|_ if (r.entrypoint & string) != _|_ {
-						error("\(t.name): beside entrypoint, write compose.entrypoint as a list")
-					}
-					if r.entrypoint != _|_ if r.entrypoint != null if (r.entrypoint & string) == _|_ if json.Marshal(r.entrypoint) != json.Marshal((_containerArgv & {"t": t}).out) {
-						error("\(t.name): compose.entrypoint and entrypoint name different processes")
-					}
+				let _baseEnv = (_containerEnv & {"t": t, files: G._m.files}).out
+				let _environment = {
+					for k, v in _baseEnv if t.compose.environment[k] == _|_ {(k): v}
+					for k, v in t.compose.environment {(k): v}
 				}
+				let _dependsOn = {
+					for k, v in _waits if t.compose.depends_on[k] == _|_ {(k): v}
+					for k, v in t.compose.depends_on {(k): v}
+				}
+				let r = t.compose
 				if r.image != _|_ {image:   r.image}
 				if r.command != _|_ {command: r.command}
 				if r.entrypoint != _|_ {entrypoint: r.entrypoint}

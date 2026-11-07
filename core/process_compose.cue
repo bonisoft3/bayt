@@ -47,6 +47,20 @@ _publishVar: P={
 	][0]
 }
 
+// A typed reference to a port in the project's `expose` maps (a peer's when
+// `peer` is set, else the target's own). Lowered to the container's address in
+// compose and to loopback with the port's host variable in process-compose.
+#portRef: close({
+	peer?:  string & !=""
+	port:   string & !=""
+	part:   *"addr" | "host" | "port"
+	host?:  string & !=""
+	prefix: *"" | string
+	suffix: *"" | string
+})
+
+#envValue: string | #portRef | [...(string | #portRef)]
+
 // The process the runtime starts, whether it serves until stopped or runs to
 // completion: a #cmd, rendered as a cmd renders (dockerfile.do and shell in an
 // image, activate on the host), plus what only a process has. A cmd's
@@ -59,10 +73,9 @@ _publishVar: P={
 	stop:     false
 	srcs: {globs: [], exclude: [], defaultGlobs: null, defaultExclude: null}
 
-	// The process's environment in compose and on the host. A value names a
-	// peer the way compose does; the host projection rewrites it to loopback
-	// (gen_process_compose).
-	env: [string]: string
+	// Base environment lowered into compose and process-compose; a projection's
+	// own environment overrides per key.
+	env: [string]: #envValue
 
 	// The same-project targets this process waits on, and for what. A
 	// one-shot that others need finished is waited on as "completed".
@@ -75,10 +88,12 @@ _publishVar: P={
 
 // Control and passthrough for the host projection. `activate` is the host
 // process's toolchain, entrypoint and probes, where it differs from the
-// target's own `activate`, which its build cmds run under. The probe and
-// lifecycle fields pass through verbatim.
+// target's own `activate`, which its build cmds run under. `env` overrides
+// `entrypoint.env` per key on the host. The probe and lifecycle fields pass
+// through verbatim.
 #processCompose: {
 	activate?: string
+	env?: [string]: #envValue
 	readiness_probe?: {...}
 	liveness_probe?: {...}
 	availability?: {...}
@@ -140,54 +155,90 @@ _hostPort: R={
 	target:  string
 	name:    string
 	port:    #port
+	let _var = [
+		if R.port.env != _|_ {(_portVar & {target: R.target, name: R.name}).out},
+		if R.port.publish != _|_ {(_publishVar & {target: R.target, name: R.name, port: R.port}).out},
+		"",
+	][0]
 	out: [
-		if R.port.env != _|_ {
-			"${\((_portVar & {target: R.target, name: R.name}).out):-\((_hostDefault & {project: R.project, target: R.target, name: R.name, port: R.port}).out)}"
+		if _var != "" {
+			"${\(_var):-\((_hostDefault & {project: R.project, target: R.target, name: R.name, port: R.port}).out)}"
 		},
 		"\(R.port.port)",
 	][0]
 }
 
-// Keys whose whole value is an address when it names a peer: a separated
-// suffix, so GHOST and OBSERVER are not, and libpq's PGHOST by name.
-_hostKeys: "(?i)((^|_)(host|hostname|addr|address|server)|^pghost)$"
-
-// The port key beside a host key: PGHOST's PGPORT, DB_host's DB_port.
-_portKey: K={
-	in:  string
-	out: regexp.ReplaceAll("host$", regexp.ReplaceAll("Host$", regexp.ReplaceAll("HOST$", K.in, "PORT"), "Port"), "port")
+#_renderRef: R={
+	target:    _
+	files:     _
+	procs?:    _
+	identity?: string
+	key:       string
+	ref:       #portRef
+	let _concrete = len(R.ref.port) > 0
+	let _peer = [if R.ref.peer != _|_ {R.ref.peer}, R.target.name][0]
+	let _hasTarget = R.files[_peer] != _|_
+	let _onHost = [if R.procs != _|_ && R.ref.peer != _|_ {R.procs[_peer] != _|_}, true][0]
+	let _hasPort = [if _hasTarget if R.files[_peer].expose != _|_ {R.files[_peer].expose[R.ref.port] != _|_}, false][0]
+	out: [
+		if _concrete if !_hasTarget {
+			error("\(R.target.name): \(R.key) names \(_peer), which is no target of this project")
+		},
+		if _concrete if !_onHost {
+			error("\(R.target.name): \(R.key) names \(_peer), which does not run on the host")
+		},
+		if _concrete if !_hasPort {
+			error("\(R.target.name): \(R.key) names port \(R.ref.port) of \(_peer), which \(_peer) does not expose")
+		},
+		if _concrete if _hasTarget && _onHost && _hasPort {
+			let _e = R.files[_peer].expose[R.ref.port]
+			let _h = [
+				if R.ref.host != _|_ {R.ref.host},
+				if R.procs == _|_ if R.ref.peer != _|_ {R.ref.peer},
+				"127.0.0.1",
+			][0]
+			let _p = [
+				if R.procs != _|_ {
+					(_hostPort & {project: R.identity, target: _peer, name: R.ref.port, port: _e}).out
+				},
+				"\(_e.port)",
+			][0]
+			let _core = [
+				if R.ref.part == "host" {_h},
+				if R.ref.part == "port" {_p},
+				"\(_h):\(_p)",
+			][0]
+			"\(R.ref.prefix)\(_core)\(R.ref.suffix)"
+		},
+	][0]
 }
 
-// Where a port ends: `redis:7-alpine` is an image, `user:1234@` a password,
-// `tcp(db:3306)` and `[db:3306]` an address.
-_portEnd: "([/?#,;\\s\"')\\]|&>]|$)"
-
-// A name as a regex literal: target and project names may carry a `.`.
-_reQuote: Q={
-	in:  string
-	out: strings.Replace(Q.in, ".", "\\.", -1)
-}
-
-// A peer named as compose names it — `<target>:<port>` or
-// `<project>-<target>:<port>` — as a pattern for what the host rewrite left.
-_peerName: P={
-	project: string
-	peer:    string
-	out:     "(^|[^A-Za-z0-9_.-])(\((_reQuote & {in: P.project}).out)-)?\((_reQuote & {in: P.peer}).out):[0-9]+\(_portEnd)"
-}
-
-// A peer as a URL's host, with or without a port, read after the userinfo is
-// gone (`_noUserinfo`): `://postgres:1234@` names a user, not a host.
-_peerHost: P={
-	project: string
-	peer:    string
-	out:     "(://|@)(\((_reQuote & {in: P.project}).out)-)?\((_reQuote & {in: P.peer}).out)([:/?#]|$)"
-}
-
-// A URL with its userinfo removed, so only its host is left to read.
-_noUserinfo: U={
-	in:  string
-	out: [if strings.Contains(U.in, "://") {regexp.ReplaceAll("://[^/@\\s]*@", U.in, "://")}, U.in][0]
+#_renderEnvValue: E={
+	target:    _
+	files:     _
+	procs?:    _
+	identity?: string
+	key:       string
+	in:        #envValue
+	let _ctx = {
+		target: E.target
+		files:  E.files
+		if E.procs != _|_ {procs: E.procs}
+		if E.identity != _|_ {identity: E.identity}
+		key: E.key
+	}
+	out: [
+		if (E.in & string) != _|_ {E.in},
+		if E.in.port != _|_ {(#_renderRef & _ctx & {ref: E.in}).out},
+		if (E.in & string) == _|_ && E.in.port == _|_ {
+			strings.Join([
+				for x in E.in {[
+					if (x & string) != _|_ {x},
+					if x.port != _|_ {(#_renderRef & _ctx & {ref: x}).out},
+				][0]},
+			], "")
+		},
+	][0]
 }
 
 // The way from a project at `depth` to the repository root.
@@ -268,28 +319,6 @@ _ownPort: O={
 	out: [if len(_own) > 0 {_own[0]}, O.port][0]
 }
 
-// A loopback URL with each own exposed port in its host spelling. Rewritten
-// rather than parsed, so any URL compose takes is one the host probe takes.
-_ownPortsInURL: U={
-	expose:  _
-	project: string
-	target:  string
-	url:     string
-	let _rules = [if strings.Contains(U.url, ":") for n, e in U.expose if e.env != _|_ {
-		// A loopback host carries no image tag or password, so any non-digit
-		// ends its port.
-		needle: ":\(e.port)"
-		from:   "(127\\.0\\.0\\.1|localhost|\\[::1\\]):\(e.port)([^0-9]|$)"
-		to:     "${1}:\(strings.Replace((_hostPort & {project: U.project, target: U.target, name: n, port: e}).out, "$", "$$", -1))${2}"
-	}]
-
-	// Only a rule whose port appears can match; a regex per value and rule
-	// otherwise dominates generation.
-	let _live = [for r in _rules if strings.Contains(U.url, r.needle) {r}]
-	_steps: [U.url, for i, r in _live {regexp.ReplaceAll(r.from, U._steps[i], r.to)}]
-	out: U._steps[len(_live)]
-}
-
 // The host's microcheck: the checkers the http and tcp templates copy into
 // images, run through bayt's checksum-pinned stubs (runtime/httpcheck.toml,
 // portcheck.toml). gen_process_compose points it at the bayt it generates for.
@@ -313,18 +342,26 @@ _containerArgv: C={
 	t: _
 	let _e = C.t.entrypoint
 	out: (_argv & {
-		do: [if _e.dockerfile != _|_ if _e.dockerfile.do != _|_ {_e.dockerfile.do}, _e.do][0]
-		shell: [if _e.dockerfile != _|_ if _e.dockerfile.shell != _|_ {_e.dockerfile.shell}, _e.shell][0]
+		do: [if _e.dockerfile != _|_ if _e.dockerfile != null if _e.dockerfile.do != _|_ {_e.dockerfile.do}, _e.do][0]
+		shell: [if _e.dockerfile != _|_ if _e.dockerfile != null if _e.dockerfile.shell != _|_ {_e.dockerfile.shell}, _e.shell][0]
 		activate: ""
 	}).out
 }
 
 // A container keeps every canonical port, so a port's variable is its number.
 _containerEnv: C={
-	t: _
+	t:     _
+	files: _
+	let _epEnv = {
+		if C.t.entrypoint != _|_ for k, v in C.t.entrypoint.env {
+			(k): (#_renderEnvValue & {target: C.t, files: C.files, key: k, in: v}).out
+		}
+	}
 	out: {
-		if C.t.entrypoint != _|_ {C.t.entrypoint.env}
-		if C.t.expose != _|_ for _, e in C.t.expose if e.env != _|_ {(e.env): "\(e.port)"}
+		if C.t.expose != _|_ for _, e in C.t.expose if e.env != _|_ if _epEnv[e.env] == _|_ {
+			(e.env): "\(e.port)"
+		}
+		_epEnv
 	}
 }
 

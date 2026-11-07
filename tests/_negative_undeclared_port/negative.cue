@@ -15,7 +15,7 @@ _p: bayt.#project & {
 		}
 		check: entrypoint: {
 			do: "check"
-			env: ADMIN_URL: "http://crud:3001/ready"
+			env: ADMIN_URL: {peer: "crud", port: "admin", prefix: "http://", suffix: "/ready"}
 		}
 	}
 }

@@ -210,7 +210,12 @@ import (
 				// task, filtered from both. `_outs` views are PRODUCTS:
 				// on host the base target's run is what materializes
 				// them, so the ref maps to the base task.
-				let _sameRefs = [for name in t.sameProjectDeps if !(name =~ "_(srcs|bayt)$") {"::bayt:\(strings.TrimSuffix(name, "_outs"))"}]
+				let _sameRefs = [
+					for name in t.sameProjectDeps
+					if !(name =~ "_(srcs|bayt)$")
+					let _base = strings.TrimSuffix(name, "_outs")
+					if _emit[_base] != _|_ {"::bayt:\(_base)"},
+				]
 				let _sameProjectDeps = (_uniqStrings & {in: _sameRefs}).out
 				let _crossRefs = [
 					for d in t.chainedDeps
@@ -250,6 +255,10 @@ import (
 						// `main check`.
 						if t.taskfile.incremental && t.cache.full && len(_taskCmds) == 1 {
 							if: "\(_baytPath) cache check --manifest '{{.TASKFILE_DIR}}/bayt.\(t.name).json' --stamp-file .task/bayt/\(t.name).hash; [ $? -ne 10 ]"
+						}
+
+						if len(_taskCmds) == 0 if t.taskfile.incremental {
+							cmds: [{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": t, mode: "stamp"}).out){{end}}"}]
 						}
 
 						if len(_taskCmds) == 1 {
