@@ -65,12 +65,12 @@ import (
 	// Capitalized aliases for the toolchain-stack imports so the
 	// lowercase `gradle:` / `pnpm:` umbrella exports below don't
 	// shadow them.
-	Cargo  "github.com/bonisoft3/bayt/stacks/cargo"
-	Go     "github.com/bonisoft3/bayt/stacks/go"
+	Cargo "github.com/bonisoft3/bayt/stacks/cargo"
+	Go "github.com/bonisoft3/bayt/stacks/go"
 	Gradle "github.com/bonisoft3/bayt/stacks/gradle"
-	Mise   "github.com/bonisoft3/bayt/stacks/mise"
-	Pnpm   "github.com/bonisoft3/bayt/stacks/pnpm"
-	Uv     "github.com/bonisoft3/bayt/stacks/uv"
+	Mise "github.com/bonisoft3/bayt/stacks/mise"
+	Pnpm "github.com/bonisoft3/bayt/stacks/pnpm"
+	Uv "github.com/bonisoft3/bayt/stacks/uv"
 )
 
 // setup — toolchain install. Runs once when .mise.lock changes.
@@ -104,8 +104,8 @@ doctor: {
 build: {
 	_depsDefault: *[":setup"] | [...string]
 	deps:         *_depsDefault | [...string]
-	taskfile: {}
-	dockerfile: {}
+	taskfile:     {}
+	dockerfile:   {}
 	vscode: group: {kind: "build", isDefault: true}
 	activate: string
 }
@@ -114,7 +114,7 @@ build: {
 // stack's chosen path (gradle: build/test-results/...; pnpm:
 // test-results/...). Toolchain stack sets outs.globs accordingly.
 test: {
-	deps: *[":build"] | [...string]
+	deps:     *[":build"] | [...string]
 	taskfile: {}
 	vscode: group: {kind: "test", isDefault: true}
 	activate: string
@@ -147,7 +147,7 @@ launch: {
 	skaffold: profiles: "bayt-dev": {
 		activation: [{command: "dev"}]
 		build: {
-			artifact: docker: dockerfile: ".bayt/Dockerfile.launch"
+			artifact: docker: dockerfile:  ".bayt/Dockerfile.launch"
 			tagPolicy: gitCommit: variant: "AbbrevCommitSha"
 		}
 	}
@@ -163,9 +163,9 @@ launch: {
 // be unremovable by consumers. Projects that need build-time
 // secrets declare them explicitly per-target.
 integrate: {
-	deps: *[":build"] | [...string]
+	deps:     *[":build"] | [...string]
 	taskfile: {}
-	compose: {up: true, manual: true}
+	compose:  {up: true, manual: true}
 }
 
 // release — shippable image. Bake produces the registry-bound image;
@@ -188,7 +188,7 @@ release: {
 	// deps default `:build`: a FROM-chaining release inherits it (no COPY);
 	// a release on a fresh packaging base that COPYs from build must narrow
 	// to `:build:outs`, else it bulk-ships the source tree into the image.
-	deps: *[":build"] | [...string]
+	deps:       *[":build"] | [...string]
 	dockerfile: {}
 	// Each profile is `*(struct) | null` so projects can opt out via
 	// `skaffold: profiles: "<name>": null`. Without the disjunction
@@ -228,7 +228,7 @@ verify: {
 // srcs live off the fragment — sayt.generate also bases custom
 // generate-shaped targets with their own srcs (xproto's descriptor).
 generate: {
-	deps: *[] | [...string]
+	deps:     *[] | [...string]
 	taskfile: {}
 }
 
@@ -267,8 +267,9 @@ lint: {
 //      COMPOSE_BAKE=true strips them.
 //   2. `compose up integrate` (no --build) runs the loaded integrate
 //      against its loaded depends_on chain.
-ci: C={
+ci: {
 	inject
+	project:  string
 	activate: ""
 	// The closure this runner brings up (.bayt/compose.<#closure>.closure.yaml)
 	// and the check it is, which names the inner stack
@@ -276,6 +277,10 @@ ci: C={
 	// set them on a closed #target.
 	#closure: *"integrate" | string
 	#check:   *#closure | string
+	let _proj = project
+	let _closure = #closure
+	let _check = #check
+
 	// Sources reach this stage only through a `:srcs` dep: the per-run values
 	// (image tag, cache scope, docker host) arrive as secrets, which buildkit
 	// keeps out of cache keys. Without one, the RUN layer's key holds no source
@@ -293,7 +298,7 @@ ci: C={
 				let _p = strings.Split(d, ":")
 				(d): {
 					view: [if len(_p) >= 3 {_p[2]}, ""][0]
-					qual: "\([if _p[0] == "" {C.project}, _p[0]][0]):\(_p[1])"
+					qual: "\([if _p[0] == "" {_proj}, _p[0]][0]):\(_p[1])"
 					sib:  "\(_p[0]):\(_p[1]):srcs"
 				}
 			}
@@ -336,8 +341,8 @@ ci: C={
 			  find /monorepo -path '*/.bayt/Dockerfile.*' -type f -exec sed -i "1i # syntax=$BUILDKIT_SYNTAX" {} \;
 			fi
 			[ -n "$BKID_PROJECT" ] || { echo "bkid: BKID_PROJECT is unset; sayt integrate names the inner stack" >&2; exit 1; }
-			p="${BKID_PROJECT}_\#(C.#check)"
-			f=.bayt/compose.\#(C.#closure).closure.yaml
+			p="${BKID_PROJECT}_\#(_check)"
+			f=.bayt/compose.\#(_closure).closure.yaml
 			[ -n "$DEPOT_TOKEN" ] && bake="depot bake --project $DEPOT_PROJECT_ID" || bake="docker buildx bake"
 			docker compose -p "$p" --profile '*' -f "$f" config | docker buildx bake --allow=fs.read=/monorepo -f - --print bayt | $bake -f - --set "*.output=type=cacheonly" ${SAYT_NO_CACHE:+--no-cache --set "*.cache-from=" --set "*.cache-to="} ${SAYT_NO_CACHE_FROM:+--set "*.cache-from="} ${SAYT_NO_CACHE_TO:+--set "*.cache-to="} bayt
 			docker compose -p "$p" --profile '*' -f "$f" down -v --timeout 0 --remove-orphans
@@ -421,7 +426,7 @@ gradle: bayt.#project & {
 		"build": *(build & Mise.exec & Gradle.assemble & bayt.incremental & {
 			dockerfile: from: ref: *":setup" | string
 		}) | null
-		"test": *(test & Mise.exec & Gradle.test) | null
+		"test":   *(test & Mise.exec & Gradle.test) | null
 		"launch": *(launch & Mise.exec & Gradle.run) | null
 		// integrate defaults `dockerfile.from.ref: ":build"` — the
 		// canonical FROM-chain for gradle projects. Brings in the
@@ -453,10 +458,10 @@ gradle: bayt.#project & {
 		// CUE picks the arm by structural fit (JibRelease's
 		// `dockerfile.from: null` distinguishes from the GradleRelease
 		// arm's gradle cmd + per-task outs).
-		"release": *(release & Mise.exec & Gradle.JibRelease) | (release & Mise.exec & Gradle.GradleRelease) | null
-		"verify":   *(verify   & Mise.exec & Gradle.check) | null
+		"release":  *(release & Mise.exec & Gradle.JibRelease) | (release & Mise.exec & Gradle.GradleRelease) | null
+		"verify":   *(verify & Mise.exec & Gradle.check) | null
 		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
-		"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+		"lint":     *(lint & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
 	}
 }
 
@@ -487,7 +492,7 @@ go: bayt.#project & {
 		"build": *(build & Mise.exec & Go.build & bayt.incremental & {
 			dockerfile: from: ref: ":setup"
 		}) | null
-		"test": *(test & Mise.exec & Go.test) | null
+		"test":   *(test & Mise.exec & Go.test) | null
 		"launch": *(launch & Mise.exec & Go.run) | null
 		"integrate": *(integrate & Mise.exec & Go.integrationTest & {
 			dockerfile: from: ref: ":build"
@@ -495,9 +500,9 @@ go: bayt.#project & {
 		// release carries no toolchain opinion: go deployables are image
 		// shapes the leaf provides (FROM + epilogue COPY of the binary).
 		"release":  *(release & Mise.exec) | null
-		"verify":   *(verify   & Mise.exec & Go.vet) | null
+		"verify":   *(verify & Mise.exec & Go.vet) | null
 		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
-		"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+		"lint":     *(lint & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
 	}
 }
 
@@ -544,11 +549,11 @@ go: bayt.#project & {
 			// deployable is an image shape the leaf provides, and python has
 			// no conventional entrypoint to default to. `Uv.toolEnv` is
 			// explicit here because they compose no fragment carrying it.
-			"launch":   *(launch  & Mise.exec & {env: Uv.toolEnv}) | null
+			"launch":   *(launch & Mise.exec & {env: Uv.toolEnv}) | null
 			"release":  *(release & Mise.exec & {env: Uv.toolEnv}) | null
-			"verify":   *(verify  & Mise.exec & {env: Uv.toolEnv}) | null
+			"verify":   *(verify & Mise.exec & {env: Uv.toolEnv}) | null
 			"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
-			"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+			"lint":     *(lint & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
 		}
 	}
 }
@@ -588,11 +593,11 @@ uv: (#uv).out
 			"integrate": *(integrate & Mise.exec & (Cargo.#integrationTest & {"integrationDir": integrationDir}).out & {
 				dockerfile: from: ref: ":build"
 			}) | null
-			"launch":   *(launch  & Mise.exec) | null
+			"launch":   *(launch & Mise.exec) | null
 			"release":  *(release & Mise.exec) | null
-			"verify":   *(verify  & Mise.exec & Cargo.clippy) | null
+			"verify":   *(verify & Mise.exec & Cargo.clippy) | null
 			"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
-			"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+			"lint":     *(lint & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
 		}
 	}
 }
@@ -681,12 +686,12 @@ pnpm: bayt.#project & {
 			// override `dockerfile.from` per-target. Default cmd is
 			// `true` (no-op): release is a packaging step whose RUN
 			// command varies per service.
-			cmd: "builtin": do: *"true" | string
+			cmd: "builtin": do:    *"true" | string
 			dockerfile: from: ref: ":build"
 		}) | null
-		"verify":   *(verify   & Mise.exec & Pnpm.testE2E) | null
+		"verify":   *(verify & Mise.exec & Pnpm.testE2E) | null
 		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
-		"lint":     *(lint     & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+		"lint":     *(lint & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
 	}
 }
 
@@ -718,7 +723,8 @@ pnpmWorkspace: bayt.#project & {
 		// plus the cross-stack workspace files. Deliberately free of
 		// pnpm state so JVM consumers' warm floors survive JS dep
 		// churn — the JS half lives in setup-js below.
-		"setup": P=setup & Mise.install & {
+		"setup": setup & Mise.install & {
+			let _srcs = srcs
 			srcs: globs: list.Concat([
 				Mise.installFiles.globs,
 				[
@@ -745,7 +751,7 @@ pnpmWorkspace: bayt.#project & {
 			// into every consumer's stage, invalidating BuildKit's
 			// per-COPY cache on any unrelated repo edit — a major
 			// cache-blast-radius regression.
-			outs: globs: list.Concat([P.srcs.globs, [".task/bayt/setup.hash"]])
+			outs: globs:                      list.Concat([_srcs.globs, [".task/bayt/setup.hash"]])
 			env: SHARP_IGNORE_GLOBAL_LIBVIPS: "1"
 			dockerfile: bayt.nubox
 			// The cmd (from Mise.install) is `mise install` only —
@@ -755,7 +761,8 @@ pnpmWorkspace: bayt.#project & {
 		// every member's package.json. Only pnpm-workspace consumers
 		// (their setup FROM-chains and deps name :setup-js) pay for
 		// JS dep churn.
-		"setup-js": J=setup & {
+		"setup-js": setup & {
+			let _srcs = srcs
 			dockerfile: from: ref: ":setup"
 			srcs: globs: list.Concat([
 				Pnpm.workspaceFiles.globs,
@@ -776,7 +783,7 @@ pnpmWorkspace: bayt.#project & {
 					"**/package.json",
 				],
 			])
-			outs: globs: J.srcs.globs
+			outs: globs: _srcs.globs
 			// The CAS put walks the filesystem (no git scoping): without
 			// this exclude `**/package.json` sweeps vendored node_modules
 			// manifests — huge entries, and a hash race against sibling

@@ -28,34 +28,38 @@ lockFiles: globs: [
 	"[d]eno.lock",
 ]
 
-#twoPhase: T={
+#twoPhase: {
 	do:  string
 	dir: *"${DENO_DIR:-/root/.cache/deno}" | string
-	let _body = #"d="\#(T.dir)"; s=\#(storeMount.target); k="$(sha256sum deno.lock */deno.lock */*/deno.lock deno.json */deno.json */*/deno.json package.json */package.json 2>/dev/null | sha256sum | cut -d' ' -f1)"; mkdir -p "$d" "$s"; for sub in remote npm jsr; do if [ -d "$s/$k/$sub" ]; then mkdir -p "$d/$sub" && cp -a "$s/$k/$sub"/. "$d/$sub"/ 2>/dev/null || true; fi; done; (\#(T.do)) || exit; t="$s/.tmp.$$"; rm -rf "$t"; mkdir -p "$t"; for sub in remote npm jsr; do if [ -d "$d/$sub" ]; then mkdir -p "$t/$sub" && cp -a "$d/$sub"/. "$t/$sub"/ 2>/dev/null || true; fi; done; rm -rf "$s/$k" && mv "$t" "$s/$k" 2>/dev/null || rm -rf "$t"; find "$s" -mindepth 1 -maxdepth 1 ! -name "$k" -exec rm -rf {} + 2>/dev/null || true"#
+	let _body = #"d="\#(dir)"; s=\#(storeMount.target); k="$(sha256sum deno.lock */deno.lock */*/deno.lock deno.json */deno.json */*/deno.json package.json */package.json 2>/dev/null | sha256sum | cut -d' ' -f1)"; mkdir -p "$d" "$s"; for sub in remote npm jsr; do if [ -d "$s/$k/$sub" ]; then mkdir -p "$d/$sub" && cp -a "$s/$k/$sub"/. "$d/$sub"/ 2>/dev/null || true; fi; done; (\#(do)) || exit; t="$s/.tmp.$$"; rm -rf "$t"; mkdir -p "$t"; for sub in remote npm jsr; do if [ -d "$d/$sub" ]; then mkdir -p "$t/$sub" && cp -a "$d/$sub"/. "$t/$sub"/ 2>/dev/null || true; fi; done; rm -rf "$s/$k" && mv "$t" "$s/$k" 2>/dev/null || rm -rf "$t"; find "$s" -mindepth 1 -maxdepth 1 ! -name "$k" -exec rm -rf {} + 2>/dev/null || true"#
 	out: "sh -c '\(strings.Replace(_body, "'", "'\\''", -1))'"
 }
 
-#duckdbTwoPhase: T={
+#duckdbTwoPhase: {
 	do:  string
 	dir: *"${DUCKDB_EXTENSIONS_DIR:-/app/extensions}" | string
-	let _body = #"d="\#(T.dir)"; s=\#(duckdbMount.target); mkdir -p "$d" "$s"; cp -a "$s"/. "$d"/ 2>/dev/null || true; (\#(T.do)) || exit; cd "$d" && find . -type f | while IFS= read -r f; do rel="${f#./}"; dst="$s/$rel"; [ -e "$dst" ] && continue; mkdir -p "$(dirname "$dst")"; tmp="$dst.tmp.$$"; cp -p "$rel" "$tmp" 2>/dev/null && mv -f "$tmp" "$dst" 2>/dev/null || rm -f "$tmp"; done"#
+	let _body = #"d="\#(dir)"; s=\#(duckdbMount.target); mkdir -p "$d" "$s"; cp -a "$s"/. "$d"/ 2>/dev/null || true; (\#(do)) || exit; cd "$d" && find . -type f | while IFS= read -r f; do rel="${f#./}"; dst="$s/$rel"; [ -e "$dst" ] && continue; mkdir -p "$(dirname "$dst")"; tmp="$dst.tmp.$$"; cp -p "$rel" "$tmp" 2>/dev/null && mv -f "$tmp" "$dst" 2>/dev/null || rm -f "$tmp"; done"#
 	out: "sh -c '\(strings.Replace(_body, "'", "'\\''", -1))'"
 }
 
 // #cmd — host + container command. Host runs `do` directly against the user's
 // native DENO_DIR; container runs the two-phase against storeMount.
-#cmd: C={
+#cmd: {
 	priority?: int
 	do:        string
 	shell:     *"exec" | string
 	srcs?:     _
+	let _do = do
+	let _shell = shell
+	let _priority = [if priority != _|_ {[priority]}, []][0]
+	let _srcs = [if srcs != _|_ {[srcs]}, []][0]
 	out: {
-		if C.priority != _|_ {"priority": C.priority}
-		if C.srcs != _|_ {"srcs": C.srcs}
-		"do":    C.do
-		"shell": C.shell
+		for p in _priority {priority: p}
+		for s in _srcs {srcs: s}
+		do:    _do
+		shell: _shell
 		dockerfile: {
-			do:     (#twoPhase & {do: C.do}).out
+			do:     (#twoPhase & {do: _do}).out
 			shell:  "sh"
 			mounts: [storeMount]
 		}
@@ -65,15 +69,18 @@ lockFiles: globs: [
 // #containerCmd — container-only RUN step (no host `do`, like stacks/go's
 // _twoPhase). Used on image-only targets (`cmd: builtin: null`) to populate
 // the image layer's DENO_DIR from storeMount after sources are copied.
-#containerCmd: C={
+#containerCmd: {
 	priority?: int
 	do:        string
 	srcs?:     _
+	let _do = do
+	let _priority = [if priority != _|_ {[priority]}, []][0]
+	let _srcs = [if srcs != _|_ {[srcs]}, []][0]
 	out: {
-		if C.priority != _|_ {"priority": C.priority}
-		if C.srcs != _|_ {"srcs": C.srcs}
+		for p in _priority {priority: p}
+		for s in _srcs {srcs: s}
 		dockerfile: {
-			do:     (#twoPhase & {do: C.do}).out
+			do:     (#twoPhase & {do: _do}).out
 			shell:  "sh"
 			mounts: [storeMount]
 		}
@@ -82,13 +89,15 @@ lockFiles: globs: [
 
 // #duckdbContainerCmd — container-only RUN step that populates DuckDB's
 // extension directory from duckdbMount.
-#duckdbContainerCmd: C={
+#duckdbContainerCmd: {
 	priority?: int
 	do:        string
+	let _do = do
+	let _priority = [if priority != _|_ {[priority]}, []][0]
 	out: {
-		if C.priority != _|_ {"priority": C.priority}
+		for p in _priority {priority: p}
 		dockerfile: {
-			do:     (#duckdbTwoPhase & {do: C.do}).out
+			do:     (#duckdbTwoPhase & {do: _do}).out
 			shell:  "sh"
 			mounts: [duckdbMount]
 		}
@@ -97,12 +106,14 @@ lockFiles: globs: [
 
 // #preamble — defaultPreamble entry that runs a two-phase deno command before
 // target.srcs COPYs so source edits do not invalidate the install layer.
-#preamble: P={
+#preamble: {
 	priority?: int
 	do:        string
+	let _do = do
+	let _priority = [if priority != _|_ {[priority]}, []][0]
 	out: {
-		if P.priority != _|_ {"priority": P.priority}
-		do:     (#twoPhase & {do: P.do}).out
+		for p in _priority {priority: p}
+		do:     (#twoPhase & {do: _do}).out
 		shell:  "sh"
 		mounts: [storeMount]
 	}
@@ -118,12 +129,13 @@ install: {
 }
 
 // #cache — `deno cache --frozen <entrypoints>` as a composable cmd fragment.
-#cache: C={
+#cache: {
 	entrypoints: string
 	frozen:      *true | bool
-	let _flag = [if C.frozen {"--frozen "}, ""][0]
+	let _flag = [if frozen {"--frozen "}, ""][0]
+	let _entrypoints = entrypoints
 	out: cmd: "deno-cache": (#containerCmd & {
 		priority: -1
-		do:       "deno cache \(_flag)\(C.entrypoints)"
+		do:       "deno cache \(_flag)\(_entrypoints)"
 	}).out
 }

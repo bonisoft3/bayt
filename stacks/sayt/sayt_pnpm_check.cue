@@ -14,14 +14,14 @@ _p1: pnpm & {
 }
 
 _p1: activate: "mise x --"
-_p1: targets: setup: cmd: "builtin": do:   "pnpm install --frozen-lockfile"
-_p1: targets: build: cmd: "builtin": do:   "pnpm build"
+_p1: targets: setup: cmd: "builtin": do: "pnpm install --frozen-lockfile"
+_p1: targets: build: cmd: "builtin": do: "pnpm build"
 
 // Install shape: single materializing RUN, store cache mount, keyed
 // on manifest + (optional) project-local lockfile.
 _p1: targets: setup: cmd: "pnpm": {
 	dockerfile: mounts: [{type: "cache", target: "/root/.local/share/pnpm/store"}]
-	srcs: globs: ["package.json", "[p]npm-lock.yaml"]
+	srcs: globs:        ["package.json", "[p]npm-lock.yaml"]
 }
 
 // Pin the exported flag set — consumer overrides interpolate it, so a
@@ -36,8 +36,8 @@ _p2: pnpm & {
 	targets: {
 		"launch": {
 			compose: develop: watch: [
-				{action: "sync",    path: "./",               target: "/app",               ignore: ["node_modules", ".nuxt", ".output"]},
-				{action: "rebuild", path: "./package.json",   target: "/app/package.json",   ignore: []},
+				{action: "sync", path: "./", target: "/app", ignore: ["node_modules", ".nuxt", ".output"]},
+				{action: "rebuild", path: "./package.json", target: "/app/package.json", ignore: []},
 				{action: "rebuild", path: "./pnpm-lock.yaml", target: "/app/pnpm-lock.yaml", ignore: []},
 			]
 		}
@@ -45,7 +45,7 @@ _p2: pnpm & {
 }
 
 _p2: targets: launch: compose: develop: watch: [
-	{action: "sync", path:    "./", target:               "/app", ignore:               ["node_modules", ".nuxt", ".output"]},
-	{action: "rebuild", path: "./package.json", target:   "/app/package.json", ignore:   []},
+	{action: "sync", path: "./", target: "/app", ignore: ["node_modules", ".nuxt", ".output"]},
+	{action: "rebuild", path: "./package.json", target: "/app/package.json", ignore: []},
 	{action: "rebuild", path: "./pnpm-lock.yaml", target: "/app/pnpm-lock.yaml", ignore: []},
 ]

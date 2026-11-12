@@ -64,7 +64,7 @@ projectFile: "pyproject.toml"
 // BOTH __pycache__ spellings are required: `**/x/**` leaves the empty
 // dir entries in the fileset, `**/x` prunes the dir.
 _pycacheExclude: {
-	"uv-pycache-dir": {glob: "**/__pycache__"}
+	"uv-pycache-dir":  {glob: "**/__pycache__"}
 	"uv-pycache-tree": {glob: "**/__pycache__/**"}
 }
 
@@ -89,7 +89,7 @@ sync: {
 	// `uv run --no-sync` keeps using the venv from before it.
 	srcs: defaultGlobs: {
 		"uv-project": {glob: projectFile}
-		"uv-lock": {glob: "uv.lock"}
+		"uv-lock":    {glob: "uv.lock"}
 	}
 	cmd: "uv": {
 		do: (*"uv sync \(syncFlags)" | string) & =~"--no-install-project"
@@ -148,7 +148,7 @@ bytecode: env: UV_COMPILE_BYTECODE: "1"
 		srcs: {
 			defaultGlobs: {
 				"uv-project": {glob: projectFile}
-				"uv-src": *{glob: "\(srcDir)/**/*"} | null
+				"uv-src":     *{glob: "\(srcDir)/**/*"} | null
 			}
 			defaultExclude: _pycacheExclude
 		}
@@ -182,8 +182,8 @@ build: (#build).out
 		srcs: {
 			defaultGlobs: {
 				"uv-project": {glob: projectFile}
-				"uv-src": *{glob: "\(srcDir)/**/*"} | null
-				"uv-unit": *{glob: "\(unitDir)/**/*"} | null
+				"uv-src":     *{glob: "\(srcDir)/**/*"} | null
+				"uv-unit":    *{glob: "\(unitDir)/**/*"} | null
 			}
 			defaultExclude: _pycacheExclude
 		}
@@ -199,7 +199,7 @@ test: (#test).out
 		env: toolEnv
 		srcs: {
 			defaultGlobs: {
-				"uv-project": {glob: projectFile}
+				"uv-project":     {glob: projectFile}
 				"uv-integration": *{glob: "\(integrationDir)/**/*"} | null
 			}
 			defaultExclude: _pycacheExclude

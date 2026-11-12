@@ -35,7 +35,7 @@ _store: {type: "cache", target: "/zypper-store", scope: "global"}
 // No clean tail: every `zypper clean` empties the mount, `--metadata`
 // included despite the name, and with the cache mounted there is nothing
 // left in the layer to reclaim.
-#install: I={
+#install: {
 	// What this stage needs. Pinned, unlike apt and apk: leap retains
 	// versions for the life of a release, so a pin resolves for as long as
 	// the base image does.
@@ -55,17 +55,17 @@ _store: {type: "cache", target: "/zypper-store", scope: "global"}
 
 	// See distros/apt for `then` / `purge`. `--clean-deps` drops the
 	// dependencies that came in alongside the named packages.
-	then: [...string & =~"[^[:space:]]" & !~"\n"]
+	then:  [...string & =~"[^[:space:]]" & !~"\n"]
 	purge: [...string & !="" & !~"\n"]
 
-	let _then = [if len(I.then) > 0 {"; (cd \"$p\" && \(strings.Join(I.then, " && "))) || exit"}, ""][0]
-	let _purge = [if len(I.purge) > 0 {"; zypper -n remove --clean-deps \(strings.Join(I.purge, " ")) || exit"}, ""][0]
+	let _then = [if len(then) > 0 {"; (cd \"$p\" && \(strings.Join(then, " && "))) || exit"}, ""][0]
+	let _purge = [if len(purge) > 0 {"; zypper -n remove --clean-deps \(strings.Join(purge, " ")) || exit"}, ""][0]
 
 	// Seed, install, publish, then revert. An rpm lands at
 	// `packages/<arch>/` or at `packages/<repo>/<arch>/` depending on which
 	// repo served it, and the leap base ships no `find`, so each depth gets
 	// its own fixed glob.
-	let _pwd = [if len(I.then) > 0 {"p=\"$PWD\"; "}, ""][0]
+	let _pwd = [if len(then) > 0 {"p=\"$PWD\"; "}, ""][0]
 	let _seed = "s=/zypper-store; d=/var/cache/zypp/packages; mkdir -p \"$s\" \"$d\"; cp -r \"$s\"/. \"$d\"/ 2>/dev/null || true; "
 
 	// The leap base serves its repos over plaintext http; where those
@@ -79,8 +79,8 @@ _store: {type: "cache", target: "/zypper-store", scope: "global"}
 	let _publish = "; cd \"$d\" && for f in */*.rpm */*/*.rpm; do [ -f \"$f\" ] || continue; o=\"$s/$f\"; [ -e \"$o\" ] && continue; mkdir -p \"$(dirname \"$o\")\"; t=\"$(mktemp \"$(dirname \"$o\")/.pXXXXXX\")\" && cp \"$f\" \"$t\" && mv -f \"$t\" \"$o\"; done; zypper -n modifyrepo --no-keep-packages --all || true"
 
 	out: {
-		do:    "\(_pwd)\(_seed)\(_https)zypper -n modifyrepo --keep-packages --all && zypper -n install \(strings.Join(list.Concat([I.pkgs, I.lock]), " ")) || exit\(_publish)\(_then)\(_purge)"
-		shell: "sh"
+		do:     "\(_pwd)\(_seed)\(_https)zypper -n modifyrepo --keep-packages --all && zypper -n install \(strings.Join(list.Concat([pkgs, lock]), " ")) || exit\(_publish)\(_then)\(_purge)"
+		shell:  "sh"
 		mounts: [_store, _cacheMount]
 	}
 }
@@ -112,5 +112,3 @@ _store: {type: "cache", target: "/zypper-store", scope: "global"}
 		user:  "1000:1000"
 	}
 }
-
-

@@ -17,24 +17,24 @@ _store: {type: "cache", target: "/apk-store", scope: "global"}
 // publishes no snapshot archive, so a pin that resolves today can 404
 // later. Where byte-reproducibility matters a `COPY --from=<pinned digest>`
 // beats installing at all — an image digest cannot be pruned.
-#install: I={
+#install: {
 	pkgs: [...string]
 
 	// See distros/apt for `then` / `purge`. `apk del` drops the
 	// dependencies that came in alongside the named packages.
-	then: [...string & =~"[^[:space:]]" & !~"\n"]
+	then:  [...string & =~"[^[:space:]]" & !~"\n"]
 	purge: [...string & !="" & !~"\n"]
 
-	let _then = [if len(I.then) > 0 {"; (cd \"$p\" && \(strings.Join(I.then, " && "))) || exit"}, ""][0]
-	let _purge = [if len(I.purge) > 0 {"; apk del \(strings.Join(I.purge, " ")) || exit"}, ""][0]
+	let _then = [if len(then) > 0 {"; (cd \"$p\" && \(strings.Join(then, " && "))) || exit"}, ""][0]
+	let _purge = [if len(purge) > 0 {"; apk del \(strings.Join(purge, " ")) || exit"}, ""][0]
 
-	let _pwd = [if len(I.then) > 0 {"p=\"$PWD\"; "}, ""][0]
+	let _pwd = [if len(then) > 0 {"p=\"$PWD\"; "}, ""][0]
 	let _seed = "s=/apk-store; d=/var/cache/apk; mkdir -p \"$s\" \"$d\"; cp -r \"$s\"/. \"$d\"/ 2>/dev/null || true; "
 	let _publish = "; cd \"$d\" && for f in *.apk; do [ -f \"$f\" ] || continue; o=\"$s/$f\"; [ -e \"$o\" ] && continue; t=\"$(mktemp \"$s/.pXXXXXX\")\" && cp \"$f\" \"$t\" && mv -f \"$t\" \"$o\"; done; :"
 
 	out: {
-		do:    "\(_pwd)\(_seed)apk add --cache-dir=/var/cache/apk \(strings.Join(I.pkgs, " ")) || exit\(_publish)\(_then)\(_purge)"
-		shell: "sh"
+		do:     "\(_pwd)\(_seed)apk add --cache-dir=/var/cache/apk \(strings.Join(pkgs, " ")) || exit\(_publish)\(_then)\(_purge)"
+		shell:  "sh"
 		mounts: [_store, _cacheMount]
 	}
 }
@@ -85,5 +85,3 @@ _store: {type: "cache", target: "/apk-store", scope: "global"}
 		user:  "70:70"
 	}
 }
-
-

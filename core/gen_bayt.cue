@@ -28,37 +28,43 @@ _expandGlobs: {
 // _mount / _runForm, so a preamble entry and a cmd of the same shape emit
 // byte-identical lines — including emitter-owned cache-mount id/sharing.
 // No `activate` wrap: the preamble runs before any toolchain is staged.
-_preambleLine: P={
+_preambleLine: {
 	v:       _
 	project: string
 	target:  string
 	out:     string
+	let _project = project
+	let _target = target
+
 	// The RUN arm is unconditional (last), so the list is never empty when
 	// `v` is unconstrained — an all-`if` list would index out of range on
 	// this helper's own standalone evaluation. Same shape as _expandGlobs.
 	// A real entry can't fall through by mistake: the schema's closed
 	// disjunction guarantees one arm's fields are present, so an entry
 	// reaching here without `do` errors on the missing reference.
-	let _mountStrs = [for m in P.v.mounts {(_mount & {"m": m, project: P.project, name: P.target}).out}]
+	let _mountStrs = [for m in v.mounts {(_mount & {"m": m, project: _project, name: _target}).out}]
 	let _prefix = [if len(_mountStrs) > 0 {strings.Join(_mountStrs, " ") + " "}, ""][0]
 	out: [
-		if P.v.line != _|_ {P.v.line},
-		if P.v.copy != _|_ {(_copyLine & {c: P.v.copy}).out},
-		(_runForm & {prefix: _prefix, shell: P.v.shell, do: P.v.do}).out,
+		if v.line != _|_ {v.line},
+		if v.copy != _|_ {(_copyLine & {c: v.copy}).out},
+		(_runForm & {prefix: _prefix, shell: v.shell, do: v.do}).out,
 	][0]
 }
 
 // _expandPreamble — flatten a defaultPreamble #MapAsList into rendered
 // Dockerfile lines. `project`/`target` key the cache-mount ids.
-_expandPreamble: E={
-	in:      null | #MapAsList
+_expandPreamble: {
+	in:      null | {[string]: _}
 	project: string
 	target:  string
-	out: [...string]
+	out:     [...string]
+	let _in = in
+	let _project = project
+	let _target = target
 	out: [
-		if E.in == null {[]},
-		[for v in (#MapToList & {in: E.in}).out {
-			(_preambleLine & {"v": v, project: E.project, target: E.target}).out
+		if _in == null {[]},
+		[for v in (#MapToList & {in: _in}).out {
+			(_preambleLine & {"v": v, project: _project, target: _target}).out
 		}],
 	][0]
 }
@@ -67,41 +73,43 @@ _expandPreamble: E={
 // entries, dropping the map-key `name` (#MapToList already drops priority)
 // so each element is a plain copy entry ready to concat with `copy`.
 _expandCopy: {
-	in:  null | #MapAsList
+	in:  null | {[string]: _}
 	out: [...]
 	out: [if in == null {[]}, [for v in (#MapToList & {"in": in}).out {{for k, x in v if k != "name" {(k): x}}}]][0]
 }
 
-#manifestGen: G={
+#manifestGen: {
 	project: #project
 	// Flat map of cross-project dep string → pre-computed manifest object.
 	// Injected by nushell (second-pass CUE export with stdin JSON).
 	// Default {[string]: _} means same-project-only projects work without
 	// injection; any string key returns _ (unconstrained) rather than _|_.
 	depManifests: {[string]: _}
+	let _project = project
+	let _depManifests = depManifests
 
 	// Empty and dot name the workspace root, at depth zero.
 	_depth: [
-		if G.project.dir == "" || G.project.dir == "." {0},
-		if G.project.dir != "" && G.project.dir != "." {len(strings.Split(G.project.dir, "/"))},
+		if _project.dir == "" || _project.dir == "." {0},
+		if _project.dir != "" && _project.dir != "." {len(strings.Split(_project.dir, "/"))},
 	][0]
 
 	// Prefix for emitted paths; a root project has no directory segment.
 	_dirPath: [
-		if G.project.dir == "" || G.project.dir == "." {""},
-		if G.project.dir != "" && G.project.dir != "." {"\(G.project.dir)/"},
+		if _project.dir == "" || _project.dir == "." {""},
+		if _project.dir != "" && _project.dir != "." {"\(_project.dir)/"},
 	][0]
 
 	projectManifest: {
-		name:     G.project.name
-		dir:      G.project.dir
-		activate: G.project.activate
+		name:     _project.name
+		dir:      _project.dir
+		activate: _project.activate
 		// Mirrors #project.depot; generate.nu gates the depot pair on it.
-		depot: G.project.depot
+		depot: _project.depot
 		// Targets the project actually emits — null entries (a project
 		// opting out of an inherited target via `"<target>": null`) are
 		// filtered here so downstream consumers only see live targets.
-		targets: [for n, t in G.project.targets if t != null {n}]
+		targets: [for n, t in _project.targets if t != null {n}]
 
 		// Cross-project dirs reached via string deps containing ":",
 		// transitively. Single source of truth for "which other projects
@@ -114,13 +122,13 @@ _expandCopy: {
 		// order: a dep is addressed by name, which a mirror that relocates
 		// its dir leaves alone.
 		crossProjects: [for i, p in _crossProjectsAll
-			if !list.Contains(list.Slice(_crossProjectDirsAll, 0, i), p.dir) {p}]
+		if !list.Contains(list.Slice(_crossProjectDirsAll, 0, i), p.dir) {p}]
 
 		// Gradle-stack targets pass `--init-script .bayt/init.gradle.kts`
 		// (stacks/gradle _initFlag). Emitters gate the file and its COPY
 		// on this, so non-gradle projects carry no gradle residue.
 		gradleInit: len([
-			for n, t in G.project.targets if t != null
+			for n, t in _project.targets if t != null
 			for c in t.cmds if c.do != _|_ if strings.Contains(c.do, "init.gradle.kts") {1},
 		]) > 0
 	}
@@ -131,15 +139,16 @@ _expandCopy: {
 	// fails with `conflicting values "internal" and "public"`.
 	_buildCrossEntry: {
 		ref: string
+		let _ref = ref
 		out: {
-			_visibility: G.depManifests[ref].visibility & "public"
-			name:    G.depManifests[ref].name
-			project: G.depManifests[ref].project
-			if G.depManifests[ref].discriminator != _|_ {discriminator: G.depManifests[ref].discriminator}
-			dir:     G.depManifests[ref].dir
+			_visibility: _depManifests[_ref].visibility & "public"
+			name:        _depManifests[_ref].name
+			project:     _depManifests[_ref].project
+			if _depManifests[_ref].discriminator != _|_ {discriminator: _depManifests[_ref].discriminator}
+			dir: _depManifests[_ref].dir
 			outs: {
-				globs:   G.depManifests[ref].outs.globs
-				exclude: G.depManifests[ref].outs.exclude
+				globs:   _depManifests[_ref].outs.globs
+				exclude: _depManifests[_ref].outs.exclude
 			}
 		}
 	}
@@ -165,7 +174,7 @@ _expandCopy: {
 	// before cross manifests load, while those names are still incomplete,
 	// and a struct label must be concrete.
 	_targetCrossDeps: {
-		for n, t in G.project.targets if t != null {
+		for n, t in _project.targets if t != null {
 			let _fr = (_fromRef & {tgt: t}).out
 			let _depEntries = [
 				for d in t.deps
@@ -176,28 +185,29 @@ _expandCopy: {
 			let _fromEntries = [
 				if strings.Contains(_fr, ":") if !strings.HasPrefix(_fr, ":") {(_buildCrossEntry & {ref: _fr}).out},
 			]
-			let _all  = list.Concat([_depEntries, _fromEntries])
+			let _all = list.Concat([_depEntries, _fromEntries])
 			let _keys = [for x in _all {"\(x.project)-\(x.name)"}]
 			(n): [for i, x in _all if !list.Contains(list.Slice(_keys, 0, i), _keys[i]) {x}]
 		}
+
 		// Synthetic `<n>_srcs`: parent's cross-project deps flipped to
 		// their `:srcs` siblings. Entries whose name already ends with
 		// `_srcs` pass through (the parent already referenced the
 		// upstream's `:srcs` variant directly); `_outs` entries are
 		// dropped (compiled artifacts don't belong in a srcs closure);
 		// plain entries get the `:srcs` variant if it exists in
-		// G.depManifests (skip otherwise — parent had no srcs synthetic).
-		for n, t in G.project.targets if t != null
-			if t.dockerfile != _|_ {
+		// _depManifests (skip otherwise — parent had no srcs synthetic).
+		for n, t in _project.targets if t != null
+		if t.dockerfile != _|_ {
 			"\(n)_srcs": list.Concat([
 				[for d in _targetCrossDeps[n] if strings.HasSuffix(d.name, "_srcs") {d}],
 				[for d in _targetCrossDeps[n]
-					if !strings.HasSuffix(d.name, "_srcs")
-					if !strings.HasSuffix(d.name, "_outs")
-					let _srcsRef = "\(d.project):\(d.name):srcs"
-					if G.depManifests[_srcsRef] != _|_ {
-						(_buildCrossEntry & {ref: _srcsRef}).out
-					}],
+				if !strings.HasSuffix(d.name, "_srcs")
+				if !strings.HasSuffix(d.name, "_outs")
+				let _srcsRef = "\(d.project):\(d.name):srcs"
+				if _depManifests[_srcsRef] != _|_ {
+					(_buildCrossEntry & {ref: _srcsRef}).out
+				}],
 			])
 		}
 	}
@@ -216,12 +226,12 @@ _expandCopy: {
 	// outs lookup fails loudly at generate time; scaffolding deps are
 	// per-target (`:foo:bayt`).
 	_sameProjectRefs: [
-		for n, t in G.project.targets if t != null
+		for n, t in _project.targets if t != null
 		for d in t.deps if strings.HasPrefix(d, ":") {d},
-		for n, t in G.project.targets if t != null
+		for n, t in _project.targets if t != null
 		let _fr = (_fromRef & {tgt: t}).out
 		if strings.HasPrefix(_fr, ":") {_fr},
-		for n, t in G.project.targets if t != null
+		for n, t in _project.targets if t != null
 		for r in (_copyRefs & {tgt: t}).out
 		if strings.HasPrefix(r, ":") {r},
 	]
@@ -237,6 +247,7 @@ _expandCopy: {
 		for d in _sameProjectRefs {
 			let _bare = strings.TrimPrefix(d, ":")
 			let _parts = strings.Split(_bare, ":")
+
 			// Materialize the view segment to "" when absent, so CUE
 			// evaluates conditions on _view without indexing past the
 			// list (`&&` doesn't short-circuit).
@@ -268,22 +279,23 @@ _expandCopy: {
 	// up target's build-dep chain. Local-coarse is the overlay trade;
 	// the cross-project scoping (the real cache win) is untouched.
 	// Cross fragments still arrive via the `_bayt` dep chain.
-	_procs: {for n, t in G.project.targets if t != null if t.entrypoint != _|_ if t.entrypoint.host {(n): t}}
-	_baytScaffold: B={
+	_procs: {for n, t in _project.targets if t != null if t.entrypoint != _|_ if t.entrypoint.host {(n): t}}
+	let _procsMap = _procs
+	_baytScaffold: {
 		n: string
 		t: _
 		// Disjunction-default, not `&&` (CUE doesn't short-circuit).
-		let _isUp = [if B.t.compose != _|_ {B.t.compose.up}, false][0]
-		let _overlay = len(G.project.compose.includes) > 0
-		let _hasProcs = len(G._procs) > 0
+		let _isUp = [if t.compose != _|_ {t.compose.up}, false][0]
+		let _overlay = len(_project.compose.includes) > 0
+		let _hasProcs = len(_procsMap) > 0
 		out: list.Concat([
-			[".bayt/compose.\(B.n).yaml", ".bayt/Dockerfile.\(B.n)", ".bayt/bayt.\(B.n).json", ".bayt/Taskfile.yml", ".bayt/Taskfile.bayt.yml"],
-			[if B.t.taskfile != _|_ {[".bayt/Taskfile.\(B.n).yaml"]}, []][0],
-			[if _isUp {[".bayt/compose.\(B.n).closure.yaml"]}, []][0],
+			[".bayt/compose.\(n).yaml", ".bayt/Dockerfile.\(n)", ".bayt/bayt.\(n).json", ".bayt/Taskfile.yml", ".bayt/Taskfile.bayt.yml"],
+			[if t.taskfile != _|_ {[".bayt/Taskfile.\(n).yaml"]}, []][0],
+			[if _isUp {[".bayt/compose.\(n).closure.yaml"]}, []][0],
 			[if _hasProcs {[".bayt/process-compose.yaml"]}, []][0],
 			[if _isUp && _overlay {list.Concat([
 				[".bayt/compose.*.yaml", ".bayt/Dockerfile.*", ".bayt/bayt.*.json", ".bayt/Taskfile.*.yaml"],
-				G.project.compose.includes,
+				_project.compose.includes,
 			])}, []][0],
 			[if projectManifest.gradleInit {[".bayt/init.gradle.kts"]}, []][0],
 		])
@@ -298,18 +310,20 @@ _expandCopy: {
 	// A target's source globs: its own and every cmd's. A cmd's srcs (mise
 	// install's manifests) are as much the target's sources as its own are.
 	_ownSrcGlobs: {
-		for n, t in G.project.targets if t != null {
-			(n): (_uniqStrings & {in: list.Concat([
-				(_expandGlobs & {in: t.srcs.defaultGlobs}).out,
-				t.srcs.globs,
-				for _, c in t.cmd if c != null if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {(_expandGlobs & {in: c.srcs.defaultGlobs}).out},
-				for _, c in t.cmd if c != null if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c.srcs.globs},
-			])}).out
+		for n, t in _project.targets if t != null {
+			(n): (_uniqStrings & {
+				in: list.Concat([
+					(_expandGlobs & {in: t.srcs.defaultGlobs}).out,
+					t.srcs.globs,
+					for _, c in t.cmd if c != null if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {(_expandGlobs & {in: c.srcs.defaultGlobs}).out},
+					for _, c in t.cmd if c != null if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c.srcs.globs},
+				])
+			}).out
 		}
 	}
 
 	_sameProjectOutsByName: {
-		for n, t in G.project.targets if t != null {
+		for n, t in _project.targets if t != null {
 			(n): t.outs
 			if t.dockerfile != _|_ {
 				"\(n)_srcs": {
@@ -325,56 +339,61 @@ _expandCopy: {
 	// Same-project chainedDeps entry from a resolved name. Mirrors
 	// _buildCrossEntry's shape so consumers treat same-project and
 	// cross-project entries uniformly.
-	_sameProjectEntry: N={
+	_sameProjectEntry: {
 		name: string
+		let _name = name
 		out: {
-			name:    N.name
-			project: G.project.name
-			if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
-			dir:     G.project.dir
-			outs:    _sameProjectOutsByName[N.name]
+			name:    _name
+			project: _project.name
+			if _project.discriminator != _|_ {discriminator: _project.discriminator}
+			dir:  _project.dir
+			outs: _sameProjectOutsByName[_name]
 		}
 	}
 
 	// Leaf synthetic stub — the `outs` and `bayt` views: a scratch view of
 	// the parent with no chain of its own.
-	_leafSynth: L={
+	_leafSynth: {
 		n:    string
 		t:    _
 		view: "outs" | "bayt"
 		// Untyped: the stub resolves the caller's fileset rather than
 		// re-typing it (E9).
 		files: _
+		let _n = n
+		let _t = t
+		let _view = view
+		let _files = files
 		out: {
-			name:     "\(L.n)_\(L.view)"
-			project:  G.project.name
-			if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
-			dir:      G.project.dir
+			name:    "\(_n)_\(_view)"
+			project: _project.name
+			if _project.discriminator != _|_ {discriminator: _project.discriminator}
+			dir:      _project.dir
 			activate: ""
-			srcs: {globs: [], exclude: []}
+			srcs:     {globs: [], exclude: []}
 			outs: {
-				globs:   [...string] & [for g in L.files.globs {g}]
-				exclude: [...string] & [for e in L.files.exclude {e}]
+				globs:   [...string] & [for g in _files.globs {g}]
+				exclude: [...string] & [for e in _files.exclude {e}]
 			}
-			env: {}
-			visibility:          L.t.visibility
+			env:                 {}
+			visibility:          _t.visibility
 			deps:                []
 			transitiveDeps:      []
 			transitiveCrossDeps: []
 			chainedDeps:         []
 			cmds:                []
-			cache: {full: false, similar: false}
-			upClosure: _upClosure[L.n]
+			cache:               {full: false, similar: false}
+			upClosure:           _upClosure[_n]
 		}
 	}
 
 	// Same-project dep names per target — refs with the leading `:`
 	// stripped and view suffix folded into the synthetic name (so
 	// `:foo:srcs` → `foo_srcs`). Plain refs `:foo` produce `foo`, the
-	// G.project.targets[name] key. Reused by _transitiveDeps + per-target
+	// _project.targets[name] key. Reused by _transitiveDeps + per-target
 	// files emission.
 	_sameProjectDepNames: {
-		for n, t in G.project.targets if t != null {
+		for n, t in _project.targets if t != null {
 			let _fr = (_fromRef & {tgt: t}).out
 			let _fromRefs = [if strings.HasPrefix(_fr, ":") {_fr}]
 			let _depRefs = [for d in t.deps if strings.HasPrefix(d, ":") {d}]
@@ -389,13 +408,16 @@ _expandCopy: {
 	// (a target that chains through same-project steps into a cross-
 	// project dep must still federate that cross-project dep).
 	_transitiveDeps: {
-		for n, t in G.project.targets if t != null {
+		for n, t in _project.targets if t != null {
 			let _dn = _sameProjectDepNames[n]
-			(n): (_uniqStrings & {in: list.FlattenN([
-				_dn,
-				[for name in _dn if _transitiveDeps[name] != _|_ {_transitiveDeps[name]}],
-			], 2)}).out
+			(n): (_uniqStrings & {
+				in: list.FlattenN([
+					_dn,
+					[for name in _dn if _transitiveDeps[name] != _|_ {_transitiveDeps[name]}],
+				], 2)
+			}).out
 		}
+
 		// Same-project synthetic `<n>_srcs` participation: a synthetic
 		// `:foo:srcs` carries the source closure of its parent target,
 		// so its same-project transitive deps mirror the parent's with
@@ -403,15 +425,17 @@ _expandCopy: {
 		// a downstream consumer `deps: [":foo:srcs"]` walk through and
 		// pick up `:bar:srcs` automatically when the parent foo chains
 		// to bar in same-project.
-		for n, t in G.project.targets if t != null
-			if t.dockerfile != _|_ {
-			"\(n)_srcs": (_uniqStrings & {in: list.Concat([
-				[for dep in _transitiveDeps[n] if strings.HasSuffix(dep, "_srcs") {dep}],
-				[for dep in _transitiveDeps[n]
+		for n, t in _project.targets if t != null
+		if t.dockerfile != _|_ {
+			"\(n)_srcs": (_uniqStrings & {
+				in: list.Concat([
+					[for dep in _transitiveDeps[n] if strings.HasSuffix(dep, "_srcs") {dep}],
+					[for dep in _transitiveDeps[n]
 					if !strings.HasSuffix(dep, "_srcs")
 					if !strings.HasSuffix(dep, "_outs")
 					if !strings.HasSuffix(dep, "_bayt") {"\(dep)_srcs"}],
-			])}).out
+				])
+			}).out
 		}
 	}
 
@@ -422,7 +446,7 @@ _expandCopy: {
 	// deps, not flat over transitiveDeps: a non-srcs intermediate must still
 	// emit a `_srcs` when a deeper dep has srcs, or the COPY chain breaks.
 	_emitsSrcs: {
-		for n, t in G.project.targets if t != null {
+		for n, t in _project.targets if t != null {
 			(n): [
 				if t.dockerfile == _|_ {false},
 				if len(_ownSrcGlobs[n]) > 0 {true},
@@ -439,7 +463,7 @@ _expandCopy: {
 	//   1. Direct: walk the same-project chain (self + _transitiveDeps[name])
 	//      and collect each step's cross-project deps from _targetCrossDeps.
 	//   2. Manifest pull: for each direct cross-project dep, federate its
-	//      own transitiveCrossDeps from G.depManifests. Cross-project
+	//      own transitiveCrossDeps from _depManifests. Cross-project
 	//      transitivity becomes implicit — a consumer that `deps: [":b"]`
 	//      a cross-project :b auto-gets :b's full closure.
 	// Deduped by "<project>-<name>".
@@ -449,25 +473,25 @@ _expandCopy: {
 	// keying ("foo_srcs" → "<project>:foo:srcs").
 	//
 	// One case per synthetic view (E8).
-	_manifestRef: D={
+	_manifestRef: {
 		d: _
 		out: [
-			if strings.HasSuffix(D.d.name, "_srcs") {
-				"\(D.d.project):\(strings.TrimSuffix(D.d.name, "_srcs")):srcs"
+			if strings.HasSuffix(d.name, "_srcs") {
+				"\(d.project):\(strings.TrimSuffix(d.name, "_srcs")):srcs"
 			},
-			if strings.HasSuffix(D.d.name, "_outs") {
-				"\(D.d.project):\(strings.TrimSuffix(D.d.name, "_outs")):outs"
+			if strings.HasSuffix(d.name, "_outs") {
+				"\(d.project):\(strings.TrimSuffix(d.name, "_outs")):outs"
 			},
-			if strings.HasSuffix(D.d.name, "_bayt") {
-				"\(D.d.project):\(strings.TrimSuffix(D.d.name, "_bayt")):bayt"
+			if strings.HasSuffix(d.name, "_bayt") {
+				"\(d.project):\(strings.TrimSuffix(d.name, "_bayt")):bayt"
 			},
-			"\(D.d.project):\(D.d.name)",
+			"\(d.project):\(d.name)",
 		][0]
 	}
 
-	_computeTransitiveCross: N={
-		name: string
-		_selfPlusDeps: list.Concat([[N.name], _transitiveDeps[N.name]])
+	_computeTransitiveCross: {
+		name:          string
+		_selfPlusDeps: list.Concat([[name], _transitiveDeps[name]])
 		_direct: list.Concat([
 			for tn in _selfPlusDeps
 			if _targetCrossDeps[tn] != _|_ {_targetCrossDeps[tn]}
@@ -475,23 +499,23 @@ _expandCopy: {
 		_viaManifests: list.Concat([
 			for d in _direct
 			let _ref = (_manifestRef & {"d": d}).out
-			if G.depManifests[_ref] != _|_
-			if G.depManifests[_ref].transitiveCrossDeps != _|_ {
-				G.depManifests[_ref].transitiveCrossDeps
+			if _depManifests[_ref] != _|_
+			if _depManifests[_ref].transitiveCrossDeps != _|_ {
+				_depManifests[_ref].transitiveCrossDeps
 			}
 		])
-		_all:  list.Concat([_direct, _viaManifests])
+		_all: list.Concat([_direct, _viaManifests])
 		// Prefix scan: see _targetCrossDeps.
 		_keys: [for x in _all {"\(x.project)-\(x.name)"}]
 		out:   [for i, x in _all if !list.Contains(list.Slice(_keys, 0, i), _keys[i]) {x}]
 	}
 
 	_transitiveCrossDeps: {
-		for n, t in G.project.targets if t != null {
+		for n, t in _project.targets if t != null {
 			(n): (_computeTransitiveCross & {name: n}).out
 		}
-		for n, t in G.project.targets if t != null
-			if t.dockerfile != _|_ {
+		for n, t in _project.targets if t != null
+		if t.dockerfile != _|_ {
 			"\(n)_srcs": (_computeTransitiveCross & {name: "\(n)_srcs"}).out
 		}
 	}
@@ -502,122 +526,167 @@ _expandCopy: {
 	// a copy-ref there would duplicate the COPY the user already wrote.
 	_crossProjectDirsAll: [for p in _crossProjectsAll {p.dir}]
 	_crossProjectsAll: list.Concat([
-		[for n, t in G.project.targets if t != null
+		[for n, t in _project.targets if t != null
 		for d in _transitiveCrossDeps[n] {(_projectOf & {in: d}).out}],
 		_copyFedProjects,
 	])
 
 	_copyFedProjects: [
-		for n, t in G.project.targets if t != null
+		for n, t in _project.targets if t != null
 		if t.dockerfile != _|_
 		for c in list.Concat([t.dockerfile.copy, (_expandCopy & {in: t.dockerfile.defaultCopy}).out])
 		if c.from != null if c.from.ref != _|_
 		if strings.Contains(c.from.ref, ":") if !strings.HasPrefix(c.from.ref, ":")
-		let _m = G.depManifests[c.from.ref]
+		let _m = _depManifests[c.from.ref]
 		for _p in list.Concat([[_m], _m.transitiveCrossDeps]) {(_projectOf & {in: _p}).out},
 	]
 
 	// A dep's project identity: name, discriminator when it has one, dir.
-	_projectOf: P={
+	_projectOf: {
 		in: _
+		let _in = in
 		out: {
-			project: P.in.project
-			if P.in.discriminator != _|_ {discriminator: P.in.discriminator}
-			dir: P.in.dir
+			project: _in.project
+			if _in.discriminator != _|_ {discriminator: _in.discriminator}
+			dir: _in.dir
 		}
 	}
 
 	// Repo-root-relative compose-fragment path for a dep at (dir, name).
 	// Synthetic names map to their parent fragment — the `_srcs`/`_outs`
 	// services live there (gen_compose emits no per-synthetic files).
-	_fragPath: F={
+	_fragPath: {
 		dir:  _
 		name: _
 		let _parent = [
-			if strings.HasSuffix(F.name, "_srcs") {strings.TrimSuffix(F.name, "_srcs")},
-			if strings.HasSuffix(F.name, "_outs") {strings.TrimSuffix(F.name, "_outs")},
-			if strings.HasSuffix(F.name, "_bayt") {strings.TrimSuffix(F.name, "_bayt")},
-			F.name,
+			if strings.HasSuffix(name, "_srcs") {strings.TrimSuffix(name, "_srcs")},
+			if strings.HasSuffix(name, "_outs") {strings.TrimSuffix(name, "_outs")},
+			if strings.HasSuffix(name, "_bayt") {strings.TrimSuffix(name, "_bayt")},
+			name,
 		][0]
-		let _dp = [if F.dir != "" {"\(F.dir)/"}, ""][0]
+		let _dp = [if dir != "" {"\(dir)/"}, ""][0]
 		out: "\(_dp).bayt/compose.\(_parent).yaml"
 	}
 
 	// upClosure — repo-root-relative fragment paths covering the
-	// target's full compose graph: own fragment + same-project direct
-	// deps' closures (recursive over this map) + cross direct deps'
-	// closures from their manifests (already closed by generation
-	// order — the staged induction transitiveCrossDeps rides). Entry
-	// closure files include this list FLAT; the recursion must stay
-	// here at generate time (see gen_compose bayt_root on ApplyInclude
-	// cost). Synthetic dep names map to their parent's fragment.
-	_upClosure: {
-		for n, t in G.project.targets if t != null {
-			let _own = [if t.dockerfile != _|_ {(_fragPath & {dir: G.project.dir, name: n}).out}]
-			// Compose resolves `service:` additional_contexts at parse time,
-			// so a copy ref's target must be in the closure. Membership only:
-			// a dep edge would also emit the dependency's workdir COPY
-			// (copy_federation_check CF1).
-			let _copyClosure = list.FlattenN([
-				for r in (_copyRefs & {tgt: t}).out
-				if strings.HasPrefix(r, ":")
-				let _cn = _sameProjectRefName[r]
-				let _cp = [
-					if strings.HasSuffix(_cn, "_srcs") {strings.TrimSuffix(_cn, "_srcs")},
-					if strings.HasSuffix(_cn, "_outs") {strings.TrimSuffix(_cn, "_outs")},
-					if strings.HasSuffix(_cn, "_bayt") {strings.TrimSuffix(_cn, "_bayt")},
-					_cn,
-				][0]
-				if _upClosure[_cp] != _|_ {_upClosure[_cp]},
-			], 1)
-			// Recurse via the parent target: synthetic dep names have no
-			// map entry, and their graph is a subset of the parent's.
-			let _sameProj = list.FlattenN([
-				for dn in _sameProjectDepNames[n]
-				let _p = [
-					if strings.HasSuffix(dn, "_srcs") {strings.TrimSuffix(dn, "_srcs")},
-					if strings.HasSuffix(dn, "_outs") {strings.TrimSuffix(dn, "_outs")},
-					if strings.HasSuffix(dn, "_bayt") {strings.TrimSuffix(dn, "_bayt")},
-					dn,
-				][0]
-				if _upClosure[_p] != _|_ {_upClosure[_p]},
-			], 1)
-			let _cross = list.FlattenN([
-				for d in _targetCrossDeps[n]
-				if d.name != "bayt"
-				let _ref = (_manifestRef & {"d": d}).out {
+	// target's full compose graph: reachable same-project fragments +
+	// cross deps' closures from their manifests (already closed by
+	// generation order). Entry closure files include this list FLAT
+	// (see gen_compose bayt_root on ApplyInclude cost). Synthetic dep
+	// names map to their parent's fragment. Reachability squares over
+	// struct sets in log2(N) steps so diamond DAGs do not re-walk
+	// shared subgraphs per path.
+	_stripSynth: {
+		in: string
+		out: [
+			if strings.HasSuffix(in, "_srcs") {strings.TrimSuffix(in, "_srcs")},
+			if strings.HasSuffix(in, "_outs") {strings.TrimSuffix(in, "_outs")},
+			if strings.HasSuffix(in, "_bayt") {strings.TrimSuffix(in, "_bayt")},
+			in,
+		][0]
+	}
+	_upHasTarget: {for k, v in _project.targets if v != null {(k): true}}
+	_upDirectLocal: {
+		for n, t in _project.targets if t != null {
+			(n): (_uniqStrings & {
+				in: list.Concat([
 					[
+						for dn in _sameProjectDepNames[n]
+						let _p = (_stripSynth & {in: dn}).out
+						if _upHasTarget[_p] != _|_ {_p},
+					],
+					// Compose resolves `service:` additional_contexts at parse time,
+					// so a copy ref's target must be in the closure without adding a
+					// dep edge that would also emit a workdir COPY (CF1).
+					[
+						for r in (_copyRefs & {tgt: t}).out
+						if strings.HasPrefix(r, ":")
+						let _cp = (_stripSynth & {in: _sameProjectRefName[r]}).out
+						if _upHasTarget[_cp] != _|_ {_cp},
+					],
+				])
+			}).out
+		}
+	}
+	_upLocalParts: {
+		for n, t in _project.targets if t != null {
+			(n): {
+				own: [if t.dockerfile != _|_ {(_fragPath & {dir: _project.dir, name: n}).out}]
+				copyCross: list.FlattenN([
+					for r in (_copyRefs & {tgt: t}).out
+					if strings.Contains(r, ":") if !strings.HasPrefix(r, ":")
+					if _depManifests[r] != _|_
+					if _depManifests[r].upClosure != _|_ {_depManifests[r].upClosure},
+				], 1)
+				cross: list.FlattenN([
+					for d in _targetCrossDeps[n]
+					if d.name != "bayt"
+					let _ref = (_manifestRef & {"d": d}).out {[
 						// Nested guards, not `&&` (CUE doesn't short-circuit).
-						if G.depManifests[_ref] != _|_ {[
-							if G.depManifests[_ref].upClosure != _|_ {G.depManifests[_ref].upClosure},
+						if _depManifests[_ref] != _|_ {[
+							if _depManifests[_ref].upClosure != _|_ {_depManifests[_ref].upClosure},
 							// Dep manifest predates the field (stale regen):
 							// its own fragment still anchors the include; a
 							// full `generate --all` backfills the rest.
 							[(_fragPath & {dir: d.dir, name: d.name}).out],
 						][0]},
 						[(_fragPath & {dir: d.dir, name: d.name}).out],
-					][0]
-				},
-			], 1)
-			let _copyCross = list.FlattenN([
-				for r in (_copyRefs & {tgt: t}).out
-				if strings.Contains(r, ":") if !strings.HasPrefix(r, ":")
-				if G.depManifests[r] != _|_
-				if G.depManifests[r].upClosure != _|_ {G.depManifests[r].upClosure},
-			], 1)
-			(n): (_uniqStrings & {in: list.Concat([_own, _sameProj, _copyClosure, _copyCross, _cross])}).out
+					][0]},
+				], 1)
+			}
+		}
+	}
+	_upTargetCount: len([for _, t in _project.targets if t != null {1}])
+	_upDoublings:   [for p in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096] if p < _upTargetCount {p}]
+	_upSteps: [
+		{
+			for n, deps in _upDirectLocal {
+				(n): {
+					(n): true
+					for p in deps {(p): true}
+				}
+			}
+		},
+		for i, _ in _upDoublings {
+			{
+				for n, cur in _upSteps[i] {
+					(n): {
+						for m, _ in cur for k, _ in _upSteps[i][m] {(k): true}
+					}
+				}
+			}
+		},
+	]
+	_upReachFinal: _upSteps[len(_upSteps)-1]
+	_upClosure: {
+		for n, t in _project.targets if t != null {
+			let _reach = _upReachFinal[n]
+			let _orderedLocal = (_uniqStrings & {
+				in: list.Concat([
+					[n],
+					_upDirectLocal[n],
+					list.Sort([for m, _ in _reach {m}], list.Ascending),
+				])
+			}).out
+			(n): (_uniqStrings & {
+				in: list.Concat([
+					list.FlattenN([for m in _orderedLocal {_upLocalParts[m].own}], 1),
+					list.FlattenN([for m in _orderedLocal {_upLocalParts[m].copyCross}], 1),
+					list.FlattenN([for m in _orderedLocal {_upLocalParts[m].cross}], 1),
+				])
+			}).out
 		}
 	}
 
 	// Per-target manifests. Skip null entries (a project opting out
 	// of an inherited target) so we don't emit ghost manifest files.
 	files: {
-		for n, t in G.project.targets if t != null {
+		for n, t in _project.targets if t != null {
 			// All normalized dep names: same-project bare names plus
-			// cross-project target names resolved via G.depManifests.
+			// cross-project target names resolved via _depManifests.
 			let _depNames = list.Concat([
 				_sameProjectDepNames[n],
-				[for d in t.deps if !strings.HasPrefix(d, ":") {G.depManifests[d].name}],
+				[for d in t.deps if !strings.HasPrefix(d, ":") {_depManifests[d].name}],
 			])
 			(n): {
 				// Identity triple — `name` is the target, `project` is
@@ -625,14 +694,14 @@ _expandCopy: {
 				// monorepo root. Same triple is emitted on every
 				// chainedDeps entry below.
 				name:    t.name
-				project: G.project.name
-				if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
-				dir:     G.project.dir
+				project: _project.name
+				if _project.discriminator != _|_ {discriminator: _project.discriminator}
+				dir: _project.dir
 				// Target-level activate overrides project-level when
 				// explicitly set (e.g. setup wants `""` so its mise +
 				// pnpm cmds control their own prefixes individually);
 				// otherwise inherit the project default.
-				activate: [if t.activate != _|_ {t.activate}, G.project.activate][0]
+				activate: [if t.activate != _|_ {t.activate}, _project.activate][0]
 
 				// Portable action.
 				// srcs is emitted as the merged list — defaultGlobs
@@ -640,10 +709,10 @@ _expandCopy: {
 				// list). Same for exclude. Downstream emitters see only
 				// the resolved {globs, exclude} shape.
 				let _targetSrcs = {
-					globs:   list.Concat([(_expandGlobs & {in: t.srcs.defaultGlobs}).out,   t.srcs.globs])
+					globs:   list.Concat([(_expandGlobs & {in: t.srcs.defaultGlobs}).out, t.srcs.globs])
 					exclude: list.Concat([(_expandGlobs & {in: t.srcs.defaultExclude}).out, t.srcs.exclude])
 				}
-				srcs: _targetSrcs
+				srcs:       _targetSrcs
 				outs:       t.outs
 				state:      t.state
 				env:        t.env
@@ -654,6 +723,7 @@ _expandCopy: {
 				if t.files != _|_ {
 					files: t.files
 				}
+
 				// The one srcs-emission gate (read here, in gen_compose, and by
 				// cross-project consumers via G.depManifests). See _emitsSrcs.
 				emitsSrcs: _emitsSrcs[n]
@@ -725,10 +795,10 @@ _expandCopy: {
 					// Dedup against _directNames so a directly-listed
 					// dep keeps its outs unchanged.
 					[for tn in _transitiveDeps[n]
-						if !list.Contains(_directNames, tn)
-						if _sameProjectOutsByName[tn] != _|_ {
-							(_sameProjectEntry & {name: tn}).out
-						}],
+					if !list.Contains(_directNames, tn)
+					if _sameProjectOutsByName[tn] != _|_ {
+						(_sameProjectEntry & {name: tn}).out
+					}],
 				])
 
 				// Priority-sorted commands. Each cmd's `srcs` is its
@@ -745,15 +815,15 @@ _expandCopy: {
 					// unifying that length-2 list with the length-(2+N)
 					// concat result fails on length mismatch. Same pattern
 					// as t.dockerfile.preamble below.
-					let _cmdGlobsExtras   = (_expandGlobs & {in: c.srcs.defaultGlobs}).out
+					let _cmdGlobsExtras = (_expandGlobs & {in: c.srcs.defaultGlobs}).out
 					let _cmdExcludeExtras = (_expandGlobs & {in: c.srcs.defaultExclude}).out
 					{
 						for k, v in c if k != "srcs" {(k): v}
 						srcs: {
 							globs:          list.Concat([_targetSrcs.globs, _cmdGlobsExtras, c.srcs.globs])
 							exclude:        list.Concat([_targetSrcs.exclude, _cmdExcludeExtras, c.srcs.exclude])
-							defaultGlobs:   c.srcs.defaultGlobs
-							defaultExclude: c.srcs.defaultExclude
+							defaultGlobs:   [if c.srcs.defaultGlobs == null {null}, c.srcs.defaultGlobs][0]
+							defaultExclude: [if c.srcs.defaultExclude == null {null}, c.srcs.defaultExclude][0]
 						}
 					}
 				}]
@@ -785,6 +855,7 @@ _expandCopy: {
 						}
 					}
 					if t["process-compose"] != _|_ {"process-compose": t["process-compose"]}
+
 					// The host probe derives from it (gen_process_compose).
 					if t.healthcheck != _|_ {healthcheck: t.healthcheck}
 				}
@@ -831,6 +902,7 @@ _expandCopy: {
 				if t.vscode != _|_ {vscode: t.vscode}
 				if t.bake != _|_ {bake: t.bake}
 				if t.hmr != _|_ {hmr: t.hmr}
+
 				// cache.nu reads outs from the manifest at runtime; the
 				// `cache` block here records the per-target wrap policy
 				// (full / similar) that gen_taskfile.cue used when
@@ -858,29 +930,31 @@ _expandCopy: {
 		// cross ref `proj:foo:<view>` from `bayt.foo.json` `.synthetics.<view>`.
 		// Each carries the parent's upClosure — a synthetic's compose graph
 		// is a subset of it.
-		for n, t in G.project.targets if t != null
-			if t.dockerfile != _|_ {
+		for n, t in _project.targets if t != null
+		if t.dockerfile != _|_ {
 			// outs = the full transitive source closure the `_srcs` image
 			// carries: union own-srcs globs over {self} ∪ same-project
 			// transitive deps, so a dep-fed target still reports what it packages.
-			let _srcsGlobs = (_uniqStrings & {in: list.FlattenN([
-				for x in list.Concat([[n], _transitiveDeps[n]])
-				if _sameProjectOutsByName["\(x)_srcs"] != _|_ {_sameProjectOutsByName["\(x)_srcs"].globs}
-			], 1)}).out
+			let _srcsGlobs = (_uniqStrings & {
+				in: list.FlattenN([
+					for x in list.Concat([[n], _transitiveDeps[n]])
+					if _sameProjectOutsByName["\(x)_srcs"] != _|_ {_sameProjectOutsByName["\(x)_srcs"].globs}
+				], 1)
+			}).out
 			let _srcsExclude = list.Concat([(_expandGlobs & {in: t.srcs.defaultExclude}).out, t.srcs.exclude])
 			if _emitsSrcs[n] {
 				(n): synthetics: srcs: {
 					name:    "\(n)_srcs"
-					project: G.project.name
-					if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
-					dir:     G.project.dir
+					project: _project.name
+					if _project.discriminator != _|_ {discriminator: _project.discriminator}
+					dir: _project.dir
 					// Synthetic carries no toolchain; activate empty.
 					activate: ""
 					// Consumer COPYs land every chained dep's srcs at their
 					// natural paths via these globs.
 					srcs: {globs: [], exclude: []}
 					outs: {globs: _srcsGlobs, exclude: _srcsExclude}
-					env: {}
+					env:  {}
 					// Synthetic inherits parent visibility. Cross-project
 					// consumers of an internal target's _srcs fail the
 					// public-visibility unification at _buildCrossEntry.
@@ -891,7 +965,7 @@ _expandCopy: {
 					// consumer transitively pulls the upstream `:srcs`
 					// closure. Cross-project entries are filtered to
 					// those whose `:srcs` synthetic exists in
-					// G.depManifests; missing ones drop silently.
+					// _depManifests; missing ones drop silently.
 					transitiveDeps: _transitiveDeps["\(n)_srcs"]
 					// transitiveCrossDeps surfaces both the parent's
 					// cross-project closure (for downstream cross-project
@@ -904,23 +978,24 @@ _expandCopy: {
 					transitiveCrossDeps: list.Concat([
 						_transitiveCrossDeps["\(n)_srcs"],
 						[for tn in _transitiveDeps["\(n)_srcs"]
-							if _sameProjectOutsByName[tn] != _|_
-							if len(_sameProjectOutsByName[tn].globs) > 0 {
-								{
-									project: G.project.name
-									if G.project.discriminator != _|_ {discriminator: G.project.discriminator}
-									name:    tn
-									dir:     G.project.dir
-									outs:    _sameProjectOutsByName[tn]
-								}
-							}],
+						if _sameProjectOutsByName[tn] != _|_
+						if len(_sameProjectOutsByName[tn].globs) > 0 {
+							{
+								project: _project.name
+								if _project.discriminator != _|_ {discriminator: _project.discriminator}
+								name: tn
+								dir:  _project.dir
+								outs: _sameProjectOutsByName[tn]
+							}
+						}],
 					])
 					chainedDeps: []
 					cmds:        []
-					cache: {full: false, similar: false}
-					upClosure: _upClosure[n]
+					cache:       {full: false, similar: false}
+					upClosure:   _upClosure[n]
 				}
 			}
+
 			// Declared for every dockerfile target, `outs: globs: []`
 			// included (D20). gen_compose's `_outsEmit` gates the stage
 			// and service on a non-empty interface.

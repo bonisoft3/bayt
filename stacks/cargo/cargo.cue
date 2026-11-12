@@ -36,7 +36,7 @@ lockFile:    "Cargo.lock"
 lockFlag: "--locked"
 
 _targetExclude: {
-	"cargo-target-dir": {glob: "target"}
+	"cargo-target-dir":  {glob: "target"}
 	"cargo-target-tree": {glob: "target/**"}
 }
 
@@ -54,7 +54,7 @@ _fetchScript: #"sh -c 'd=/root/.cargo/registry/cache; s=/cargo-crate-store; mkdi
 fetch: {
 	srcs: defaultGlobs: {
 		"cargo-project": {glob: projectFile}
-		"cargo-lock": {glob: lockFile}
+		"cargo-lock":    {glob: lockFile}
 	}
 	cmd: "cargo": {
 		do: (*"cargo fetch \(lockFlag)" | string) & =~"--locked"
@@ -75,8 +75,8 @@ fetch: {
 		srcs: {
 			defaultGlobs: {
 				"cargo-project": {glob: projectFile}
-				"cargo-lock": {glob: lockFile}
-				"cargo-src": *{glob: "\(srcDir)/**/*"} | null
+				"cargo-lock":    {glob: lockFile}
+				"cargo-src":     *{glob: "\(srcDir)/**/*"} | null
 			}
 			defaultExclude: _targetExclude
 		}
@@ -97,8 +97,8 @@ build: (#build).out
 		srcs: {
 			defaultGlobs: {
 				"cargo-project": {glob: projectFile}
-				"cargo-lock": {glob: lockFile}
-				"cargo-src": *{glob: "\(srcDir)/**/*"} | null
+				"cargo-lock":    {glob: lockFile}
+				"cargo-src":     *{glob: "\(srcDir)/**/*"} | null
 			}
 			defaultExclude: _targetExclude
 		}
@@ -117,8 +117,8 @@ test: (#test).out
 	out: {
 		srcs: {
 			defaultGlobs: {
-				"cargo-project": {glob: projectFile}
-				"cargo-lock": {glob: lockFile}
+				"cargo-project":     {glob: projectFile}
+				"cargo-lock":        {glob: lockFile}
 				"cargo-integration": *{glob: "\(integrationDir)/**/*"} | null
 			}
 			defaultExclude: _targetExclude

@@ -43,13 +43,20 @@ package bayt
 import "list"
 
 #MapAsList: {
-	#el: {name: string, priority?: int, ...}
-	[Name=_]: #el & {name: Name} | null
+	#el:          {name: string, priority?: int, ...}
+	[_]~(Name,_): #el & {name: Name} | null
 }
 
 #MapToList: {
-	in: {[string]: #MapAsList.#el | null}
-	_flat: [for v in in if v != null {v & {priority: *0 | int}}]
+	in: {[string]: _}
+	let _in = in
+	_flat: [
+		for k, v in _in if v != null {
+			name:     [if v.name != _|_ {v.name}, k][0]
+			priority: [if v.priority != _|_ {v.priority}, 0][0]
+			for fk, fv in v if fk != "name" && fk != "priority" {(fk): fv}
+		},
+	]
 	out: [
 		for i in list.Sort(_flat, {
 			x: {}

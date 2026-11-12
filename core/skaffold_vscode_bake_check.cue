@@ -43,7 +43,7 @@ _s1_sk: files: release: profiles: [{
 			context: "../"
 			docker: dockerfile: ".bayt/release.Dockerfile"
 		}]
-		local: {useBuildkit: true, concurrency: 64}
+		local:     {useBuildkit: true, concurrency: 64}
 		platforms: ["linux/amd64"]
 	}
 }]
@@ -106,7 +106,7 @@ _v2: #project & {
 }
 _v2_vs: (#vscodeGen & {project: _v2, depManifests: {}})
 _v2_vs: files: build: version: "2.0.0"
-_v2_vs: files: test:  version: "2.0.0"
+_v2_vs: files: test: version:  "2.0.0"
 // release is filtered out — gen_vscode emits only build/test.
 _v2_vs: files: {[!~"^(build|test)$"]: _|_}
 
@@ -152,10 +152,10 @@ _bk2_bk: hcl?: _|_
 
 // Public aggregator forces evaluation of the hidden bindings.
 Tests: skaffold_vscode_bake: {
-	s1:  {project: _s1,  out: _s1_sk}
-	s2:  {project: _s2,  out: _s2_sk}
-	v1:  {project: _v1,  out: _v1_vs}
-	v2:  {project: _v2,  out: _v2_vs}
+	s1:  {project: _s1, out: _s1_sk}
+	s2:  {project: _s2, out: _s2_sk}
+	v1:  {project: _v1, out: _v1_vs}
+	v2:  {project: _v2, out: _v2_vs}
 	bk1: {project: _bk1, out: _bk1_bk}
 	bk2: {project: _bk2, out: _bk2_bk}
 }

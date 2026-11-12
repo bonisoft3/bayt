@@ -58,8 +58,8 @@ _u2: #project & {
 		}
 	}
 }
-_u2_dc: (#dockerComposeGen & {project: _u2, depManifests: {}})
-_u2_df: _u2_dc.dockerfiles.legacy
+_u2_dc:         (#dockerComposeGen & {project: _u2, depManifests: {}})
+_u2_df:         _u2_dc.dockerfiles.legacy
 _u2_copy_check: strings.Contains(_u2_df, "COPY --chown=10001:10001 data/ /data") & true
 _u2_user_check: strings.Contains(_u2_df, "USER customuser") & true
 
@@ -112,8 +112,8 @@ _u4: #project & {
 		}
 	}
 }
-_u4_dc: (#dockerComposeGen & {project: _u4, depManifests: {}})
-_u4_svc: _u4_dc.compose.files.srv.services."u4-srv"
+_u4_dc:       (#dockerComposeGen & {project: _u4, depManifests: {}})
+_u4_svc:      _u4_dc.compose.files.srv.services."u4-srv"
 _u4_svc_user: _u4_svc.user & "999:999"
 
 // --- U5: Distroless nonroot preset verification
@@ -137,8 +137,8 @@ _u5: #project & {
 		}
 	}
 }
-_u5_dc: (#dockerComposeGen & {project: _u5, depManifests: {}})
-_u5_df: _u5_dc.dockerfiles.distroless
+_u5_dc:         (#dockerComposeGen & {project: _u5, depManifests: {}})
+_u5_df:         _u5_dc.dockerfiles.distroless
 _u5_copy_check: strings.Contains(_u5_df, "COPY --chown=65532:65532 binary /app/binary") & true
 _u5_user_check: strings.Contains(_u5_df, "USER 65532:65532") & true
 
@@ -163,8 +163,8 @@ _u6: #project & {
 		}
 	}
 }
-_u6_dc: (#dockerComposeGen & {project: _u6, depManifests: {}})
-_u6_df: _u6_dc.dockerfiles.leap_app
+_u6_dc:         (#dockerComposeGen & {project: _u6, depManifests: {}})
+_u6_df:         _u6_dc.dockerfiles.leap_app
 _u6_copy_check: strings.Contains(_u6_df, "COPY --chown=65534:65534 leap.bin /bin/leap.bin") & true
 _u6_user_check: strings.Contains(_u6_df, "USER 65534:65534") & true
 
@@ -189,8 +189,8 @@ _u7: #project & {
 		}
 	}
 }
-_u7_dc: (#dockerComposeGen & {project: _u7, depManifests: {}})
-_u7_df: _u7_dc.dockerfiles.dev
+_u7_dc:         (#dockerComposeGen & {project: _u7, depManifests: {}})
+_u7_df:         _u7_dc.dockerfiles.dev
 _u7_copy_check: strings.Contains(_u7_df, "COPY --chown=1000:1000 workspace /workspace") & true
 _u7_user_check: strings.Contains(_u7_df, "USER 1000:1000") & true
 
@@ -215,7 +215,7 @@ _u8: #project & {
 		}
 	}
 }
-_u8_dc: (#dockerComposeGen & {project: _u8, depManifests: {}})
-_u8_df: _u8_dc.dockerfiles.app
+_u8_dc:         (#dockerComposeGen & {project: _u8, depManifests: {}})
+_u8_df:         _u8_dc.dockerfiles.app
 _u8_copy_check: strings.Contains(_u8_df, "COPY --chown=65534:65534 venv /venv") & true
 _u8_user_check: strings.Contains(_u8_df, "USER 65534:65534") & true

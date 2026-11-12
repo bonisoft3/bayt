@@ -5,7 +5,7 @@
 
 use std/assert
 use ./depot.nu [repo-of]
-use ./generate.nu [scan-dir, _inject-runtime, scan-projects, clear-bayt-dir, find-workspace-root, workspace-module, root-for, partition-scan, topo-schedule, check-dirs, custom-outputs, pass1]
+use ./generate.nu [scan-dir, _inject-runtime, scan-projects, scan-ancestors, clear-bayt-dir, find-workspace-root, workspace-module, root-for, partition-scan, topo-schedule, check-dirs, custom-outputs, pass1]
 
 def main [] {
 	print "Running generate.nu tests...\n"
@@ -44,6 +44,7 @@ def main [] {
 	test_a_ref_to_a_nested_root_is_refused
 	test_partition_passes_only_outermost_roots
 	test_pass1_reads_sibling_bayt_json
+	test_scan_ancestors_skips_siblings_and_stops_at_rooted
 
 	print "\nAll generate.nu tests passed!"
 }
@@ -434,4 +435,29 @@ data: _ @embed(file="bayt.json")
 	let got = (pass1 ($dir | path join "bayt.cue"))
 	rm -rf $dir
 	assert equal $got {test: {cmd: "echo ok"}}
+}
+
+# Single-project leaf generation walks only ancestors up to the first rooted
+# project: sibling bayt.cue files (even invalid ones) and outer roots beyond a
+# nested root are never evaluated.
+def test_scan_ancestors_skips_siblings_and_stops_at_rooted [] {
+	print "test scan-ancestors ignores siblings and stops at first rooted ancestor..."
+	let dir = (mktemp -d)
+	mkdir ($dir | path join cue.mod) ($dir | path join apps/leaf) ($dir | path join apps/broken) ($dir | path join apps/ws/sub)
+	"" | save ($dir | path join bayt.cue)
+	{name: "root", dir: "", targets: {}} | to json | save ($dir | path join bayt.json)
+	_project $dir apps/leaf
+	_rooted $dir apps/ws
+	"" | save ($dir | path join apps/ws/sub bayt.cue)
+	{name: "sub", dir: "sub", targets: {}} | to json | save ($dir | path join apps/ws/sub bayt.json)
+	"not valid cue {" | save ($dir | path join apps/broken bayt.cue)
+
+	let leaf_anc = (try { scan-ancestors $dir ($dir | path join apps/leaf) } catch {|e| rm -rf $dir; error make {msg: $e.msg} })
+	let nested_anc = (try { scan-ancestors $dir ($dir | path join apps/ws/sub) } catch {|e| rm -rf $dir; error make {msg: $e.msg} })
+	rm -rf $dir
+
+	assert equal ($leaf_anc | get name) ["apps_leaf", "root"]
+	assert equal (root-for $leaf_anc $dir ($dir | path join apps/leaf)) {root: $dir, rooted: false}
+	assert equal ($nested_anc | get name) ["sub", "apps_ws"]
+	assert equal (root-for $nested_anc $dir ($dir | path join apps/ws/sub)) {root: ($dir | path join apps/ws | str replace --all '\' '/'), rooted: true}
 }

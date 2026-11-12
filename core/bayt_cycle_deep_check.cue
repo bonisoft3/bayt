@@ -50,14 +50,14 @@ _cycle_c16: #project & {
 	}
 }
 _cycle_c16: targets: build: cmds: [
-	{name: "aa",      shell: "nu", do: "aa",           stop: false, ...},
-	{name: "bb",      shell: "nu", do: "bb",           stop: false, ...},
+	{name: "aa", shell: "nu", do: "aa", stop: false, ...},
+	{name: "bb", shell: "nu", do: "bb", stop: false, ...},
 	{name: "builtin", shell: "nu", do: "builtin-body", stop: false, ...},
-	{name: "cc",      shell: "nu", do: "cc",           stop: false, ...},
-	{name: "dd",      shell: "nu", do: "dd",           stop: false, ...},
-	{name: "ee",      shell: "nu", do: "ee",           stop: false, ...},
-	{name: "yy",      shell: "nu", do: "yy",           stop: false, ...},
-	{name: "zz",      shell: "nu", do: "zz",           stop: false, ...},
+	{name: "cc", shell: "nu", do: "cc", stop: false, ...},
+	{name: "dd", shell: "nu", do: "dd", stop: false, ...},
+	{name: "ee", shell: "nu", do: "ee", stop: false, ...},
+	{name: "yy", shell: "nu", do: "yy", stop: false, ...},
+	{name: "zz", shell: "nu", do: "zz", stop: false, ...},
 ]
 
 // --- C18: dep strings to the same name resolve consistently across
@@ -109,8 +109,8 @@ _cycle_c20: #project & {
 	}
 }
 _cycle_c20: targets: "alternate-build": name: "alternate-build"
-_cycle_c20: targets: "extra-test":      name: "extra-test"
-_cycle_c20: targets: "hot-launch":      name: "hot-launch"
+_cycle_c20: targets: "extra-test": name:      "extra-test"
+_cycle_c20: targets: "hot-launch": name:      "hot-launch"
 
 // Public aggregator forces evaluation of the hidden bindings.
 Tests: cycle_deep: {

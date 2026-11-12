@@ -7,8 +7,10 @@
 # `cue vet` is lenient about some schema-incomplete errors, so we use
 # `cue eval` which is strict. Exit non-zero if any expectation diverges.
 
+use ../runtime/tools.nu [run-cue]
+
 def eval-pass [label: string, files: list<string>]: nothing -> int {
-	let r = (do { ^cue eval ...$files } | complete)
+	let r = (do { run-cue eval ...$files } | complete)
 	if $r.exit_code == 0 {
 		print $"  PASS  ($label)"
 		0
@@ -20,7 +22,7 @@ def eval-pass [label: string, files: list<string>]: nothing -> int {
 }
 
 def eval-fail [label: string, files: list<string>]: nothing -> int {
-	let r = (do { ^cue eval ...$files } | complete)
+	let r = (do { run-cue eval ...$files } | complete)
 	if $r.exit_code != 0 {
 		print $"  PASS  ($label) exit=($r.exit_code) as expected"
 		0
@@ -34,7 +36,7 @@ def eval-fail [label: string, files: list<string>]: nothing -> int {
 # `cue eval` tolerates — `cue export` rejects them, and export is what
 # `bayt generate` pass-2 actually runs.
 def export-fail [label: string, files: list<string>]: nothing -> int {
-	let r = (do { ^cue export ...$files } | complete)
+	let r = (do { run-cue export ...$files } | complete)
 	if $r.exit_code != 0 {
 		print $"  PASS  ($label) exit=($r.exit_code) as expected"
 		0
@@ -45,7 +47,7 @@ def export-fail [label: string, files: list<string>]: nothing -> int {
 }
 
 def export-fail-msg [label: string, files: list<string>, msg: string]: nothing -> int {
-	let r = (do { ^cue export ...$files } | complete)
+	let r = (do { run-cue export ...$files } | complete)
 	if $r.exit_code != 0 and ($r.stderr | str contains $msg) {
 		print $"  PASS  ($label)"
 		0
@@ -59,7 +61,7 @@ def export-fail-msg [label: string, files: list<string>, msg: string]: nothing -
 # An interpolation over a field that is not there leaves the value
 # incomplete, which `cue eval` passes; only an export proves it renders.
 def export-pass [label: string, files: list<string>]: nothing -> int {
-	let r = (do { ^cue export ...$files } | complete)
+	let r = (do { run-cue export ...$files } | complete)
 	if $r.exit_code == 0 {
 		print $"  PASS  ($label)"
 		0
@@ -74,7 +76,7 @@ def export-pass [label: string, files: list<string>]: nothing -> int {
 # unrelated break in the fixture keeps a bare eval-fail green while the
 # message regresses to something that locates nothing.
 def eval-fail-msg [label: string, files: list<string>, msg: string]: nothing -> int {
-	let r = (do { ^cue eval ...$files } | complete)
+	let r = (do { run-cue eval ...$files } | complete)
 	if $r.exit_code != 0 and ($r.stderr | str contains $msg) {
 		print $"  PASS  ($label) exit=($r.exit_code) as expected"
 		0
@@ -140,7 +142,9 @@ def main [] {
 	print "positive suites"
 	$failed = $failed + (eval-pass "core bayt" $core)
 	$failed = $failed + (export-pass "host probe of an embedded http check" [...$core "-e" "_proc_embedded"])
+	$failed = $failed + (export-pass "multi-copy and multi-cmd render" [...$core "-e" "_d31_render"])
 	$failed = $failed + (eval-pass "stacks/sayt" $sayt)
+	$failed = $failed + (export-pass "sayt.go two-phase render" [...$sayt "-e" "_go1_render"])
 	$failed = $failed + (eval-pass "stacks/go" $go)
 	$failed = $failed + (eval-pass "stacks/mise" $mise)
 	$failed = $failed + (eval-pass "stacks/deno" $deno)

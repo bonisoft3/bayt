@@ -25,21 +25,20 @@ depsDir: ".gomodcache"
 // materializing exactly the current closure — not the mount's accrued
 // versions. Both phases are RUN-only (`dockerfile.do`, see #cmd): they
 // write go's root-user cache path via the mount, which has no host
-// analogue (a host go auto-downloads into its own modcache). `_dir`
-// selects the module (`-C`); materialize runs at `_prio + 1`.
-_twoPhase: T={
-	_dir:  string // "" = module root; concrete (a disjunction default stays non-concrete under pass-2 interpolation)
+// analogue (a host go auto-downloads into its own modcache). `_c`
+// selects the module (`"-C it "` or `""`); materialize runs at `_prio + 1`.
+_twoPhase: {
+	_c:    string
 	_prio: int
-	let _c = [if T._dir != "" {"-C \(T._dir) "}, ""][0]
 	cmd: "download": {
-		priority: T._prio
+		priority: _prio
 		dockerfile: {
 			do:     *"env GOMODCACHE=\(_modCacheMount.target) go \(_c)mod download" | string
 			mounts: [_modCacheMount]
 		}
 	}
 	cmd: "materialize": {
-		priority: T._prio + 1
+		priority: _prio + 1
 		dockerfile: {
 			do:      *"env GOSUMDB=off GOPROXY=file://\(_modCacheMount.target)/cache/download,direct go \(_c)mod download" | string
 			mounts:  [_modCacheMount]
@@ -60,14 +59,14 @@ _goEnvPreamble: "go-modcache": {
 // warm mount re-materializes without network. go.sum pins every artifact
 // → digest-stable. Emits the closure at depsDir.
 modDownload: _twoPhase & {
-	_dir:  ""
+	_c:    ""
 	_prio: -1
 	srcs: defaultGlobs: {
 		"go-mod": *{glob: "go.mod"} | null
 		"go-sum": *{glob: "go.sum"} | null
 	}
 	dockerfile: defaultPreamble: _goEnvPreamble
-	outs: globs: ["\(depsDir)/**/*"]
+	outs: globs:                 ["\(depsDir)/**/*"]
 }
 
 // build — `go build`. Manifests are compile inputs, so they key this
@@ -119,7 +118,7 @@ test: {
 // stage inherits build's GOMODCACHE=.gomodcache (service closure only),
 // so it two-phases the it/ closure before the tests run.
 integrationTest: _twoPhase & {
-	_dir:  "it"
+	_c:    "-C it "
 	_prio: -2
 	srcs: defaultGlobs: {
 		"go-it": *{glob: "it/**/*"} | null

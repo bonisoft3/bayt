@@ -52,8 +52,8 @@ install: {
 // builtin cmd. Defined as concrete fragments (not a parameterized
 // helper) because parameter fields would leak into the target struct
 // when unified.
-build:   _exec & {_sub: "build"}
-test:    _exec & {_sub: "test"} & {
+build: _exec & {_sub: "build"}
+test: _exec & {_sub: "test"} & {
 	env: CI: *"true" | string
 }
 testInt: _exec & {_sub: "test:int"} & {
@@ -69,17 +69,17 @@ testE2E: _exec & {_sub: "test:e2e"} & {
 // stays toolchain-agnostic. hmr.native: true — pnpm-managed
 // frameworks (Next, Vite, Nuxt) handle file watching internally.
 dev: {
-	hmr: native: true
+	hmr: native:     true
 	dockerfile: cmd: ["pnpm", "dev"]
 }
 
 // _exec — internal template that the subcommand fragments above
 // instantiate. Hidden so it doesn't pollute the package's public
 // surface.
-_exec: E={
+_exec: {
 	_sub: string
 	cmd: "builtin": {
-		do: *"pnpm \(E._sub)" | string
+		do: *"pnpm \(_sub)" | string
 		dockerfile: mounts: [storeMount]
 	}
 }
@@ -176,4 +176,3 @@ srcsIntegrate: {
 		"coverage/**",
 	]
 }
-

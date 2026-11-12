@@ -34,7 +34,7 @@ import (
 // version bump here flows to both presets without drift.
 _lazyboxOverlay: {
 	"lazybox-copy": {priority: -10, line: "COPY --from=\(lock.images.lazybox) /lazybox/ /root/.local/share/lazybox/"}
-	"path-env": {priority: -9, line: "ENV PATH=/root/.local/bin:/root/.local/share/lazybox/bin:$PATH"}
+	"path-env":     {priority: -9, line: "ENV PATH=/root/.local/bin:/root/.local/share/lazybox/bin:$PATH"}
 }
 
 // nubox — leap-based, includes lazybox + mise + nushell. Use for
@@ -91,15 +91,15 @@ bkid: {
 		"socat": {priority: -10, copy: {
 			from: {name: lock.images.alpine_socat}
 			srcs: ["/usr/bin/socat1"]
-			dst: "/usr/local/bin/socat"
+			dst:  "/usr/local/bin/socat"
 		}}
 		"socat-libs": {priority: -9, copy: {
 			from: {name: lock.images.alpine_socat}
 			srcs: ["/usr/lib/libreadline.so.8", "/usr/lib/libncursesw.so.6"]
-			dst: "/usr/lib/"
+			dst:  "/usr/lib/"
 		}}
 		"lazybox-copy": {priority: -11, line: _lazyboxOverlay["lazybox-copy"].line}
-		"path-env": {priority: -8, line: "ENV PATH=$PATH:/root/.local/bin:/root/.local/share/lazybox/bin"}
+		"path-env":     {priority: -8, line: "ENV PATH=$PATH:/root/.local/bin:/root/.local/share/lazybox/bin"}
 		"toolchain-config": {priority: -7, line: """
 			COPY <<'BKID_MISE' /opt/bkid/mise.toml
 			\(toml.Marshal(_bkidMise))BKID_MISE

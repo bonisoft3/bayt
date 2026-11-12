@@ -43,37 +43,38 @@ import (
 
 healthcheck: {
 	// http — HTTP GET status check via microcheck httpcheck.
-	#http: H={
+	#http: {
 		// Which check this is, for gen_process_compose's host probe.
 		template: "http"
 		scheme:   *"http" | "https"
 		host:     *"127.0.0.1" | string
 		port?:    int & >0 & <65536
 		path:     *"/" | string
-		if H.port != _|_ {
-			url: *"\(H.scheme)://\(H.host):\(H.port)\(H.path)" | string
+		if port != _|_ {
+			url: *"\(scheme)://\(host):\(port)\(path)" | string
 		}
-		url: string
-		authorization: *null | string
-		headers:       *[] | [...string]
+		url:            string
+		authorization:  *null | string
+		headers:        *[] | [...string]
 		start_interval: *"200ms" | string
-		interval:       *"1s"    | string
-		timeout:        *"5s"    | string
-		retries:        *30      | int
-		start_period:   *"30s"   | string
+		interval:       *"1s" | string
+		timeout:        *"5s" | string
+		retries:        *30 | int
+		start_period:   *"30s" | string
 		...
 	}
-	http: T={
+	http: {
 		healthcheck: #http
+		let _hc = healthcheck
 
-		let _authHeader = [if T.healthcheck.authorization != null {
-			let val = T.healthcheck.authorization
+		let _authHeader = [if _hc.authorization != null {
+			let val = _hc.authorization
 			let auth = [if strings.Contains(val, " ") {val}, "Bearer \(val)"][0]
 			"Authorization: \(auth)"
 		}]
-		let _allHeaders = list.Concat([_authHeader, T.healthcheck.headers])
+		let _allHeaders = list.Concat([_authHeader, _hc.headers])
 		let _headerArgs = [for h in _allHeaders for x in ["-H", h] {x}]
-		let _cmd = list.Concat([["CMD", "httpcheck"], _headerArgs, [T.healthcheck.url]])
+		let _cmd = list.Concat([["CMD", "httpcheck"], _headerArgs, [_hc.url]])
 
 		dockerfile: {
 			// defaultCopy, not copy, so a consumer's own `copy` coexists —
@@ -86,36 +87,37 @@ healthcheck: {
 			}
 			healthcheck: {
 				test:         *_cmd | [...string]
-				interval:     *T.healthcheck.interval | string
-				timeout:      *T.healthcheck.timeout | string
-				retries:      *T.healthcheck.retries | int
-				start_period: *T.healthcheck.start_period | string
+				interval:     *_hc.interval | string
+				timeout:      *_hc.timeout | string
+				retries:      *_hc.retries | int
+				start_period: *_hc.start_period | string
 			}
 		}
 		compose: healthcheck: {
 			test:           *_cmd | _
-			interval:       *T.healthcheck.interval | string
-			timeout:        *T.healthcheck.timeout | string
-			retries:        *T.healthcheck.retries | int
-			start_period:   *T.healthcheck.start_period | string
-			start_interval: *T.healthcheck.start_interval | string
+			interval:       *_hc.interval | string
+			timeout:        *_hc.timeout | string
+			retries:        *_hc.retries | int
+			start_period:   *_hc.start_period | string
+			start_interval: *_hc.start_interval | string
 		}
 	}
 
 	// tcp — TCP port liveness via microcheck portcheck.
 	#tcp: {
 		// Which check this is, for gen_process_compose's host probe.
-		template: "tcp"
-		port: int
+		template:       "tcp"
+		port:           int
 		start_interval: *"200ms" | string
-		interval:       *"1s"    | string
-		timeout:        *"5s"    | string
-		retries:        *30      | int
-		start_period:   *"30s"   | string
+		interval:       *"1s" | string
+		timeout:        *"5s" | string
+		retries:        *30 | int
+		start_period:   *"30s" | string
 		...
 	}
-	tcp: T={
+	tcp: {
 		healthcheck: #tcp
+		let _hc = healthcheck
 
 		dockerfile: {
 			defaultCopy: portcheck: {
@@ -125,20 +127,20 @@ healthcheck: {
 				chmod: "755"
 			}
 			healthcheck: {
-				test:         *["CMD", "portcheck", "--port", "\(T.healthcheck.port)"] | [...string]
-				interval:     *T.healthcheck.interval | string
-				timeout:      *T.healthcheck.timeout | string
-				retries:      *T.healthcheck.retries | int
-				start_period: *T.healthcheck.start_period | string
+				test:         *["CMD", "portcheck", "--port", "\(_hc.port)"] | [...string]
+				interval:     *_hc.interval | string
+				timeout:      *_hc.timeout | string
+				retries:      *_hc.retries | int
+				start_period: *_hc.start_period | string
 			}
 		}
 		compose: healthcheck: {
-			test:           *["CMD", "portcheck", "--port", "\(T.healthcheck.port)"] | _
-			interval:       *T.healthcheck.interval | string
-			timeout:        *T.healthcheck.timeout | string
-			retries:        *T.healthcheck.retries | int
-			start_period:   *T.healthcheck.start_period | string
-			start_interval: *T.healthcheck.start_interval | string
+			test:           *["CMD", "portcheck", "--port", "\(_hc.port)"] | _
+			interval:       *_hc.interval | string
+			timeout:        *_hc.timeout | string
+			retries:        *_hc.retries | int
+			start_period:   *_hc.start_period | string
+			start_interval: *_hc.start_interval | string
 		}
 	}
 
@@ -149,66 +151,68 @@ healthcheck: {
 	#postgres: {
 		// Which check this is, for gen_process_compose's host probe.
 		template: "postgres"
-		db:    *"postgres"  | string
-		user:  *"postgres"  | string
-		port:  *5432        | int
-		host:  *"localhost" | string
+		db:       *"postgres" | string
+		user:     *"postgres" | string
+		port:     *5432 | int
+		host:     *"localhost" | string
 
 		start_interval: *"200ms" | string
-		interval:       *"1s"    | string
-		timeout:        *"5s"    | string
-		retries:        *30      | int
-		start_period:   *"5m"    | string
+		interval:       *"1s" | string
+		timeout:        *"5s" | string
+		retries:        *30 | int
+		start_period:   *"5m" | string
 		...
 	}
-	postgres: T={
+	postgres: {
 		healthcheck: #postgres
+		let _hc = healthcheck
 
 		dockerfile: healthcheck: {
-			test:         *["CMD", "pg_isready", "-h", T.healthcheck.host, "-p", "\(T.healthcheck.port)", "-d", T.healthcheck.db, "-U", T.healthcheck.user] | [...string]
-			interval:     *T.healthcheck.interval | string
-			timeout:      *T.healthcheck.timeout | string
-			retries:      *T.healthcheck.retries | int
-			start_period: *T.healthcheck.start_period | string
+			test:         *["CMD", "pg_isready", "-h", _hc.host, "-p", "\(_hc.port)", "-d", _hc.db, "-U", _hc.user] | [...string]
+			interval:     *_hc.interval | string
+			timeout:      *_hc.timeout | string
+			retries:      *_hc.retries | int
+			start_period: *_hc.start_period | string
 		}
 		compose: healthcheck: {
-			test:           *["CMD", "pg_isready", "-h", T.healthcheck.host, "-p", "\(T.healthcheck.port)", "-d", T.healthcheck.db, "-U", T.healthcheck.user] | _
-			interval:       *T.healthcheck.interval | string
-			timeout:        *T.healthcheck.timeout | string
-			retries:        *T.healthcheck.retries | int
-			start_period:   *T.healthcheck.start_period | string
-			start_interval: *T.healthcheck.start_interval | string
+			test:           *["CMD", "pg_isready", "-h", _hc.host, "-p", "\(_hc.port)", "-d", _hc.db, "-U", _hc.user] | _
+			interval:       *_hc.interval | string
+			timeout:        *_hc.timeout | string
+			retries:        *_hc.retries | int
+			start_period:   *_hc.start_period | string
+			start_interval: *_hc.start_interval | string
 		}
 	}
 
 	// redis — redis-cli, in the redis upstream image.
 	#redis: {
 		// Which check this is, for gen_process_compose's host probe.
-		template: "redis"
+		template:       "redis"
 		start_interval: *"200ms" | string
-		interval:       *"1s"    | string
-		timeout:        *"5s"    | string
-		retries:        *30      | int
-		start_period:   *"30s"   | string
+		interval:       *"1s" | string
+		timeout:        *"5s" | string
+		retries:        *30 | int
+		start_period:   *"30s" | string
 		...
 	}
-	redis: T={
+	redis: {
 		healthcheck: #redis
+		let _hc = healthcheck
 
 		dockerfile: healthcheck: {
 			test:         *["CMD-SHELL", "redis-cli ping | grep PONG"] | [...string]
-			interval:     *T.healthcheck.interval | string
-			timeout:      *T.healthcheck.timeout | string
-			retries:      *T.healthcheck.retries | int
-			start_period: *T.healthcheck.start_period | string
+			interval:     *_hc.interval | string
+			timeout:      *_hc.timeout | string
+			retries:      *_hc.retries | int
+			start_period: *_hc.start_period | string
 		}
 		compose: healthcheck: {
 			test:           *["CMD-SHELL", "redis-cli ping | grep PONG"] | _
-			interval:       *T.healthcheck.interval | string
-			timeout:        *T.healthcheck.timeout | string
-			retries:        *T.healthcheck.retries | int
-			start_period:   *T.healthcheck.start_period | string
-			start_interval: *T.healthcheck.start_interval | string
+			interval:       *_hc.interval | string
+			timeout:        *_hc.timeout | string
+			retries:        *_hc.retries | int
+			start_period:   *_hc.start_period | string
+			start_interval: *_hc.start_interval | string
 		}
 	}
 
@@ -219,32 +223,33 @@ healthcheck: {
 	#ollama: {
 		// Which check this is, for gen_process_compose's host probe.
 		template: "ollama"
-		model: string
+		model:    string
 
 		start_interval: *"200ms" | string
-		interval:       *"1s"    | string
-		timeout:        *"5s"    | string
-		retries:        *30      | int
-		start_period:   *"120s"  | string
+		interval:       *"1s" | string
+		timeout:        *"5s" | string
+		retries:        *30 | int
+		start_period:   *"120s" | string
 		...
 	}
-	ollama: T={
+	ollama: {
 		healthcheck: #ollama
+		let _hc = healthcheck
 
 		dockerfile: healthcheck: {
-			test:         *["CMD-SHELL", "ollama list | grep -q \(T.healthcheck.model)"] | [...string]
-			interval:     *T.healthcheck.interval | string
-			timeout:      *T.healthcheck.timeout | string
-			retries:      *T.healthcheck.retries | int
-			start_period: *T.healthcheck.start_period | string
+			test:         *["CMD-SHELL", "ollama list | grep -q \(_hc.model)"] | [...string]
+			interval:     *_hc.interval | string
+			timeout:      *_hc.timeout | string
+			retries:      *_hc.retries | int
+			start_period: *_hc.start_period | string
 		}
 		compose: healthcheck: {
-			test:           *["CMD-SHELL", "ollama list | grep -q \(T.healthcheck.model)"] | _
-			interval:       *T.healthcheck.interval | string
-			timeout:        *T.healthcheck.timeout | string
-			retries:        *T.healthcheck.retries | int
-			start_period:   *T.healthcheck.start_period | string
-			start_interval: *T.healthcheck.start_interval | string
+			test:           *["CMD-SHELL", "ollama list | grep -q \(_hc.model)"] | _
+			interval:       *_hc.interval | string
+			timeout:        *_hc.timeout | string
+			retries:        *_hc.retries | int
+			start_period:   *_hc.start_period | string
+			start_interval: *_hc.start_interval | string
 		}
 	}
 }

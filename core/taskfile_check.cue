@@ -20,7 +20,7 @@ _t1: #project & {
 		"setup": {taskfile: {}, cmd: "builtin": do: "true"}
 		"build": {
 			taskfile: {}
-			deps: [":setup"]
+			deps:     [":setup"]
 			srcs: globs: ["**/*.rs"]
 			outs: globs: ["target/release/t1"]
 			cmd: "builtin": do: "cargo build --release"
@@ -65,8 +65,8 @@ _t2: #project & {
 	name: "t2"
 	dir:  "t2"
 	targets: {
-		"setup": {taskfile: {}, cmd: "builtin": do: "true"}
-		"build": {taskfile: {}, cmd: "builtin": do: "cargo build"}
+		"setup":   {taskfile: {}, cmd: "builtin": do: "true"}
+		"build":   {taskfile: {}, cmd: "builtin": do: "cargo build"}
 		"release": {cmd: "builtin": do: "cargo build --release"}
 	}
 }
@@ -85,16 +85,16 @@ _t3: #project & {
 			taskfile: {}
 			cmd: {
 				"pregen":    {priority: -10, do: "gen-code.nu"}
-				"builtin":   {do:                "go build"}
+				"builtin":   {do: "go build"}
 				"postcheck": {priority: 10, do: "govet"}
 			}
 		}
 	}
 }
 _t3_tf: (#taskfileGen & {project: _t3, depManifests: {}})
-_t3_tf: files: build: tasks: default: deps: ["postcheck"]
-_t3_tf: files: build: tasks: pregen:    internal: true
-_t3_tf: files: build: tasks: builtin:   internal: true
+_t3_tf: files: build: tasks: default: deps:       ["postcheck"]
+_t3_tf: files: build: tasks: pregen: internal:    true
+_t3_tf: files: build: tasks: builtin: internal:   true
 _t3_tf: files: build: tasks: postcheck: internal: true
 // Each internal task chains on the previous; the first has no intra-task dep.
 _t3_tf: files: build: tasks: builtin: deps:   ["pregen"]
@@ -184,7 +184,7 @@ _t8: #project & {
 		"build": {
 			taskfile: {}
 			cmd: "builtin": {
-				do: "./gradlew assemble"
+				do:      "./gradlew assemble"
 				windows: {do: ".\\gradlew.bat assemble", shell: "pwsh"}
 			}
 		}
@@ -209,7 +209,7 @@ _t9: #project & {
 		"doctor": {
 			taskfile: incremental: false
 			cmd: "builtin": {
-				do: "check.sh"
+				do:      "check.sh"
 				windows: {do: "check.ps1", shell: "pwsh"}
 			}
 		}
@@ -239,7 +239,7 @@ _t10: #project & {
 		"setup": {taskfile: {}, deps: ["workspaceroot:setup"], cmd: "builtin": do: "true"}
 		"build": {
 			taskfile: {}
-			deps: [":setup", "libx:build"]
+			deps:     [":setup", "libx:build"]
 			cmd: "builtin": do: "cargo build"
 		}
 	}
@@ -250,21 +250,21 @@ _t10_tf: (#taskfileGen & {project: _t10, depManifests: {
 		name:       "build"
 		project:    "libx"
 		dir:        "libs/x"
-		outs: {globs: ["out/**"], exclude: []}
+		outs:       {globs: ["out/**"], exclude: []}
 	}
 	"workspaceroot:setup": {
 		visibility: "public"
 		name:       "setup"
 		project:    "workspaceroot"
 		dir:        ""
-		outs: {globs: [], exclude: []}
+		outs:       {globs: [], exclude: []}
 	}
 }})
 _t10_tf: bayt_root: tasks: cross_libx_build: {
 	internal: true
 	run:      "once"
 	if:       "test -f ../../libs/x/Taskfile.yml"
-	deps: ["libx:bayt:build"]
+	deps:     ["libx:bayt:build"]
 }
 _t10_tf: bayt_root: tasks: cross_libs_x_build?: _|_
 _t10_tf: bayt_root: includes: libx: {
@@ -282,7 +282,7 @@ _t10_tf: bayt_root: tasks: cross_workspaceroot_setup: {
 	internal: true
 	run:      "once"
 	if:       "test -f ../../Taskfile.yml"
-	deps: ["workspaceroot:bayt:setup"]
+	deps:     ["workspaceroot:bayt:setup"]
 }
 _t10_tf: files: build: tasks: default: deps: ["::bayt:setup", "::bayt:cross_libx_build"]
 _t10_tf: files: setup: tasks: default: deps: ["::bayt:cross_workspaceroot_setup"]
@@ -306,7 +306,7 @@ _t11: #project & {
 _t11_tf: (#taskfileGen & {project: _t11, depManifests: {}})
 _t11_tf: files: build: tasks: default: if: =~"^mise x -- bayt cache check --manifest '\\{\\{\\.TASKFILE_DIR\\}\\}/bayt\\.build\\.json' --stamp-file \\.task/bayt/build\\.hash; \\[ \\$\\? -ne 10 \\]$"
 _t11_tf: files: setup: tasks: default: {[=~"^if$"]: _|_}
-_t1_tf: files: build: tasks: default: {[=~"^if$"]: _|_}
+_t1_tf: files: build: tasks: default:  {[=~"^if$"]: _|_}
 
 // Public aggregator forces evaluation of the hidden _t* bindings.
 Tests: taskfile: {
@@ -331,7 +331,7 @@ _t12: #project & {
 	name: "t12"
 	dir:  "apps/t12"
 	targets: {
-		"libx": {taskfile: {}, cmd: "builtin": do: "true"}
+		"libx":  {taskfile: {}, cmd: "builtin": do: "true"}
 		"build": {taskfile: {}, deps: [":libx", "libx:build"], cmd: "builtin": do: "true"}
 	}
 }
@@ -342,9 +342,9 @@ _t12_tf: (#taskfileGen & {project: _t12, depManifests: {
 		project:       "libx"
 		discriminator: "k4wz"
 		dir:           "libs/x"
-		outs: {globs: [], exclude: []}
+		outs:          {globs: [], exclude: []}
 	}
 }})
-_t12_tf: bayt_root: includes: libx: taskfile: "./Taskfile.libx.yaml"
+_t12_tf: bayt_root: includes: libx: taskfile:        "./Taskfile.libx.yaml"
 _t12_tf: bayt_root: includes: "libx-k4wz": taskfile: "../../../libs/x/Taskfile.yml"
-_t12_tf: bayt_root: tasks: cross_libx_build: deps: ["libx-k4wz:bayt:build"]
+_t12_tf: bayt_root: tasks: cross_libx_build: deps:   ["libx-k4wz:bayt:build"]

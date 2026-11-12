@@ -10,7 +10,7 @@ _p: bayt.#project & {
 	dir:  "neg"
 	targets: web: {
 		entrypoint: do: "web"
-		expose: http: {port: 8080, env: "PORT", publish: true}
+		expose: http:   {port: 8080, env: "PORT", publish: true}
 	}
 }
 out: (bayt.#dockerComposeGen & {project: _p, depManifests: {}}).compose

@@ -69,7 +69,7 @@ testE2E: _exec & {_sub: "test:e2e"}
 // stays toolchain-agnostic. hmr.native: true — bun-managed frameworks
 // (Vite, TanStack Start) handle file watching internally.
 dev: {
-	hmr: native: true
+	hmr: native:     true
 	dockerfile: cmd: ["bun", "run", "dev"]
 }
 
@@ -78,10 +78,10 @@ dev: {
 // surface. `bun run <script>` (not bare `bun <script>`): a bare
 // subcommand resolves to bun's builtins (`bun build` is the bundler,
 // `bun test` its native runner), not the package.json script.
-_exec: E={
+_exec: {
 	_sub: string
 	cmd: "builtin": {
-		do: *"bun run \(E._sub)" | string
+		do: *"bun run \(_sub)" | string
 		dockerfile: mounts: [storeMount]
 	}
 }

@@ -8,11 +8,11 @@ _p: bayt.#project & {
 	dir:  "neg"
 	targets: {
 		web: {
-			expose: http: {port: 8000, env: "PORT", host: 3300}
+			expose: http:   {port: 8000, env: "PORT", host: 3300}
 			entrypoint: do: "web"
 		}
 		admin: {
-			expose: http: {port: 8001, env: "PORT", host: 3300}
+			expose: http:   {port: 8001, env: "PORT", host: 3300}
 			entrypoint: do: "admin"
 		}
 	}

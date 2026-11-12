@@ -23,14 +23,14 @@ _cf1: #project & {
 // ref's manifest.
 _cf1_m: (#manifestGen & {project: _cf1, depManifests: {
 	"dbx:setup:outs": {
-		project: "dbx"
-		dir:     "infra/dbx"
+		project:             "dbx"
+		dir:                 "infra/dbx"
 		transitiveCrossDeps: [{project: "dep2", dir: "infra/dep2"}]
 	}
 }})
 // Positive: producer dir + its transitive dir both federate, under their names.
 _cf1_m: projectManifest: crossProjectDirs: ["infra/dbx", "infra/dep2"]
-_cf1_m: projectManifest: crossProjects: [{project: "dbx", dir: "infra/dbx"}, {project: "dep2", dir: "infra/dep2"}]
+_cf1_m: projectManifest: crossProjects:    [{project: "dbx", dir: "infra/dbx"}, {project: "dep2", dir: "infra/dep2"}]
 // Negative: the copy ref must NOT create a dep edge (no duplicate bulk COPY).
 _cf1_m: _targetCrossDeps: build: []
 
@@ -53,11 +53,11 @@ _cf2: #project & {
 }
 _cf2_m: (#manifestGen & {project: _cf2, depManifests: {
 	"dbx:setup:outs": {
-		project: "dbx"
-		dir:     "infra/dbx"
-		name:    "setup_outs"
+		project:             "dbx"
+		dir:                 "infra/dbx"
+		name:                "setup_outs"
 		transitiveCrossDeps: []
-		upClosure: ["infra/dbx/.bayt/compose.setup.yaml"]
+		upClosure:           ["infra/dbx/.bayt/compose.setup.yaml"]
 	}
 }})
 _cf2_m: _upClosure: launch: [

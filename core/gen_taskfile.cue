@@ -9,21 +9,28 @@ import (
 	"strings"
 )
 
-
-#taskfileGen: W={
+#taskfileGen: {
+	project:      #project
+	depManifests: {[string]: _}
+	let _project = project
+	let _depManifests = depManifests
 	#taskfileFrom
-	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+	_m: (#manifestGen & {project: _project, depManifests: _depManifests})
 }
 
-#taskfileFrom: G={
-	project: #project
-	depManifests:   {[string]: _}
-	runtime: *"" | string
+#taskfileFrom: {
+	project:      #project
+	depManifests: {[string]: _}
+	runtime:      *"" | string
 
 	_m: _
+	let _project = project
+	let _runtime = runtime
+	let _mDepth = _m._depth
+	let _mCrossProjects = _m.projectManifest.crossProjects
 
 	// Only targets that declared a taskfile block on their #target.
-	_emit: {for n, t in G._m.files if t.taskfile != _|_ {(n): t}}
+	_emit: {for n, t in _m.files if t.taskfile != _|_ {(n): t}}
 
 	// bayt/sayt invocation tokens. Consumer mode (runtime == ""): bare
 	// names resolved via PATH (`mise install github:bonisoft3/bayt`).
@@ -32,17 +39,17 @@ import (
 	// mise tool-stub pair on Windows (a sh script Windows cannot exec);
 	// go-task templates the OS branch at run time. Workspaceroot
 	// (depth 0) prefixes `./` for argv unambiguity.
-	let _prefix = (_relPrefix & {depth: G._m._depth}).out
-	let _rt = (_runtimeDir & {runtime: G.runtime, depth: G._m._depth}).out
+	let _prefix = (_relPrefix & {depth: _mDepth}).out
+	let _rt = (_runtimeDir & {runtime: _runtime, depth: _mDepth}).out
 	_baytPath: [
-		if G.runtime != "" {"{{if eq OS \"windows\"}}mise tool-stub \(_rt)/nu.toml \(_rt)/bayt.nu{{else}}\(_rt)/bayt{{end}}"},
+		if _runtime != "" {"{{if eq OS \"windows\"}}mise tool-stub \(_rt)/nu.toml \(_rt)/bayt.nu{{else}}\(_rt)/bayt{{end}}"},
 		// An installed bayt, reached through the project's own toolchain:
 		// a shim is no promise (mise makes none for a `path:` version).
 		"mise x -- bayt",
 	][0]
 	// sayt lives beside bayt (`<parent>/sayt`); its entry is nu source.
 	_saytPath: [
-		if G.runtime != "" {"nu \(_prefix)\(path.Dir(G.runtime))/sayt/sayt.nu"},
+		if _runtime != "" {"nu \(_prefix)\(path.Dir(_runtime))/sayt/sayt.nu"},
 		"sayt",
 	][0]
 
@@ -60,7 +67,7 @@ import (
 	// sanitize PATH and lose the Dockerfile-set
 	// `/monorepo/plugins/bayt/bin` entry, leaving `bayt` unreachable
 	// in container RUN stages.
-	_fingerprint: F={
+	_fingerprint: {
 		t:    _
 		mode: "check" | "stamp"
 		// cmd: empty → target-level stamp; non-empty → per-cmd stamp.
@@ -75,10 +82,10 @@ import (
 		// path arrives with its separators eaten. The stamp path stays
 		// cwd-relative; go-task runs each task from the Taskfile's dir,
 		// so `.task/bayt/` lands in the same project.
-		let _cmdFlag    = [if F.cmd != "" {" --cmd \(F.cmd)"}, ""][0]
-		let _stampName  = [if F.cmd != "" {"\(F.t.name).\(F.cmd)"}, F.t.name][0]
-		let _updateFlag = [if F.mode == "stamp" {" --update-stamp"}, ""][0]
-		out: "\(_baytPath) fingerprint --manifest '{{.TASKFILE_DIR}}/bayt.\(F.t.name).json'\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
+		let _cmdFlag = [if cmd != "" {" --cmd \(cmd)"}, ""][0]
+		let _stampName = [if cmd != "" {"\(t.name).\(cmd)"}, t.name][0]
+		let _updateFlag = [if mode == "stamp" {" --update-stamp"}, ""][0]
+		out: "\(_baytPath) fingerprint --manifest '{{.TASKFILE_DIR}}/bayt.\(t.name).json'\(_cmdFlag) --stamp-file .task/bayt/\(_stampName).hash\(_updateFlag)"
 	}
 
 	// _baytWrap — the per-task BAYTW variable: the cache-run prefix that
@@ -88,20 +95,20 @@ import (
 	//
 	// The activate suffix (typically `mise x --`) resolves cmds through
 	// mise's shim; cmds that bake their own activate get no suffix.
-	_baytWrap: W={
+	_baytWrap: {
 		t:   _
 		cmd: *"" | string
 		out: string
 		// cache.full → --full (skip cmd on exact hit); cache.similar →
 		// --similar (warm-start on miss). Both opt-in.
-		let _cmdFlag      = [if W.cmd != ""           {" --cmd \(W.cmd)"},     ""][0]
-		let _fullFlag     = [if W.t.cache.full        {" --full"},             ""][0]
-		let _similarFlag  = [if W.t.cache.similar     {" --similar"},          ""][0]
-		let _activateTail = [if len(W.t.activate) > 0 {" \(W.t.activate)"},    ""][0]
+		let _cmdFlag = [if cmd != "" {" --cmd \(cmd)"}, ""][0]
+		let _fullFlag = [if t.cache.full {" --full"}, ""][0]
+		let _similarFlag = [if t.cache.similar {" --similar"}, ""][0]
+		let _activateTail = [if len(t.activate) > 0 {" \(t.activate)"}, ""][0]
 
 		// No shell wrap here: per-OS variants can each pick their own
 		// shell, so `<shell> -c` lives per-line in _osCmdList.
-		out: "\(_baytPath) cache run --manifest '{{.TASKFILE_DIR}}/bayt.\(W.t.name).json'\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)"
+		out: "\(_baytPath) cache run --manifest '{{.TASKFILE_DIR}}/bayt.\(t.name).json'\(_cmdFlag)\(_fullFlag)\(_similarFlag) --\(_activateTail)"
 	}
 
 	// _taskCmdLine — a (do, shell) pair as a go-task cmd string, prefixed
@@ -109,38 +116,38 @@ import (
 	// shell gets `<shell> -c "…"` so the whole do reaches it as one arg.
 	// _depKey — a dep project's include key: its name, plus its
 	// discriminator when it states one (#project.discriminator).
-	_depKey: K={
-		d: _
-		out: [if K.d.discriminator != _|_ {"\(K.d.project)-\(K.d.discriminator)"}, K.d.project][0]
+	_depKey: {
+		d:   _
+		out: [if d.discriminator != _|_ {"\(d.project)-\(d.discriminator)"}, d.project][0]
 	}
 
 	// _crossName — runner-task name for a cross-project chainedDep
 	// (`cross_<project>_<target>`).
-	_crossName: N={
-		d: _
-		out: "cross_\(N.d.project)_\(N.d.name)"
+	_crossName: {
+		d:   _
+		out: "cross_\(d.project)_\(d.name)"
 	}
 
 	// No {{.CLI_ARGS}} forwarding: the variable is run-global in
 	// go-task, so it would leak the caller's args into every dep task.
 	// Gate cmds are closed; interactive args go through `sayt <verb>`.
-	_taskCmdLine: L={
+	_taskCmdLine: {
 		do:    string
 		shell: string
 		bw:    string
 		// bayt/sayt-prefixed dos take the runtime-aware token (prefix
 		// form only — a mid-string `sayt` never rewrites).
 		let _do = [
-			if strings.HasPrefix(L.do, "bayt ") {_baytPath + strings.TrimPrefix(L.do, "bayt")},
-			if strings.HasPrefix(L.do, "sayt ") {_saytPath + strings.TrimPrefix(L.do, "sayt")},
-			L.do,
+			if strings.HasPrefix(do, "bayt ") {_baytPath + strings.TrimPrefix(do, "bayt")},
+			if strings.HasPrefix(do, "sayt ") {_saytPath + strings.TrimPrefix(do, "sayt")},
+			do,
 		][0]
 		let _quoted = (#shellQuote & {in: _do}).out
 		let _dollars = strings.Replace(_quoted, "$", "\\$", -1)
 		let _literal = strings.Replace(_dollars, "`", "\\`", -1)
 		out: [
-			if L.shell == "exec" {"\(L.bw)\(_do)"},
-			"\(L.bw)\(L.shell) -c \"\(_literal)\"",
+			if shell == "exec" {"\(bw)\(_do)"},
+			"\(bw)\(shell) -c \"\(_literal)\"",
 		][0]
 	}
 
@@ -148,22 +155,23 @@ import (
 	// branch per OS (carrying that OS's effective do/shell) when the cmd
 	// has a windows/linux/darwin override. A host outside those three
 	// matches no branch and runs nothing — safer than an untested unix-ism.
-	_osCmdList: X={
-		c:  _
-		bw: string
+	_osCmdList: {
+		c:   _
+		bw:  string
 		out: [...]
-		let _oses  = ["windows", "linux", "darwin"]
-		let _hasOS = len([for os in _oses if X.c[os] != _|_ {os}]) > 0
+		let _c = c
+		let _bw = bw
+		let _oses = ["windows", "linux", "darwin"]
+		let _hasOS = len([for os in _oses if _c[os] != _|_ {os}]) > 0
 		out: [
-			if !_hasOS {[(_taskCmdLine & {do: X.c.do, shell: X.c.shell, bw: X.bw}).out]},
+			if !_hasOS {[(_taskCmdLine & {do: _c.do, shell: _c.shell, bw: _bw}).out]},
 			[for os in _oses {
-				let _o = X.c[os]
+				let _o = _c[os]
 				{
 					cmd: (_taskCmdLine & {
-						do:    [if _o != _|_ && _o.do != _|_ {_o.do}, X.c.do][0]
-						shell: [if _o != _|_ && _o.shell != _|_ {_o.shell}, X.c.shell][0]
-						bw:    X.bw
-						ca:    X.ca
+						do:    [if _o != _|_ && _o.do != _|_ {_o.do}, _c.do][0]
+						shell: [if _o != _|_ && _o.shell != _|_ {_o.shell}, _c.shell][0]
+						bw:    _bw
 					}).out
 					platforms: [os]
 				}
@@ -174,14 +182,17 @@ import (
 	// _cmdsBlock — a cmd's _osCmdList lines plus the defer hash-stamp. The
 	// defer is unguarded (runs on every host); its list position is
 	// cosmetic (go-task fires defers at task exit).
-	_cmdsBlock: B={
+	_cmdsBlock: {
 		t:   _
-		cmd: *"" | string  // empty = target-level wrapper / single-cmd
-		c:   _             // the cmd object — drives OS branching + shell
+		cmd: *"" | string // empty = target-level wrapper / single-cmd
+		c:   _            // the cmd object — drives OS branching + shell
 		out: [...]
+		let _t = t
+		let _cmd = cmd
+		let _c = c
 		out: list.Concat([
-			(_osCmdList & {"c": B.c, bw: "{{.BAYTW}} "}).out,
-			[{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {"t": B.t, mode: "stamp", "cmd": B.cmd}).out){{end}}"}],
+			(_osCmdList & {c: _c, bw: "{{.BAYTW}} "}).out,
+			[{defer: "{{if not .EXIT_CODE}}\((_fingerprint & {t: _t, mode: "stamp", cmd: _cmd}).out){{end}}"}],
 		])
 	}
 
@@ -219,13 +230,14 @@ import (
 				let _sameProjectDeps = (_uniqStrings & {in: _sameRefs}).out
 				let _crossRefs = [
 					for d in t.chainedDeps
-					if d.dir != G.project.dir
+					if d.dir != _project.dir
 					if !(d.name =~ "_(srcs|bayt)$") {
 						"::bayt:\((_crossName & {"d": {project: d.project, name: strings.TrimSuffix(d.name, "_outs")}}).out)"
 					},
 				]
 				let _crossDeps = (_uniqStrings & {in: _crossRefs}).out
 				let _allDeps = list.Concat([_sameProjectDeps, _crossDeps])
+
 				// Cmds with a base `do` emit tasks; a cmd with only
 				// `dockerfile.do` is RUN-only (Dockerfile RUN, no task).
 				let _taskCmds = [for c in t.cmds if c.do != _|_ {c}]
@@ -341,9 +353,9 @@ import (
 									// each cmd-subtask's cache lookup scopes
 									// to its own srcs/outs slice.
 									vars: BAYTW: (_baytWrap & {"t": t, "cmd": _c.name}).out
-									status: [(_fingerprint & {"t": t, mode: "check", "cmd": _c.name}).out]
+									status:    [(_fingerprint & {"t": t, mode: "check", "cmd": _c.name}).out]
 									generates: [".task/bayt/\(t.name).\(_c.name).hash"]
-									cmds: (_cmdsBlock & {"t": t, "cmd": _c.name, "c": _c}).out
+									cmds:      (_cmdsBlock & {"t": t, "cmd": _c.name, "c": _c}).out
 								}
 								if !t.taskfile.incremental {
 									cmds: (_osCmdList & {"c": _c, bw: ""}).out
@@ -367,7 +379,7 @@ import (
 	// against the include's dir, not the included file's location.
 	bayt_root: {
 		version: "3"
-		let _relRootFromBayt = "../" + strings.Repeat("../", G._m._depth)
+		let _relRootFromBayt = "../" + strings.Repeat("../", _mDepth)
 
 		// cross_* gate runners — host-side merkle completion. The
 		// fingerprint chain reads dep-project stamps
@@ -383,11 +395,11 @@ import (
 		// target whose cross deps left no outs, so a runner skipped
 		// where it should not have been fails rather than building on
 		// nothing.
-		let _rootRelFromProject = strings.Repeat("../", G._m._depth)
+		let _rootRelFromProject = strings.Repeat("../", _mDepth)
 		let _crossChain = {
 			for _, t in _emit
 			for d in t.chainedDeps
-			if d.dir != G.project.dir
+			if d.dir != _project.dir
 			if !(d.name =~ "_(srcs|bayt)$") {
 				let _b = {dir: d.dir, project: d.project, name: strings.TrimSuffix(d.name, "_outs"), if d.discriminator != _|_ {discriminator: d.discriminator}}
 				((_crossName & {"d": _b}).out): _b
@@ -401,7 +413,7 @@ import (
 						internal: true
 						run:      "once"
 						if:       "test -f \(_rootRelFromProject)\(_depPath)Taskfile.yml"
-						deps: ["\((_depKey & {"d": d}).out):bayt:\(d.name)"]
+						deps:     ["\((_depKey & {"d": d}).out):bayt:\(d.name)"]
 					}
 				}
 			}
@@ -415,8 +427,9 @@ import (
 					optional: true
 				}
 			}
+
 			// Two dirs under one name collide on the key.
-			for p in G._m.projectManifest.crossProjects {
+			for p in _mCrossProjects {
 				let _depPath = [if p.dir != "" {"\(p.dir)/"}, ""][0]
 				((_depKey & {"d": p}).out): {
 					taskfile: "\(_relRootFromBayt)\(_depPath)Taskfile.yml"

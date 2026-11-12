@@ -59,7 +59,7 @@ _e2: #project & {
 }
 _e2_m: (#manifestGen & {project: _e2, depManifests: {}})
 _e2_m: files: build: deps: ["setup"]
-_e2_m: files: test:  deps: ["build", "setup"]
+_e2_m: files: test: deps:  ["build", "setup"]
 
 // --- E3: transitiveDeps walks the same-project chain. test → build →
 // setup ⇒ test.transitiveDeps = [build, setup].
@@ -163,9 +163,9 @@ _e8: #project & {
 		"integrate": {
 			deps: ["up:launch:bayt", "up:launch:outs"]
 			srcs: globs: ["tests/**"]
-			cmd:  "builtin": do: "true"
+			cmd: "builtin": do: "true"
 			dockerfile: busybox
-			compose: {up: true, manual: true}
+			compose:    {up: true, manual: true}
 		}
 	}
 }
@@ -180,14 +180,14 @@ _e8_dm: {
 }
 _e8_m: (#manifestGen & {project: _e8, depManifests: {
 	"up:launch:bayt": _e8_dm & {
-		name: "launch_bayt"
-		outs: {globs: [".bayt/compose.launch.yaml"], exclude: []}
+		name:      "launch_bayt"
+		outs:      {globs: [".bayt/compose.launch.yaml"], exclude: []}
 		upClosure: ["up/.bayt/compose.launch.yaml", "up/.bayt/compose.viabayt.yaml"]
 	}
 	// Image-only producer — empty interface (D20).
 	"up:launch:outs": _e8_dm & {
-		name: "launch_outs"
-		outs: {globs: [], exclude: []}
+		name:      "launch_outs"
+		outs:      {globs: [], exclude: []}
 		upClosure: ["up/.bayt/compose.launch.yaml", "up/.bayt/compose.viaouts.yaml"]
 	}
 }})
@@ -206,15 +206,16 @@ _e8_m: files: integrate: upClosure: [
 // synthetic views intact. Re-typing it there re-unifies it with
 // `#fileset`'s own `*[]`: two defaults leave none, the disjunction goes
 // empty, and generate dies at scan naming only the CUE path.
-_e9: S={
-	in?: [...string]
-	_globs: *S.in | ["config.json"]
+_e9: {
+	in?:    [...string]
+	_globs: *in | ["config.json"]
+	let _g = _globs
 	out: #project & {
 		name: "e9"
 		dir:  "e9"
 		targets: "build": {
-			srcs: globs: S._globs
-			outs: {globs: S._globs, exclude: S._globs}
+			srcs: globs: _g
+			outs: {globs: _g, exclude: _g}
 			cmd: "builtin": do: "true"
 			dockerfile: busybox
 		}
@@ -232,14 +233,14 @@ _e9_fall_head: _e9_fall_m.files.build.synthetics.outs.outs.globs[0] & "config.js
 
 // Public aggregator forces evaluation of the hidden _e* bindings.
 Tests: emitter: {
-	e1: _e1_m
-	e2: _e2_m
-	e3: _e3_m
-	e4: _e4_m
-	e5: _e5_m
-	e6: _e6_m
-	e7: _e7_m
-	e8: _e8_m
+	e1:           _e1_m
+	e2:           _e2_m
+	e3:           _e3_m
+	e4:           _e4_m
+	e5:           _e5_m
+	e6:           _e6_m
+	e7:           _e7_m
+	e8:           _e8_m
 	e9_set_len:   _e9_set_len
 	e9_set_head:  _e9_set_head
 	e9_set_excl:  _e9_set_excl

@@ -18,14 +18,18 @@ import (
 	"list"
 )
 
-#skaffoldGen: W={
+#skaffoldGen: {
+	project:      #project
+	depManifests: {[string]: _}
+	let _project = project
+	let _depManifests = depManifests
 	#skaffoldFrom
-	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+	_m: (#manifestGen & {project: _project, depManifests: _depManifests})
 }
 
-#skaffoldFrom: G={
-	project: #project
-	depManifests:   {[string]: _}
+#skaffoldFrom: {
+	project:      #project
+	depManifests: {[string]: _}
 
 	_m: _
 
@@ -33,23 +37,26 @@ import (
 	// dictionaries still emit a fragment with apiVersion+kind+metadata
 	// — useful as a no-op anchor for the user's project skaffold.yaml
 	// to require even if no profiles are declared yet.
-	_emit: {for n, t in G._m.files if t.skaffold != _|_ {(n): t}}
+	_emit: {for n, t in _m.files if t.skaffold != _|_ {(n): t}}
 
 	// Helper: render one profile's body. Activation, build artifact,
 	// manifests, test/verify/portForward arrays. The artifact's bake
 	// sugar expands here.
-	_renderProfile: P={
+	_renderProfile: {
 		t:    _
 		name: string
 		// p == t.skaffold.profiles[name]
-		p:    _
+		p:   _
 		out: {...}
+		let _name = name
+		let _p = p
 		out: {
-			"name": P.name
-			if len(P.p.activation) > 0 {
-				activation: P.p.activation
+			name: _name
+			if len(_p.activation) > 0 {
+				activation: _p.activation
 			}
-			let _a = P.p.build.artifact
+			let _a = _p.build.artifact
+
 			// bake sugar → the bare-positional bake invocation; `target` is
 			// the federated compose name. See gen_bake.cue for the form and
 			// why it stays positional.
@@ -78,30 +85,30 @@ import (
 					}
 				}]
 				local: {
-					useBuildkit: P.p.build.local.useBuildkit
-					concurrency: P.p.build.local.concurrency
-					if P.p.build.local.push {
+					useBuildkit: _p.build.local.useBuildkit
+					concurrency: _p.build.local.concurrency
+					if _p.build.local.push {
 						push: true
 					}
 				}
-				if len(P.p.build.platforms) > 0 {
-					platforms: P.p.build.platforms
+				if len(_p.build.platforms) > 0 {
+					platforms: _p.build.platforms
 				}
-				if P.p.build.tagPolicy != _|_ {
-					tagPolicy: P.p.build.tagPolicy
+				if _p.build.tagPolicy != _|_ {
+					tagPolicy: _p.build.tagPolicy
 				}
 			}
-			if P.p.manifests.kustomize != _|_ {
-				manifests: kustomize: paths: P.p.manifests.kustomize.paths
+			if _p.manifests.kustomize != _|_ {
+				manifests: kustomize: paths: _p.manifests.kustomize.paths
 			}
-			if len(P.p.test) > 0 {
-				test: P.p.test
+			if len(_p.test) > 0 {
+				test: _p.test
 			}
-			if len(P.p.verify) > 0 {
-				verify: P.p.verify
+			if len(_p.verify) > 0 {
+				verify: _p.verify
 			}
-			if len(P.p.portForward) > 0 {
-				portForward: P.p.portForward
+			if len(_p.portForward) > 0 {
+				portForward: _p.portForward
 			}
 		}
 	}
@@ -131,6 +138,7 @@ import (
 				},
 			]
 			let _names = list.Sort(_activeProfiles, list.Ascending)
+
 			// Skip the file emission entirely if no profile survives
 			// the filter — there's nothing useful to include.
 			if len(_names) > 0 {

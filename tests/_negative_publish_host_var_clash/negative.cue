@@ -16,7 +16,7 @@ _p: bayt.#project & {
 		}
 		web: {
 			entrypoint: do: "web"
-			expose: http: {port: 9000, env: "PORT"}
+			expose: http:   {port: 9000, env: "PORT"}
 		}
 	}
 }

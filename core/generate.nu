@@ -110,18 +110,46 @@ export def scan-projects [workspace_root: string] {
 	# install and find it half-written ("http:cue.toml does not have an
 	# executable named cue"), so one run comes before the par-each.
 	run-cue version | ignore
-	$rel_paths | par-each { |path|
-		let p = (read-project $path)
-		if $p == null { null } else {
-			# Dir "." roots a project at itself, wherever it sits; nested in
-			# this workspace, it is placed where it sits, never at this root.
-			let rooted = ($p.dir == ".")
-			let dir_rel = if $rooted {
-				scan-dir ($path | path dirname | path relative-to $workspace_root)
-			} else if ($p.dir | str trim) == "" { "." } else { $p.dir }
-			{path: $path, name: $p.name, dir_rel: $dir_rel, targets: $p.targets, rooted: $rooted}
+	$rel_paths | par-each { |path| project-row $path $workspace_root } | compact
+}
+
+def project-row [path: string, workspace_root: string] {
+	let p = (read-project $path)
+	if $p == null { null } else {
+		# Dir "." roots a project at itself, wherever it sits; nested in
+		# this workspace, it is placed where it sits, never at this root.
+		let rooted = ($p.dir == ".")
+		let dir_rel = if $rooted {
+			scan-dir ($path | path dirname | path relative-to $workspace_root)
+		} else if ($p.dir | str trim) == "" { "." } else { $p.dir }
+		{path: $path, name: $p.name, dir_rel: $dir_rel, targets: $p.targets, rooted: $rooted}
+	}
+}
+
+# scan-ancestors reads only bayt.cue files on the ancestor chain from `here` up
+# to `workspace_root`, stopping at the first rooted project: no sibling can
+# contain `here`, and no outer ancestor can outrank a rooted inner one in root-for.
+export def scan-ancestors [workspace_root: string, here: string] {
+	let root_exp = ($workspace_root | path expand)
+	mut dir = ($here | path expand)
+	mut rows = []
+	loop {
+		let rel = (scan-dir ($dir | path relative-to $root_exp))
+		let skip = (($rel | str starts-with "plugins/bayt/core/") or $rel == "plugins/bayt/core" or ($rel | str starts-with "plugins/bayt/stacks/") or $rel == "plugins/bayt/stacks")
+		let cue_path = if $rel == "." { $workspace_root | path join "bayt.cue" } else { $workspace_root | path join $rel "bayt.cue" }
+		if (not $skip) and ($cue_path | path exists) {
+			let row = (project-row $cue_path $workspace_root)
+			if $row != null {
+				$rows = ($rows | append $row)
+				if $row.rooted { break }
+			}
 		}
-	} | compact
+		if $dir == $root_exp { break }
+		let parent = ($dir | path dirname)
+		if $parent == $dir { break }
+		$dir = $parent
+	}
+	$rows
 }
 
 # read-project reads the project a bayt.cue declares, or null for one that
@@ -769,6 +797,32 @@ def _main [--recursive (-r), --all, --depot] {
 		return
 	}
 	let workspace_root = (find-workspace-root (pwd))
+	if not $all and not $recursive {
+		let t0 = (date now)
+		let anc = (scan-ancestors $workspace_root (pwd))
+		let found = (root-for $anc $workspace_root (pwd))
+		let project_rel = (scan-dir (((pwd) | path expand) | path relative-to ($found.root | path expand)))
+		let bayt_cue = if $project_rel == "." { $found.root | path join "bayt.cue" } else { $found.root | path join $project_rel "bayt.cue" }
+		let raw_self = ($anc | where {|r| ($r.path | path expand) == ($bayt_cue | path expand) } | get --optional 0)
+		let self_row = if $raw_self == null { null } else if $raw_self.rooted {
+			$raw_self | update dir_rel $project_rel
+		} else { $raw_self }
+		if $self_row != null and ((cross-dep-strings $self_row.targets) | is-empty) {
+			check-dirs [($self_row | update path $bayt_cue)] $found.root
+			print-timing scan $t0
+			with-env {BAYT_RUNTIME_DIR: (if $found.rooted { "" } else { $env.BAYT_RUNTIME_DIR? | default "" })} {
+				do {
+					cd $found.root
+					regen-project $bayt_cue $project_rel {} $found.root $self_row.targets --depot=$depot
+				}
+			}
+			run-nu $cache_nu gc
+			return
+		}
+		generate-root $found.root null --rooted=$found.rooted --recursive=false --all=false --depot=$depot
+		run-nu $cache_nu gc
+		return
+	}
 	let scanned = (scan-projects $workspace_root)
 	let found = (root-for $scanned $workspace_root (pwd))
 	# The scan already covers the cue.mod root; a nested root scans its own.

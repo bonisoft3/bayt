@@ -46,7 +46,80 @@ import (
 // `&&` chains — pick a concrete shell.
 #shell: *"exec" | "nu" | "sh" | "bash" | "dash" | "ash" | "zsh" | "fish" | "powershell" | "pwsh" | "cmd"
 
-#cmd: {
+#_cmdSrcs: {
+	globs:          *[] | [...string]
+	defaultGlobs:   *null | #MapAsList
+	exclude:        *[] | [...string]
+	defaultExclude: *null | #MapAsList
+}
+
+#_cmdOS: {
+	do?:    string
+	shell?: #shell
+}
+
+// Structured wrap. When set, the RUN line gets `--mount=type=
+// secret,…` flags for each entry in `secrets`, and the cmd body
+// is wrapped in a /bin/sh -c '<setup>; trap <teardown> EXIT;
+// <cmd>' shell. Setup lines come from (in order):
+//   - each `secrets[].var.contents`/`.path` sugar (auto-emits
+//     `export <name>=…`)
+//   - `defaultSteps` (framework-supplied, keyed, ordered by
+//     priority — composable / overridable by key)
+//   - `steps` (project-leaf-additive plain list)
+// Teardown is a single combined trap firing the steps' `post`
+// lines in LIFO order, each protected with `${var:-}` guards in
+// the user's source.
+#_cmdInject: {
+	secrets: [...{
+		// Foreign-keyed to a compose `build.secrets[].id` on the
+		// same target. The stack defines both halves; CUE does
+		// not statically enforce (naming convention).
+		id: string
+
+		// Optional sugar — when set, emit a setup line at the
+		// head of the wrap body. `contents` and `path` compose:
+		// set both to extract the secret into an env var AND
+		// place the secret content at a file path.
+		var?: {
+			// export <contents>="$(cat /run/secrets/<id>)" —
+			// extract secret content into the named env var.
+			contents?: string
+			// Absolute path inside the sandbox where the secret
+			// content should be written. Skipped silently when
+			// the mounted secret is empty (compose env-source
+			// unset). Mounting mode is preserved via `cp`.
+			path?: string
+		}
+
+		// BuildKit --mount target= (literal absolute path). When
+		// unset the secret appears at /run/secrets/<id>.
+		target?: string
+		// File mode for the mounted secret (e.g. "0600").
+		mode?: string
+	}]
+
+	defaultSteps: *null | #MapAsList
+	steps:        *[] | [...{pre: string, post?: string}]
+}
+
+#_cmdDockerfile: {
+	inject?:  #_cmdInject
+	mounts?:  [...#dockerfile.#mount]
+	secrets?: [...string]
+	network?: *"default" | "none" | "host"
+
+	// RUN-only command form: the Dockerfile RUN renders this instead
+	// of the base `do`. A cmd with ONLY `dockerfile.do` (no base `do`)
+	// emits a RUN but no go-task — so it never runs on the host or
+	// re-runs in a downstream task chain. Only meaningful on a
+	// non-incremental target (an incremental one's container runs
+	// `task bayt:<n>`, so its cmds must be tasks).
+	do?:    string
+	shell?: #shell
+}
+
+_cmd: {
 	name:     string
 	priority: *0 | int
 	shell:    #shell
@@ -67,81 +140,18 @@ import (
 	// pnpm-lock.yaml); per-cmd srcs let editing package.json
 	// invalidate just the pnpm cmd's stamp instead of the whole
 	// target's.
-	srcs: {
-		globs:          *[] | [...string]
-		defaultGlobs:   *null | #MapAsList
-		exclude:        *[] | [...string]
-		defaultExclude: *null | #MapAsList
-	}
+	srcs: #_cmdSrcs
 
 	// OS axis — each variant fully overrides do/shell. Same closed
 	// `#shell` set as the top-level field; uniform treatment across
 	// every OS variant.
-	windows?: {do?: string, shell?: #shell}
-	linux?:   {do?: string, shell?: #shell}
-	darwin?:  {do?: string, shell?: #shell}
+	windows?: #_cmdOS
+	linux?:   #_cmdOS
+	darwin?:  #_cmdOS
 
 	// Output-format axis — decorations applied only when emitting that format.
 	// Set `dockerfile: null` to opt a host task cmd out of Dockerfile RUN emission.
-	dockerfile?: null | {
-		// Structured wrap. When set, the RUN line gets `--mount=type=
-		// secret,…` flags for each entry in `secrets`, and the cmd body
-		// is wrapped in a /bin/sh -c '<setup>; trap <teardown> EXIT;
-		// <cmd>' shell. Setup lines come from (in order):
-		//   - each `secrets[].var.contents`/`.path` sugar (auto-emits
-		//     `export <name>=…`)
-		//   - `defaultSteps` (framework-supplied, keyed, ordered by
-		//     priority — composable / overridable by key)
-		//   - `steps` (project-leaf-additive plain list)
-		// Teardown is a single combined trap firing the steps' `post`
-		// lines in LIFO order, each protected with `${var:-}` guards in
-		// the user's source.
-		inject?: {
-			secrets: [...{
-				// Foreign-keyed to a compose `build.secrets[].id` on the
-				// same target. The stack defines both halves; CUE does
-				// not statically enforce (naming convention).
-				id: string
-
-				// Optional sugar — when set, emit a setup line at the
-				// head of the wrap body. `contents` and `path` compose:
-				// set both to extract the secret into an env var AND
-				// place the secret content at a file path.
-				var?: {
-					// export <contents>="$(cat /run/secrets/<id>)" —
-					// extract secret content into the named env var.
-					contents?: string
-					// Absolute path inside the sandbox where the secret
-					// content should be written. Skipped silently when
-					// the mounted secret is empty (compose env-source
-					// unset). Mounting mode is preserved via `cp`.
-					path?: string
-				}
-
-				// BuildKit --mount target= (literal absolute path). When
-				// unset the secret appears at /run/secrets/<id>.
-				target?: string
-				// File mode for the mounted secret (e.g. "0600").
-				mode?: string
-			}]
-
-			defaultSteps: *null | #MapAsList
-			steps:        *[] | [...{pre: string, post?: string}]
-		}
-
-		mounts?:  [...#dockerfile.#mount]
-		secrets?: [...string]
-		network?: *"default" | "none" | "host"
-
-		// RUN-only command form: the Dockerfile RUN renders this instead
-		// of the base `do`. A cmd with ONLY `dockerfile.do` (no base `do`)
-		// emits a RUN but no go-task — so it never runs on the host or
-		// re-runs in a downstream task chain. Only meaningful on a
-		// non-incremental target (an incremental one's container runs
-		// `task bayt:<n>`, so its cmds must be tasks).
-		do?:    string
-		shell?: #shell
-	}
+	dockerfile?: null | #_cmdDockerfile
 
 	// Inject mode wraps cmd.do as the last shell line of a `RUN
 	// <<HEREDOC` body — Dockerfile's heredoc-RUN form is interpreted
@@ -153,6 +163,10 @@ import (
 	if dockerfile != _|_ if dockerfile != null if dockerfile.inject != _|_ {
 		shell: "sh"
 	}
+}
+
+#cmd: {
+	_cmd
 }
 
 // noop — a #cmd that does no real work but emits a real RUN/cmd line
@@ -206,6 +220,7 @@ noop: #cmd & {
 		if _parts[0] != "" {_parts[0]},
 	][0]
 	let _target = _parts[1]
+
 	// Third segment when present; `""` otherwise. The `if cond { body }`
 	// branch isn't evaluated when cond is false, so `_parts[2]` stays
 	// safe even when the ref has only two segments.
@@ -281,7 +296,7 @@ noop: #cmd & {
 	nonroot: #nonroot
 }
 
-#dockerfile: D={
+#dockerfile: {
 	// _project — injected by #target so the `from: ref: ":<target>"`
 	// shorthand can resolve same-project refs without the user passing
 	// the project name explicitly.
@@ -318,7 +333,7 @@ noop: #cmd & {
 		sha256:  string & =~"^[0-9a-f]{64}$"
 	}) | close({
 		platforms: {
-			[Arch=string]: close({
+			[string]~(Arch,_): close({
 				url:      string & =~"^https://"
 				checksum: string & =~"^sha256:[0-9a-f]{64}$"
 			}) | close({
@@ -438,7 +453,7 @@ noop: #cmd & {
 	// FROM-chaining off another bayt target inherits the upstream
 	// stage's filesystem and ENVs, so layering a preset on top is
 	// neither needed nor expressible.
-	from: null | close({
+	from: null | (*close({
 		name: string & !~"^scratch$"
 	}) | close({
 		// FROM is inheritance-only: the whole upstream stage filesystem
@@ -453,8 +468,8 @@ noop: #cmd & {
 		// X==Y (the downstream stage steals the upstream's name), so
 		// a same-target chain like `FROM setup AS setup` would lose
 		// the chain entirely. Qualifying with project disambiguates.
-		name: (#qualifyRef & {"ref": ref, proj: D._project}).name
-	})
+		name: (#qualifyRef & {"ref": ref, proj: _project}).name
+	}))
 
 	// WORKDIR. Defaults to /monorepo/<projectDir> in the emitter.
 	workdir?: string
@@ -485,7 +500,7 @@ noop: #cmd & {
 	//
 	// Manifest emits the merged list as `defaultPreamble values + preamble`.
 	preamble:        [...string]
-	defaultPreamble: *null | {[Name=string]: (_preambleEl & {name: Name}) | null}
+	defaultPreamble: *null | {[string]~(Name,_): (_preambleEl & {name: Name}) | null}
 
 	// Three arms, closed so a mistyped field errors here rather than
 	// silently emitting nothing:
@@ -501,24 +516,17 @@ noop: #cmd & {
 	//          spelled once and behaves identically in both positions.
 	//          No `srcs`: a preamble RUN's inputs are its own text.
 	_preambleEl: close({
-		name: string
+		name:      string
 		priority?: int
-		line: string
+		line:      string
 	}) | close({
-		name: string
+		name:      string
 		priority?: int
-		// Narrowed to the image-name arm; the scratch guard and the rest
-		// come from _copyEntry.
-		copy: _copyEntry & {
-			from: close({
-				name:   string
-				image?: string
-			})
-		}
+		copy:      _copyBase & {from: _copyImageFrom}
 	}) | close({
-		name: string
+		name:      string
 		priority?: int
-		do: string
+		do:        string
 		// Defaults to "sh", not #shell's "exec": a preamble RUN is
 		// almost always a package-manager line needing `&&`.
 		shell:  *"sh" | #shell
@@ -538,7 +546,7 @@ noop: #cmd & {
 	// Per-id secret source map, mirrors compose-spec `secrets.<id>`.
 	// null → file at ${BAYT_<UPPER_ID>_FILE}; {environment: V} → bake
 	// reads $V at compose-up time; {file: P} → explicit path.
-	secrets: [Name=string]: *null | close({
+	secrets: [string]~(Name,_): *null | close({
 		environment: string
 	}) | close({
 		file: string
@@ -579,29 +587,35 @@ noop: #cmd & {
 	// in additional_contexts is `docker-image://<name>`; `image:`
 	// overrides that so one fixed key aliases a pinned digest
 	// (bayt-runtime → docker-image://bonitao/bayt-runtime:…).
-	//
+	_copyImageFrom: close({
+		name:   string & !~"^scratch$"
+		image?: string
+	})
 	// Open (not closed) so `defaultCopy`'s #MapAsList can add name/priority.
-	_copyEntry: {
-		from: *null | close({
-			name:   string & !~"^scratch$"
-			image?: string
-		}) | close({
-			ref:  string
-			name: (#qualifyRef & {"ref": ref, proj: D._project}).name
-		})
+	_copyBase: {
 		srcs:    [...string]
 		dst:     string
 		chmod?:  string
 		chown?:  string | #userIdentity
-		link:    *true  | bool
+		link:    *true | bool
 		parents: *false | bool
 		exclude: [...string]
+	}
+	_copyEntry: _copyBase & {
+		// Default the non-null branch to the image-name arm so `{from: {name: X}}`
+		// resolves immediately instead of carrying an incomplete `ref: string` arm
+		// into list.Concat cross-products; `{from: {ref: ...}}` still rejects the
+		// closed image-name arm and selects the ref arm.
+		from: *null | (*_copyImageFrom | close({
+			ref:  string
+			name: (#qualifyRef & {"ref": ref, proj: _project}).name
+		}))
 	}
 	// Two-position, same as preamble: `copy` (user-side) is appended after
 	// `defaultCopy` (framework-side, keyed) at manifest emit, so a mixin's
 	// COPYs and a consumer's own `copy` coexist instead of conflicting.
-	copy: [..._copyEntry]
-	defaultCopy: *null | {[Name=string]: (_copyEntry & {name: Name, priority?: int}) | null}
+	copy:        [..._copyEntry]
+	defaultCopy: *null | {[string]~(Name,_): (_copyEntry & {name: Name, priority?: int}) | null}
 
 	// Structured HEALTHCHECK directive. Maps directly to Dockerfile
 	// HEALTHCHECK grammar. `test` follows compose-spec convention:
@@ -695,11 +709,11 @@ noop: #cmd & {
 	service?: string
 
 	build?: {
-		target?:             string
-		dockerfile?:         string
-		additional_contexts: [dep=string]: string
-		secrets:             [...string]
-		args: [string]:      string
+		target?:     string
+		dockerfile?: string
+		additional_contexts: [string]~(dep,_): string
+		secrets: [...string]
+		args: [string]: string
 	}
 	// Compose-spec passthrough — fields here are emitted verbatim onto
 	// the compose service. Shape mirrors the actual compose-spec service
@@ -712,39 +726,41 @@ noop: #cmd & {
 	// value. Omit the field entirely to inherit it.
 	command?:    null | [...string] | string
 	entrypoint?: null | [...string] | string
-	environment:  [string]: string
+	environment: [string]: string
 	// On bake-reachable targets use `{path, required: false}`: depot bake stats
 	// env_file paths at load, so a runtime file absent from the build context
 	// fails the bake ("env file not found").
 	env_file?: string | [...(string | {path: string, required?: bool})]
-	ports:        [...string]
-	volumes:      [...string]
+	ports:     [...string]
+	volumes:   [...string]
 	// Compose-spec long form: map keyed by service name with per-dep
 	// config (typically `{condition: "service_healthy"}`). Bayt
 	// passes this through verbatim and auto-mirrors keys as
 	// additional_contexts entries (see gen_compose.cue) so consumers
 	// don't have to write the build-tree mirror by hand.
-	depends_on:   {[string]: _}
+	depends_on:    {[string]: _}
 	network_mode?: string
-	networks?: [...string] | {[string]: null | {
-		aliases?: [...string]
-		ipv4_address?: string
-		ipv6_address?: string
-		priority?: int
-	}}
-	extra_hosts?: [...string]
-	pull_policy?: string
+	networks?: [...string] | {
+		[string]: null | {
+			aliases?:      [...string]
+			ipv4_address?: string
+			ipv6_address?: string
+			priority?:     int
+		}
+	}
+	extra_hosts?:    [...string]
+	pull_policy?:    string
 	container_name?: string
 	restart?:        string
 	working_dir?:    string
 	user?:           string | #userIdentity
 	ulimits?: [string]: int | {soft: int, hard: int}
 	// shm_size: a size string ("2gb") or a byte count.
-	shm_size?:    string | int
+	shm_size?:     string | int
 	security_opt?: [...string]
 	devices?:      [...string]
 	cap_add?:      [...string]
-	healthcheck?: {...}
+	healthcheck?:  {...}
 	// User scale wins over the bare-up runtime gate (gen_compose's
 	// _service). scale: 0 turns a running service into a
 	// template: image + config in the model, no container — an
@@ -758,9 +774,9 @@ noop: #cmd & {
 // #shellQuote — a cmd `do` escaped for embedding inside a double-
 // quoted shell string. The single escaping authority for every
 // emitter (Taskfile, say fragments, vscode tasks).
-#shellQuote: Q={
+#shellQuote: {
 	in:  string
-	out: strings.Replace(strings.Replace(Q.in, "\\", "\\\\", -1), "\"", "\\\"", -1)
+	out: strings.Replace(strings.Replace(in, "\\", "\\\\", -1), "\"", "\\\"", -1)
 }
 
 #taskfile: {
@@ -819,7 +835,7 @@ noop: #cmd & {
 	// skaffold semantics. Null entries are filtered out so a project
 	// that wants to opt out of a stack-supplied profile says
 	// `skaffold: profiles: "<name>": null`.
-	profiles: [Name=string]: (#skaffoldProfile & {name: Name}) | null
+	profiles: [string]~(Name,_): (#skaffoldProfile & {name: Name}) | null
 }
 
 #skaffoldProfile: {
@@ -892,7 +908,7 @@ noop: #cmd & {
 	// project that composes the verb fragment to declare a skaffold
 	// image. The emitter skips a profile entirely when image is unset
 	// or empty — it's the project's opt-in lever for cluster-side dev.
-	image?:  string
+	image?: string
 	// Skaffold resolves `context` relative to its INVOCATION cwd
 	// (sayt verbs invoke from the project root), not the config-file
 	// location. Default `.` lands customBuild's cwd at the project
@@ -918,7 +934,7 @@ noop: #cmd & {
 	// the bake.hcl build recipe skaffold / goreleaser / depot bake with. The
 	// $IMAGE tag and the registry-vs-load flip ($PUSH_IMAGE) are HCL env vars,
 	// so this ref is a gate, not a value baked into the HCL.
-	image?: string
+	image?:    string
 	platforms: *[] | [...string]
 	tags:      [...string]
 	args: [string]: string
@@ -941,13 +957,13 @@ noop: #cmd & {
 	// `from` / `to` are constrained to `[]`. Mixing the two (e.g.
 	// `type: "gha"` alongside `from: ["custom"]`) fails CUE unification
 	// rather than silently dropping one side.
-	cache: C={
+	cache: {
 		type?:     "gha" | "registry"
 		scope?:    string
 		registry?: string
 		from:      [...string]
 		to:        [...string]
-		if C.type != _|_ {
+		if type != _|_ {
 			from: []
 			to:   []
 		}
@@ -972,38 +988,44 @@ noop: #cmd & {
 // identical refs differing only by the tag (siblings never clobber each
 // other).
 // =============================================================================
-#bakeCacheRefs: X={
+#bakeCacheRefs: {
 	c: _ // #project.bake.cache sugar
 	t: string
 	// An unset optional cannot be referenced, so the arms select on a presence
 	// probe: iterating a struct yields regular fields only, so an omitted `type`
 	// falls through. A default on #bake.cache would read the same and emit
 	// `type` into every per-target block.
-	_type: [for k, v in X.c if k == "type" {v}, "none"][0]
+	_type: [for k, v in c if k == "type" {v}, "none"][0]
+	let _c = c
+	let _t = t
+	let _scopeVal = [if _type != "none" {(#cacheTagScope & {in: _c.scope}).out}, ""][0]
+	let _segVal = [if _type != "none" {(#cacheTagSeg & {in: _t, scope: _c.scope}).out}, ""][0]
+
 	// Keyed on the type, not on `scope`: passthrough carries no scope, while a
 	// sugar type that omits one must still report `scope` rather than a name the
 	// author never wrote. `_ct_direct` guards the shape that needs the guard.
-	if X._type != "none" {
-		_scope: (#cacheTagScope & {in: X.c.scope}).out
-		_seg:   (#cacheTagSeg & {in: X.t, scope: X.c.scope}).out
+	if _type != "none" {
+		_scope: _scopeVal
+		_seg:   _segVal
 	}
+
 	// cache-to mode. Use "min": bayt models the full dependency graph, so min
 	// exports every modelled stage. Use "max" only for local dependencies bayt
 	// cannot see — an intermediate stage that is not its own modelled target.
 	mode: *"min" | "max"
 	from: [
-		if len(X.c.from) > 0 {X.c.from},
-		if X._type == "none" {[]},
-		if X._type == "gha" {[
+		if len(c.from) > 0 {c.from},
+		if _type == "none" {[]},
+		if _type == "gha" {[
 			// Same branch dimension as the registry arm below: without it every
 			// branch reads and writes one key, so a PR's writes land on main's.
 			// version=2 selects the Twirp cache service at ACTIONS_RESULTS_URL;
 			// without it or ACTIONS_CACHE_SERVICE_V2 in the sandbox, buildx
 			// speaks v1 REST to the v2 endpoint.
-			"type=gha,version=2,scope=\(X._scope)-${CACHE_SCOPE:-unscoped}-\(X._seg)",
-			"type=gha,version=2,scope=\(X._scope)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(X._seg)",
+			"type=gha,version=2,scope=\(_scopeVal)-${CACHE_SCOPE:-unscoped}-\(_segVal)",
+			"type=gha,version=2,scope=\(_scopeVal)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(_segVal)",
 		]},
-		if X._type == "registry" {[
+		if _type == "registry" {[
 			// CACHE_SCOPE — branch + builder identity (engine, frontend,
 			// platform) of whichever builder runs THIS bake, composed
 			// host-side by sayt (docker-bridge.nu for local builders, the sayt/depot
@@ -1015,23 +1037,23 @@ noop: #cmd & {
 			// main's writes. The `unscoped` default quarantines invocations
 			// outside the sayt env plumbing — they collide only with each
 			// other, and mismatched reads degrade to graceful chain-ID misses.
-			"type=registry,ref=\(X.c.registry):\(X._scope)-${CACHE_SCOPE:-unscoped}-\(X._seg)",
-			"type=registry,ref=\(X.c.registry):\(X._scope)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(X._seg)",
+			"type=registry,ref=\(c.registry):\(_scopeVal)-${CACHE_SCOPE:-unscoped}-\(_segVal)",
+			"type=registry,ref=\(c.registry):\(_scopeVal)-${CACHE_SCOPE_FALLBACK:-unscoped}-\(_segVal)",
 		]},
 	][0]
 	to: [
-		if len(X.c.to) > 0 {X.c.to},
-		if X._type == "none" {[]},
-		if X._type == "gha" {[
-			"type=gha,version=2,mode=\(X.mode),scope=\(X._scope)-${CACHE_SCOPE:-unscoped}-\(X._seg)",
+		if len(c.to) > 0 {c.to},
+		if _type == "none" {[]},
+		if _type == "gha" {[
+			"type=gha,version=2,mode=\(mode),scope=\(_scopeVal)-${CACHE_SCOPE:-unscoped}-\(_segVal)",
 		]},
-		if X._type == "registry" {[
+		if _type == "registry" {[
 			// zstd pays on the import side: a cache blob is written once and
 			// re-imported by every later build. It can only be set here —
 			// buildx `--set '*.cache-to=…'` replaces the whole value, so
 			// appending downstream would mean restating the
 			// scope-interpolated ref.
-			"type=registry,ref=\(X.c.registry):\(X._scope)-${CACHE_SCOPE:-unscoped}-\(X._seg),mode=\(X.mode),image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3",
+			"type=registry,ref=\(c.registry):\(_scopeVal)-${CACHE_SCOPE:-unscoped}-\(_segVal),mode=\(mode),image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3",
 		]},
 	][0]
 }
@@ -1055,32 +1077,34 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 // without agreeing on who goes first. Over budget the hash is of the *full*
 // name, so a collapsed name stays distinct from the siblings it shares a
 // readable prefix with.
-#cacheTagFit: X={
+#cacheTagFit: {
 	in: string
 	// len() counts bytes and SliceRunes counts runes, so outside the tag charset
 	// the budget can go negative. This turns that slice into a diagnosis.
-	max: int & >=(_cacheTagHash + 2)
-	_slug: X.max - 1 - _cacheTagHash
+	max:   int & >=(_cacheTagHash + 2)
+	_slug: max - 1 - _cacheTagHash
 	out: [
-		if len(X.in) <= X.max {X.in},
-		strings.SliceRunes(X.in, 0, X._slug) + "-" + strings.SliceRunes(hex.Encode(sha256.Sum256(X.in)), 0, _cacheTagHash),
+		if len(in) <= max {in},
+		strings.SliceRunes(in, 0, _slug) + "-" + strings.SliceRunes(hex.Encode(sha256.Sum256(in)), 0, _cacheTagHash),
 	][0]
 }
 
 // Callers derive `bake.cache.scope` from project directories, so a nested path
 // plus a cache-busting suffix clears the budget without looking unusual. bayt
 // owns the 128-char invariant, so it bounds what it is handed.
-#cacheTagScope: X={
-	in:  string
-	out: (#cacheTagFit & {in: X.in, max: _cacheScopeMax}).out
+#cacheTagScope: {
+	in: string
+	let _in = in
+	out: (#cacheTagFit & {in: _in, max: _cacheScopeMax}).out
 }
 
 // Bounds `scope` itself rather than trusting the caller to, so the budget a
 // segment is measured against and the scope actually emitted cannot disagree.
-#cacheTagSeg: X={
+#cacheTagSeg: {
 	in:    string
 	scope: string
-	out:   (#cacheTagFit & {in: X.in, max: _cacheTagBudget - len((#cacheTagScope & {in: X.scope}).out)}).out
+	let _in = in
+	out: (#cacheTagFit & {in: _in, max: _cacheTagBudget - len((#cacheTagScope & {in: scope}).out)}).out
 }
 
 #generatedFiles: {
@@ -1096,7 +1120,7 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 
 #target: {
 	// Bound by the enclosing #project.targets map key.
-	name: string
+	name:   string
 	files?: #generatedFiles
 
 	// Injected by #project — the project's name and dir. Emitters
@@ -1182,8 +1206,8 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 		cmd: "builtin": "do": do
 	}
 
-	cmd: [Name=string]: #cmd & {name: Name} | null
-	env: [string]: string
+	cmd: [string]~(Name,_): #cmd & {name: Name} | null
+	env: [string]:          string
 
 	// Deps as Bazel-style target refs:
 	//   ":<target>"          — same-project target (leading `:`)
@@ -1222,7 +1246,7 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 	// process in .bayt/process-compose.yaml (process_compose.cue).
 	// A field set both here and in a projection block must agree.
 	entrypoint?: #entrypoint
-	expose?: [Name=string]: #port
+	expose?: [string]~(Name,_): #port
 
 	// HMR paths are relative to the project root. Reactions are optional;
 	// absent reactions retain the legacy Compose projection.
@@ -1272,7 +1296,7 @@ _cacheScopeMax: _cacheTagBudget - (_cacheTagHash + 2)
 // cannot drift apart. Documented at #project.targets, where it is applied.
 _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 
-#project: P={
+#project: {
 	files?: #generatedFiles
 	// "." roots the project at its own directory, wherever it sits: an
 	// installed app, or a mirror's root, has no sibling projects, and bayt
@@ -1363,14 +1387,17 @@ _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 	// disjunction, so a violation of this inside the `| null` below would lead
 	// with the mismatch against `null` and name neither the rule nor the key.
 	_reservedNames: {
-		for Name, _ in P.targets {
+		for Name, _ in targets {
 			(Name): Name & !~_reservedNamePattern
 		}
 	}
-	targets: [Name=string]: (#target & {
+	let _pName = name
+	let _pDir = dir
+	let _pBake = [if bake != _|_ {bake}, null][0]
+	targets: [string]~(Name,_): (#target & {
 		name:    Name
-		project: P.name
-		dir:     P.dir
+		project: _pName
+		dir:     _pDir
 		// Compose per-target cache strings keyed by this target's name
 		// (sibling targets sharing a key would clobber each other's cache
 		// manifest). Project identity is already carried by the per-project
@@ -1379,9 +1406,9 @@ _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 		// 128-char OCI tag budget. Sugar at P.bake.cache (type + scope
 		// [+ registry]) selects a backend recipe; explicit
 		// P.bake.cache.from / to win when non-empty.
-		if P.bake != _|_ {
+		if _pBake != null {
 			let _t = Name
-			let _c = P.bake.cache
+			let _c = _pBake.cache
 			let _refs = (#bakeCacheRefs & {c: _c, t: _t})
 			bake: cache: {
 				from: _refs.from
@@ -1395,4 +1422,3 @@ _reservedNamePattern: "^bayt$|_(srcs|outs|bayt)$"
 	// absent rather than failing generation. Keep checks bayt owns at this level
 	// out of the disjunction either way — see `_reservedNames`.
 }
-

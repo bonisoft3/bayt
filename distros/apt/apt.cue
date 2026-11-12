@@ -19,7 +19,7 @@ import "strings"
 // current sources, so a project with two targets on two distros would have
 // each run wiping the other's index.
 _archiveMount: {type: "cache", target: "/var/cache/apt", scope: "target"}
-_listsMount: {type: "cache", target: "/var/lib/apt/lists", scope: "target"}
+_listsMount:   {type: "cache", target: "/var/lib/apt/lists", scope: "target"}
 
 // The store is the shared half: a .deb filename carries name, version and
 // arch, so two distros cannot collide on one entry. Concurrency is safe
@@ -44,7 +44,7 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 // caches indefinitely and the install eventually resolves against a pruned
 // index. No `rm -rf /var/lib/apt/lists/*` tail — the lists live on a mount,
 // so that would only delete the next build's index.
-#install: I={
+#install: {
 	// Bare names. Debian and Ubuntu keep one revision per package in
 	// -updates/-security — the noble archive offers curl 8.5.0-2ubuntu10.12
 	// and 8.5.0-2ubuntu10 and nothing between — so an exact pin here is a
@@ -73,7 +73,7 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 	// blank one renders `( )`, the same parse error an empty one does, and
 	// both arrive from a mixin joining nothing rather than from anything an
 	// author typed.
-	then: [...string & =~"[^[:space:]]" & !~"\n"]
+	then:  [...string & =~"[^[:space:]]" & !~"\n"]
 	purge: [...string & !="" & !~"\n"]
 
 	// Fixes resolution at a point in time, which makes a version pin
@@ -92,8 +92,8 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 	}
 
 	let _snap = [
-		if I.snapshot != _|_ {
-			"sed -i 's|^URIs: https\\?://[^ ]*ubuntu[^ ]*|URIs: https://snapshot.ubuntu.com/ubuntu/\(I.snapshot.at)|' /etc/apt/sources.list.d/ubuntu.sources && "
+		if snapshot != _|_ {
+			"sed -i 's|^URIs: https\\?://[^ ]*ubuntu[^ ]*|URIs: https://snapshot.ubuntu.com/ubuntu/\(snapshot.at)|' /etc/apt/sources.list.d/ubuntu.sources && "
 		},
 		"",
 	][0]
@@ -101,18 +101,18 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 	// Seed from the store, install, publish anything new back. `|| exit`
 	// keeps a real install failure fatal; the publish loop's trailing `:`
 	// keeps a torn dedup write from failing a good install.
-	let _pwd = [if len(I.then) > 0 {"p=\"$PWD\"; "}, ""][0]
+	let _pwd = [if len(then) > 0 {"p=\"$PWD\"; "}, ""][0]
 	let _seed = "s=/apt-store; d=/var/cache/apt/archives; mkdir -p \"$s\" \"$d\"; cp -r \"$s\"/. \"$d\"/ 2>/dev/null || true; "
 
 	// Fatal like the install.
-	let _then = [if len(I.then) > 0 {"; (cd \"$p\" && \(strings.Join(I.then, " && "))) || exit"}, ""][0]
-	let _purge = [if len(I.purge) > 0 {"; DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq --auto-remove \(strings.Join(I.purge, " ")) || exit"}, ""][0]
+	let _then = [if len(then) > 0 {"; (cd \"$p\" && \(strings.Join(then, " && "))) || exit"}, ""][0]
+	let _purge = [if len(purge) > 0 {"; DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq --auto-remove \(strings.Join(purge, " ")) || exit"}, ""][0]
 
 	let _publish = "; cd \"$d\" && for f in *.deb; do [ -f \"$f\" ] || continue; o=\"$s/$f\"; [ -e \"$o\" ] && continue; t=\"$(mktemp \"$s/.pXXXXXX\")\" && cp \"$f\" \"$t\" && mv -f \"$t\" \"$o\"; done; :"
 
 	out: {
-		do:    "\(_pwd)\(_seed)\(_snap)rm -f /etc/apt/apt.conf.d/docker-clean && echo 'Binary::apt::APT::Keep-Downloaded-Packages \"true\";' > /etc/apt/apt.conf.d/keep-cache && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \(strings.Join(I.pkgs, " ")) || exit\(_publish)\(_then)\(_purge)"
-		shell: "sh"
+		do:     "\(_pwd)\(_seed)\(_snap)rm -f /etc/apt/apt.conf.d/docker-clean && echo 'Binary::apt::APT::Keep-Downloaded-Packages \"true\";' > /etc/apt/apt.conf.d/keep-cache && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \(strings.Join(pkgs, " ")) || exit\(_publish)\(_then)\(_purge)"
+		shell:  "sh"
 		mounts: [_store, _archiveMount, _listsMount]
 	}
 }
@@ -154,4 +154,3 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 		user:  "999:999"
 	}
 }
-

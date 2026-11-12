@@ -1,4 +1,5 @@
 use std/assert
+use ../runtime/tools.nu [run-cue]
 
 const repo = (path self | path dirname | path join ".." ".." ".." | path expand)
 
@@ -15,7 +16,7 @@ _project: bayt.#project & {
 }
 out: bayt.#render & {project: _project, depManifests: {}}
 '
-	let bundle = ($program | ^cue export - -e out | from json)
+	let bundle = ($program | run-cue export - -e out | from json)
 	let platform_args = if $platform == null { [] } else { ["--platform" $platform] }
 	let fixture = mktemp -d
 	try {

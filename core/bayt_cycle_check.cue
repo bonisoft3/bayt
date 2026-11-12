@@ -51,7 +51,7 @@ _cycle_c2: #project & {
 _c4_layer1: {
 	cmd: {
 		"pregen":  {priority: -10, do: "pregen.nu"}
-		"builtin": {do:                "build.nu"}
+		"builtin": {do: "build.nu"}
 	}
 }
 _c4_layer2: {
@@ -70,10 +70,10 @@ _cycle_c4: #project & {
 // finalize (20). #MapToList strips the priority field from its output;
 // the order itself is the assertion.
 _cycle_c4: targets: build: cmds: [
-	{name: "pregen",    shell: "exec", do: "pregen.nu",    stop: false, ...},
-	{name: "builtin",   shell: "exec", do: "build.nu",     stop: false, ...},
+	{name: "pregen", shell: "exec", do: "pregen.nu", stop: false, ...},
+	{name: "builtin", shell: "exec", do: "build.nu", stop: false, ...},
 	{name: "postcheck", shell: "exec", do: "postcheck.nu", stop: false, ...},
-	{name: "finalize",  shell: "exec", do: "finalize.nu",  stop: false, ...},
+	{name: "finalize", shell: "exec", do: "finalize.nu", stop: false, ...},
 ]
 
 // --- C5: far-away cmd.dockerfile decoration across multiple targets.
@@ -95,8 +95,8 @@ _cycle_c5: #project & {
 				do: "./gradlew integrationTest --rerun"
 				dockerfile: {
 					mounts: [
-						{type: "secret", id:    "creds", required: true},
-						{type: "cache",  target: "/root/.gradle"},
+						{type: "secret", id: "creds", required: true},
+						{type: "cache", target: "/root/.gradle"},
 					]
 				}
 			}
@@ -113,14 +113,14 @@ _cycle_c6: #project & {
 		"launch": {
 			cmd: "builtin": do: "pnpm dev"
 			compose: develop: watch: [
-				{action: "sync",         path: "./src",            target: "/app/src",            ignore: ["node_modules"]},
-				{action: "sync",         path: "./public",         target: "/app/public",         ignore: []},
+				{action: "sync", path: "./src", target: "/app/src", ignore: ["node_modules"]},
+				{action: "sync", path: "./public", target: "/app/public", ignore: []},
 				{action: "sync+restart", path: "./nuxt.config.ts", target: "/app/nuxt.config.ts", ignore: []},
-				{action: "rebuild",      path: "./package.json",   target: "/app/package.json",   ignore: []},
-				{action: "rebuild",      path: "./pnpm-lock.yaml", target: "/app/pnpm-lock.yaml", ignore: []},
-				{action: "sync",         path: "./plugins",        target: "/app/plugins",        ignore: []},
-				{action: "sync",         path: "./components",     target: "/app/components",     ignore: []},
-				{action: "sync",         path: "./pages",          target: "/app/pages",          ignore: []},
+				{action: "rebuild", path: "./package.json", target: "/app/package.json", ignore: []},
+				{action: "rebuild", path: "./pnpm-lock.yaml", target: "/app/pnpm-lock.yaml", ignore: []},
+				{action: "sync", path: "./plugins", target: "/app/plugins", ignore: []},
+				{action: "sync", path: "./components", target: "/app/components", ignore: []},
+				{action: "sync", path: "./pages", target: "/app/pages", ignore: []},
 			]
 		}
 	}
@@ -179,7 +179,7 @@ _cycle_c10: #project & {
 		"build": {
 			cmd: {
 				"legacy":  {priority: -5, do: "legacy-step"}
-				"builtin": {do:               "real-build"}
+				"builtin": {do: "real-build"}
 			}
 		}
 		"build-min": {

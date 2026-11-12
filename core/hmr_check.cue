@@ -1,11 +1,11 @@
 package bayt
 
 _hmrExample: #hmr & {
-	code: ["src/**/*"]
+	code:    ["src/**/*"]
 	configs: ["config/app.yaml"]
-	assets: ["public/**"]
-	tools: ["package.json"]
-	docs: ["docs/**"]
+	assets:  ["public/**"]
+	tools:   ["package.json"]
+	docs:    ["docs/**"]
 	reactions: {
 		code: "restart"
 		configs: command: ["server", "reload"]
@@ -19,7 +19,7 @@ _hmrComposeCheck: [
 	{action: "sync", path: "../public", target: "/app/public"},
 	{action: "rebuild", path: "../package.json"},
 ]
-_hmrLegacy: #hmr & {code: ["src"], configs: ["config"], assets: ["assets"], tools: [], docs: []}
+_hmrLegacy:        #hmr & {code: ["src"], configs: ["config"], assets: ["assets"], tools: [], docs: []}
 _hmrLegacyCompose: (#hmrCompose & {hmr: _hmrLegacy, workdir: "/app"}).watch
 _hmrLegacyCompose: [
 	{action: "sync", path: "../src", target: "/app/src"},

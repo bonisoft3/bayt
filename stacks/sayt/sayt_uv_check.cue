@@ -70,10 +70,10 @@ _u2: targets: build: {
 		globs: []
 		defaultGlobs: {
 			"uv-project": {glob: "pyproject.toml"}
-			"uv-src": {glob: "src/**/*"}
+			"uv-src":     {glob: "src/**/*"}
 		}
 		defaultExclude: {
-			"uv-pycache-dir": {glob: "**/__pycache__"}
+			"uv-pycache-dir":  {glob: "**/__pycache__"}
 			"uv-pycache-tree": {glob: "**/__pycache__/**"}
 		}
 	}
@@ -83,11 +83,11 @@ _u2: targets: build: {
 // must not carry tests/integration in its key.
 _u2: targets: test: srcs: defaultGlobs: {
 	"uv-project": {glob: "pyproject.toml"}
-	"uv-src": {glob: "src/**/*"}
-	"uv-unit": {glob: "tests/unit/**/*"}
+	"uv-src":     {glob: "src/**/*"}
+	"uv-unit":    {glob: "tests/unit/**/*"}
 }
 _u2: targets: integrate: srcs: defaultGlobs: {
-	"uv-project": {glob: "pyproject.toml"}
+	"uv-project":     {glob: "pyproject.toml"}
 	"uv-integration": {glob: "tests/integration/**/*"}
 }
 
@@ -133,12 +133,12 @@ _u4: (#uv & {srcDir: "app", unitDir: "tests"}).out & {
 
 _u4: targets: build: {
 	srcs: defaultGlobs: "uv-src": glob: "app/**/*"
-	cmd: "builtin": do:            "uv run --no-sync python -m compileall -q app"
+	cmd: "builtin": do: "uv run --no-sync python -m compileall -q app"
 }
 
 _u4: targets: test: {
 	srcs: defaultGlobs: {
-		"uv-src":  glob: "app/**/*"
+		"uv-src": glob:  "app/**/*"
 		"uv-unit": glob: "tests/**/*"
 	}
 	cmd: "builtin": do: "uv run --no-sync python -m pytest tests -q"

@@ -42,10 +42,10 @@ _d1_dc: compose: files: build: services: "d1-build": image: "bayt-d1-build:${BAY
 _d1_dc: compose: files: build: services: "d1-build": build: tags: ["bayt-d1-build:${BAYT_IMAGE_TAG:-${COMPOSE_PROJECT_NAME}}", "bayt-d1-build:latest"]
 // Under images:pull the name is a published one: registry-qualified, its tag
 // the host's, and nothing tagged beside it to push.
-_d1_pull: _d1 & {bake: {cache: {type: "registry", registry: "reg.example/p", scope: "s"}, images: pull: true}}
-_d1_pull_svc: (#dockerComposeGen & {project: _d1_pull, depManifests: {}}).compose.files.build.services."d1-build"
+_d1_pull:       _d1 & {bake: {cache: {type: "registry", registry: "reg.example/p", scope: "s"}, images: pull: true}}
+_d1_pull_svc:   (#dockerComposeGen & {project: _d1_pull, depManifests: {}}).compose.files.build.services."d1-build"
 _d1_pull_image: _d1_pull_svc.image & "reg.example/p/bayt-d1-build:${BAYT_IMAGE_TAG:-latest}"
-_d1_pull_tags: _d1_pull_svc.build.tags & ["reg.example/p/bayt-d1-build:${BAYT_IMAGE_TAG:-latest}"]
+_d1_pull_tags:  _d1_pull_svc.build.tags & ["reg.example/p/bayt-d1-build:${BAYT_IMAGE_TAG:-latest}"]
 
 // --- D2: dep chain — build depends on setup, both have dockerfile
 // blocks. The build service gets `additional_contexts: { d2-setup:
@@ -61,7 +61,7 @@ _d2: #project & {
 		"build": {
 			deps: [":setup"]
 			srcs: globs: ["**"]
-			cmd:  "builtin": do: "make"
+			cmd: "builtin": do: "make"
 			dockerfile: busybox
 		}
 	}
@@ -173,7 +173,7 @@ _d7: #project & {
 }
 _d7_dc: (#dockerComposeGen & {project: _d7, depManifests: {}})
 // String containment check on the emitted Dockerfile body.
-_d7_body: _d7_dc.dockerfiles.release
+_d7_body:           _d7_dc.dockerfiles.release
 _d7_has_entrypoint: strings.Contains(_d7_body, #"ENTRYPOINT ["java", "-cp", "@/app/jib-classpath-file", "Main"]"#) & true
 
 // --- D7b: exec-form arguments are JSON strings: a quote or a backslash in
@@ -186,12 +186,12 @@ _d7b: #project & {
 			cmd: "builtin": do: "true"
 			dockerfile: scratch & {
 				entrypoint: ["sh", "-c", #"mkdir -p "/data/$B" && echo a\b"#]
-				cmd: [#"say "hi""#]
+				cmd:        [#"say "hi""#]
 			}
 		}
 	}
 }
-_d7b_body: (#dockerComposeGen & {project: _d7b, depManifests: {}}).dockerfiles.release
+_d7b_body:           (#dockerComposeGen & {project: _d7b, depManifests: {}}).dockerfiles.release
 _d7b_has_entrypoint: strings.Contains(_d7b_body, #"ENTRYPOINT ["sh", "-c", "mkdir -p \"/data/$B\" && echo a\\b"]"#) & true
 // CMD carries the project's activate tokens ahead of its own.
 _d7b_has_cmd: strings.Contains(_d7b_body, #"CMD ["mise", "x", "--", "say \"hi\""]"#) & true
@@ -225,19 +225,19 @@ _d8_dc: compose: files: launch: services: "d8-launch": healthcheck: {
 // `<n>_bayt` (each a clamped busybox `_ctxs` stage flattened into FROM
 // scratch) are stages in Dockerfile.<n>. Containment-checked — exact
 // equality is brittle across glob orderings.
-_d9_srcs_body:   _d1_dc.dockerfiles.build
-_d9_outs_body:   _d1_dc.dockerfiles.build
-_d9_bayt_body:   _d1_dc.dockerfiles.build
-_d9_srcs_stage:  strings.Contains(_d9_srcs_body, "FROM scratch AS build_srcs") & true
-_d9_outs_stage:  strings.Contains(_d9_outs_body, "FROM scratch AS build_outs") & true
-_d9_outs_from:   strings.Contains(_d9_outs_body, "COPY --from=d1-build") & true
+_d9_srcs_body:  _d1_dc.dockerfiles.build
+_d9_outs_body:  _d1_dc.dockerfiles.build
+_d9_bayt_body:  _d1_dc.dockerfiles.build
+_d9_srcs_stage: strings.Contains(_d9_srcs_body, "FROM scratch AS build_srcs") & true
+_d9_outs_stage: strings.Contains(_d9_outs_body, "FROM scratch AS build_outs") & true
+_d9_outs_from:  strings.Contains(_d9_outs_body, "COPY --from=d1-build") & true
 // The clamp stage guards `_outs` digest stability: without it, build-time
 // mtimes on the copied outs float the digest per build.
-_d9_outs_clamp:  strings.Contains(_d9_outs_body, "AS build_outs_ctxs") & true
-_d9_bayt_stage:  strings.Contains(_d9_bayt_body, "FROM scratch AS build_bayt") & true
+_d9_outs_clamp: strings.Contains(_d9_outs_body, "AS build_outs_ctxs") & true
+_d9_bayt_stage: strings.Contains(_d9_bayt_body, "FROM scratch AS build_bayt") & true
 // Scaffolding scope is the target's OWN files + the membership-stable
 // roots — never a sibling target's taskfile/manifest (cache honesty).
-_d9_bayt_scope:  strings.Contains(_d9_bayt_body, "COPY --parents .bayt/compose.build.yaml .bayt/Dockerfile.build .bayt/bayt.build.json .bayt/Taskfile.yml .bayt/Taskfile.bayt.yml ./") & true
+_d9_bayt_scope: strings.Contains(_d9_bayt_body, "COPY --parents .bayt/compose.build.yaml .bayt/Dockerfile.build .bayt/bayt.build.json .bayt/Taskfile.yml .bayt/Taskfile.bayt.yml ./") & true
 // Synthetic services all live in the parent fragment.
 _d9_srcs_svc: _d1_dc.compose.files.build.services."d1-build_srcs".build.target & "build_srcs"
 _d9_outs_svc: _d1_dc.compose.files.build.services."d1-build_outs".build.target & "build_outs"
@@ -265,7 +265,7 @@ _d9_dual: #project & {
 	targets: web: {
 		entrypoint: do: "web"
 		dockerfile: busybox
-		compose: {}
+		compose:    {}
 		expose: http: {port: 8080, env: "PORT", publish: true}
 	}
 }
@@ -278,7 +278,7 @@ _d9_dot: #project & {
 	name: "d9dot"
 	dir:  "."
 	targets: {
-		db: {srcs: globs: ["migrations/*.sql"], cmd: "builtin": do: "true", dockerfile: busybox}
+		db:  {srcs: globs: ["migrations/*.sql"], cmd: "builtin": do: "true", dockerfile: busybox}
 		run: {deps: [":db:srcs"], cmd: "builtin": do: "true", dockerfile: busybox}
 	}
 }
@@ -316,13 +316,13 @@ _d10: #project & {
 }
 _d10_dc: (#dockerComposeGen & {project: _d10, depManifests: {}})
 // Bulk-copy pattern: /monorepo /monorepo, no --parents, no glob filter.
-_d10_ci_body: _d10_dc.dockerfiles.ci
+_d10_ci_body:          _d10_dc.dockerfiles.ci
 _d10_ci_has_bulk_copy: strings.Contains(_d10_ci_body, "COPY --from=d10-integrate_bayt --link /monorepo /monorepo") & true
 // Additional context wires the scaffolding synth on the consumer…
 _d10_dc: compose: files: ci: services: "d10-ci": build: additional_contexts: "d10-integrate_bayt": "service:d10-integrate_bayt"
 // …and the synth itself chains its dep's `_bayt` (setup) — stage COPY
 // plus the matching context on the synth service.
-_d10_int_body: _d10_dc.dockerfiles.integrate
+_d10_int_body:   _d10_dc.dockerfiles.integrate
 _d10_chain_copy: strings.Contains(_d10_int_body, "COPY --from=d10-setup_bayt /monorepo /monorepo") & true
 _d10_dc: compose: files: integrate: services: "d10-integrate_bayt": build: additional_contexts: "d10-setup_bayt": "service:d10-setup_bayt"
 
@@ -385,7 +385,6 @@ _d11_srcs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-
 _d11_outs_to: _d11_dc.compose.files.build.services."d11-build_outs".build."x-bake"."cache-to"
 _d11_outs_to: ["type=registry,ref=reg.example/p:sc-${CACHE_SCOPE:-unscoped}-d11-build_outs,mode=max,image-manifest=true,oci-mediatypes=true,compression=zstd,compression-level=3"]
 
-
 // --- D12: a `:x:outs` dep on a target with empty outs.globs copies
 // nothing: _outsEmit never emits the `<x>_outs` service, so an ungated
 // COPY or `service:<x>_outs` context would dangle (compose/bake error).
@@ -404,7 +403,7 @@ _d12: #project & {
 		"consumer": {
 			deps: [":producer:outs"]
 			srcs: globs: ["**"]
-			cmd:  "builtin": do: "make"
+			cmd: "builtin": do: "make"
 			dockerfile: busybox
 		}
 	}
@@ -448,11 +447,11 @@ _d13: #project & {
 		"serve": {
 			cmd: "builtin": do: "./serve"
 			dockerfile: busybox
-			compose: {}
+			compose:    {}
 		}
 	}
 }
-_d13_dc: (#dockerComposeGen & {project: _d13, depManifests: {}})
+_d13_dc:   (#dockerComposeGen & {project: _d13, depManifests: {}})
 _d13_body: _d13_dc.dockerfiles.launch
 // Both deps bulk-COPY their workdir; neither renders in the `:outs` shape.
 _d13_build_bulk: strings.Contains(_d13_body, "COPY --from=d13-build --link") & true
@@ -489,16 +488,16 @@ _d15: #project & {
 		}
 	}
 }
-_d15_dc: (#dockerComposeGen & {project: _d15, depManifests: {}})
-_d15_body: _d15_dc.dockerfiles.release
-_d15_remote: strings.Contains(_d15_body, "ADD --checksum=sha256:2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d https://example.com/model.gguf /app/models/model.gguf") & true
-_d15_unpack: strings.Contains(_d15_body, "ADD --checksum=sha256:95e3a3a2adeacd1b8dd704743c71eec8343dde472d3efe71101a62570c47cbbd --unpack=true https://example.com/data.tar.gz /data/") & true
-_d15_local:  strings.Contains(_d15_body, "ADD vendor/tools.tar.gz /opt/tools/") & true
-_d15_checksum: strings.Contains(_d15_body, "ADD --checksum=sha256:1111111111111111111111111111111111111111111111111111111111111111 https://example.com/bin /bin/bin") & true
+_d15_dc:          (#dockerComposeGen & {project: _d15, depManifests: {}})
+_d15_body:        _d15_dc.dockerfiles.release
+_d15_remote:      strings.Contains(_d15_body, "ADD --checksum=sha256:2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d https://example.com/model.gguf /app/models/model.gguf") & true
+_d15_unpack:      strings.Contains(_d15_body, "ADD --checksum=sha256:95e3a3a2adeacd1b8dd704743c71eec8343dde472d3efe71101a62570c47cbbd --unpack=true https://example.com/data.tar.gz /data/") & true
+_d15_local:       strings.Contains(_d15_body, "ADD vendor/tools.tar.gz /opt/tools/") & true
+_d15_checksum:    strings.Contains(_d15_body, "ADD --checksum=sha256:1111111111111111111111111111111111111111111111111111111111111111 https://example.com/bin /bin/bin") & true
 _d15_multi_amd64: strings.Contains(_d15_body, "FROM scratch AS fetch_release_4_amd64\nADD --checksum=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --unpack=true https://example.com/tool_amd64.tar.gz /") & true
 _d15_multi_arm64: strings.Contains(_d15_body, "FROM scratch AS fetch_release_4_arm64\nADD --checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --unpack=true https://example.com/tool_arm64.tar.gz /") & true
-_d15_multi_sel: strings.Contains(_d15_body, "FROM fetch_release_4_$TARGETARCH AS fetch_release_4") & true
-_d15_multi_copy: strings.Contains(_d15_body, "COPY --from=fetch_release_4 /tool /usr/local/bin/tool") & true
+_d15_multi_sel:   strings.Contains(_d15_body, "FROM fetch_release_4_$TARGETARCH AS fetch_release_4") & true
+_d15_multi_copy:  strings.Contains(_d15_body, "COPY --from=fetch_release_4 /tool /usr/local/bin/tool") & true
 
 // --- D16: bare-`up` selection. A target runs iff it declares a compose
 // block AND isn't manual (launch, the release-* siblings); build-graph
@@ -515,7 +514,7 @@ _d16_bayt_scale:  _d13_dc.compose.files.build.services."d13-build_bayt".scale & 
 // default replica count (no scale field) — the release-* infra shape. Both
 // launch (compose.up) and serve (bare compose block) qualify.
 _d13_dc: compose: files: launch: services: "d13-launch": {["scale"]: _|_}
-_d13_dc: compose: files: serve: services: "d13-serve": {["scale"]: _|_}
+_d13_dc: compose: files: serve: services: "d13-serve":   {["scale"]: _|_}
 // A `manual` compose target (integrate: a by-name harness) is scale: 0 AND
 // carries no profile on the base — present in a profile-less `config` (so
 // `service:` contexts resolve) but off the bare-`up` stack. The profile
@@ -543,7 +542,7 @@ _d17: #project & {
 		"consumer": {
 			deps: [":producer", ":producer:outs"]
 			srcs: globs: ["**"]
-			cmd:  "builtin": do: "make"
+			cmd: "builtin": do: "make"
 			dockerfile: busybox
 		}
 		// By-name harness: `manual` closure entry — D16 asserts its
@@ -553,7 +552,7 @@ _d17: #project & {
 			srcs: globs: ["tests/**"]
 			cmd: "builtin": do: "run-tests"
 			dockerfile: busybox
-			compose: {up: true, manual: true}
+			compose:    {up: true, manual: true}
 		}
 	}
 	compose: includes: ["compose.overlay.yaml"]
@@ -585,7 +584,7 @@ _d18_launch_inc: [
 _d18_launch_alias: _d13_dc.compose.files."launch.closure".services."bayt"
 _d18_launch_alias: {
 	extends: {file: "./compose.launch.yaml", service: "d13-launch"}
-	scale: 1
+	scale:   1
 }
 _d13_dc: compose: files: "launch.closure": services: {["launch"]: _|_}
 // Overlay project: the fragment set widens to the union of every
@@ -615,8 +614,8 @@ _d19: #project & {
 		}
 	}
 }
-_d19_dc:   (#dockerComposeGen & {project: _d19, depManifests: {}})
-_d19_body: _d19_dc.dockerfiles.launch
+_d19_dc:        (#dockerComposeGen & {project: _d19, depManifests: {}})
+_d19_body:      _d19_dc.dockerfiles.launch
 _d19_has_tool:  strings.Contains(_d19_body, "/usr/local/bin/tool") & true
 _d19_has_model: strings.Contains(_d19_body, "/model.bin") & true
 
@@ -633,21 +632,21 @@ _d20: #project & {
 		"integrate": {
 			deps: ["img:launch:outs"]
 			srcs: globs: ["tests/**"]
-			cmd:  "builtin": do: "true"
+			cmd: "builtin": do: "true"
 			dockerfile: busybox
-			compose: {up: true, manual: true}
+			compose:    {up: true, manual: true}
 		}
 	}
 }
 _d20_dc: (#dockerComposeGen & {project: _d20, depManifests: {
 	"img:launch:outs": {
-		name:       "launch_outs"
-		project:    "img"
-		dir:        "img"
-		visibility: "public"
-		outs: {globs: [], exclude: []}
+		name:                "launch_outs"
+		project:             "img"
+		dir:                 "img"
+		visibility:          "public"
+		outs:                {globs: [], exclude: []}
 		transitiveCrossDeps: []
-		upClosure: ["img/.bayt/compose.launch.yaml", "img/.bayt/compose.build.yaml"]
+		upClosure:           ["img/.bayt/compose.launch.yaml", "img/.bayt/compose.build.yaml"]
 	}
 }})
 _d20_body: _d20_dc.dockerfiles.integrate
@@ -731,79 +730,79 @@ _d22_no_bulk: strings.Contains(_d22_dc.dockerfiles.app, "COPY --from=d22-blobs /
 
 // Public aggregator forces evaluation of the hidden _d* bindings.
 Tests: docker_compose: {
-	d22:          _d22_dc
-	d22_inc:      _d22_inc
-	d22_no_bulk:  _d22_no_bulk
-	d19_tool:  _d19_has_tool
-	d19_model: _d19_has_model
-	d23_linked:           _d23_linked
-	d23_rename_plain:     _d23_rename_plain
-	d23_incontext_plain:  _d23_incontext_plain
-	d23_parents_plain:    _d23_parents_plain
-	d23_optout_plain:     _d23_optout_plain
-	d1: _d1_dc
-	d1_pull_image: _d1_pull_image
-	d1_pull_tags:  _d1_pull_tags
-	d2: _d2_dc
-	d3: _d3_dc
-	d4: _d4_dc
-	d5: _d5_dc
-	d6: _d6_dc
-	d7: _d7_dc
-	d7_has_entrypoint: _d7_has_entrypoint
-	d8: _d8_dc
-	d9_srcs_stage:  _d9_srcs_stage
-	d9_outs_stage:  _d9_outs_stage
-	d9_outs_from:   _d9_outs_from
-	d9_outs_clamp:  _d9_outs_clamp
-	d9_bayt_stage:  _d9_bayt_stage
-	d9_bayt_scope:  _d9_bayt_scope
-	d9_cmd_srcs:    _d9_cmd_srcs
-	d9_dual_ports:  _d9_dual_ports
-	d9_dot_copy:    _d9_dot_copy
-	d9_dot_none:    _d9_dot_none
-	d10:            _d10_dc
-	d10_has_bulk_copy: _d10_ci_has_bulk_copy
-	d10_chain_copy:    _d10_chain_copy
-	d11_parent_from:   _d11_parent_from
-	d11_srcs_from:     _d11_srcs_from
-	d11_outs_from:     _d11_outs_from
-	d11_bayt_from:     _d11_bayt_from
-	d11_bayt_to:       _d11_bayt_to
-	d11_srcs_to:       _d11_srcs_to
-	d11_outs_to:       _d11_outs_to
-	d12:               _d12_dc
-	d12_no_copy:       _d12_no_copy
-	d13:               _d13_dc
-	d13_build_bulk:    _d13_build_bulk
-	d13_setup_bulk:    _d13_setup_bulk
-	d13_no_outs:       _d13_no_outs
-	d15:               _d15_dc
-	d15_remote:        _d15_remote
-	d15_unpack:        _d15_unpack
-	d15_local:         _d15_local
-	d16_build_scale:   _d16_build_scale
-	d16_setup_scale:   _d16_setup_scale
-	d16_srcs_scale:    _d16_srcs_scale
-	d16_outs_scale:    _d16_outs_scale
-	d16_bayt_scale:    _d16_bayt_scale
-	d16_harness_scale: _d16_harness_scale
-	d16_harness_alias: _d16_harness_alias
-	d16_harness_aprof: _d16_harness_aprof
-	d17:               _d17_dc
-	d17_outs:          _d17_outs
-	d18_launch_inc:    _d18_launch_inc
-	d18_launch_alias:  _d18_launch_alias
-	d18_harness_inc:   _d18_harness_inc
-	d20:               _d20_dc
-	d20_no_outs_copy:  _d20_no_outs_copy
-	d20_no_bulk_copy:  _d20_no_bulk_copy
-	d20_inc:           _d20_inc
-	d26_dot_inc:       _d26_dot_inc
-	d26_dot_depth:     _d26_dot_depth
-	d26_dot_prefix:    _d26_dot_prefix
-	d26_empty_inc:     _d26_empty_inc
-	d26_nested_inc:    _d26_nested_inc
+	d22:                 _d22_dc
+	d22_inc:             _d22_inc
+	d22_no_bulk:         _d22_no_bulk
+	d19_tool:            _d19_has_tool
+	d19_model:           _d19_has_model
+	d23_linked:          _d23_linked
+	d23_rename_plain:    _d23_rename_plain
+	d23_incontext_plain: _d23_incontext_plain
+	d23_parents_plain:   _d23_parents_plain
+	d23_optout_plain:    _d23_optout_plain
+	d1:                  _d1_dc
+	d1_pull_image:       _d1_pull_image
+	d1_pull_tags:        _d1_pull_tags
+	d2:                  _d2_dc
+	d3:                  _d3_dc
+	d4:                  _d4_dc
+	d5:                  _d5_dc
+	d6:                  _d6_dc
+	d7:                  _d7_dc
+	d7_has_entrypoint:   _d7_has_entrypoint
+	d8:                  _d8_dc
+	d9_srcs_stage:       _d9_srcs_stage
+	d9_outs_stage:       _d9_outs_stage
+	d9_outs_from:        _d9_outs_from
+	d9_outs_clamp:       _d9_outs_clamp
+	d9_bayt_stage:       _d9_bayt_stage
+	d9_bayt_scope:       _d9_bayt_scope
+	d9_cmd_srcs:         _d9_cmd_srcs
+	d9_dual_ports:       _d9_dual_ports
+	d9_dot_copy:         _d9_dot_copy
+	d9_dot_none:         _d9_dot_none
+	d10:                 _d10_dc
+	d10_has_bulk_copy:   _d10_ci_has_bulk_copy
+	d10_chain_copy:      _d10_chain_copy
+	d11_parent_from:     _d11_parent_from
+	d11_srcs_from:       _d11_srcs_from
+	d11_outs_from:       _d11_outs_from
+	d11_bayt_from:       _d11_bayt_from
+	d11_bayt_to:         _d11_bayt_to
+	d11_srcs_to:         _d11_srcs_to
+	d11_outs_to:         _d11_outs_to
+	d12:                 _d12_dc
+	d12_no_copy:         _d12_no_copy
+	d13:                 _d13_dc
+	d13_build_bulk:      _d13_build_bulk
+	d13_setup_bulk:      _d13_setup_bulk
+	d13_no_outs:         _d13_no_outs
+	d15:                 _d15_dc
+	d15_remote:          _d15_remote
+	d15_unpack:          _d15_unpack
+	d15_local:           _d15_local
+	d16_build_scale:     _d16_build_scale
+	d16_setup_scale:     _d16_setup_scale
+	d16_srcs_scale:      _d16_srcs_scale
+	d16_outs_scale:      _d16_outs_scale
+	d16_bayt_scale:      _d16_bayt_scale
+	d16_harness_scale:   _d16_harness_scale
+	d16_harness_alias:   _d16_harness_alias
+	d16_harness_aprof:   _d16_harness_aprof
+	d17:                 _d17_dc
+	d17_outs:            _d17_outs
+	d18_launch_inc:      _d18_launch_inc
+	d18_launch_alias:    _d18_launch_alias
+	d18_harness_inc:     _d18_harness_inc
+	d20:                 _d20_dc
+	d20_no_outs_copy:    _d20_no_outs_copy
+	d20_no_bulk_copy:    _d20_no_bulk_copy
+	d20_inc:             _d20_inc
+	d26_dot_inc:         _d26_dot_inc
+	d26_dot_depth:       _d26_dot_depth
+	d26_dot_prefix:      _d26_dot_prefix
+	d26_empty_inc:       _d26_empty_inc
+	d26_nested_inc:      _d26_nested_inc
 }
 
 // --- D23: `_copyLine`'s `--link` predicate, pinned shape by shape. See
@@ -816,29 +815,39 @@ Tests: docker_compose: {
 // on an override, so `base & {from: null}` is an error, not a variant.
 
 // The only shape that gets the flag.
-_d23_linked: (_copyLine & {c: {
-	link: true, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
-}}).out & "COPY --link --from=img /bin/busybox /bin/busybox"
+_d23_linked: (_copyLine & {
+	c: {
+		link: true, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
+	}
+}).out & "COPY --link --from=img /bin/busybox /bin/busybox"
 
 // The three that do not. Asserting the whole line,
 // not the absence of "--link": a flag that moved would pass a contains
 // check against a substring that no longer appears in that position.
-_d23_rename_plain: (_copyLine & {c: {
-	link: true, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/usr/bin/busybox", exclude: []
-}}).out & "COPY --from=img /bin/busybox /usr/bin/busybox"
+_d23_rename_plain: (_copyLine & {
+	c: {
+		link: true, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/usr/bin/busybox", exclude: []
+	}
+}).out & "COPY --from=img /bin/busybox /usr/bin/busybox"
 
-_d23_incontext_plain: (_copyLine & {c: {
-	link: true, from: null, parents: false, srcs: ["busybox"], dst: "/bin/busybox", exclude: []
-}}).out & "COPY busybox /bin/busybox"
+_d23_incontext_plain: (_copyLine & {
+	c: {
+		link: true, from: null, parents: false, srcs: ["busybox"], dst: "/bin/busybox", exclude: []
+	}
+}).out & "COPY busybox /bin/busybox"
 
-_d23_parents_plain: (_copyLine & {c: {
-	link: true, from: {name: "img"}, parents: true, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
-}}).out & "COPY --parents --from=img /bin/busybox /bin/busybox"
+_d23_parents_plain: (_copyLine & {
+	c: {
+		link: true, from: {name: "img"}, parents: true, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
+	}
+}).out & "COPY --parents --from=img /bin/busybox /bin/busybox"
 
 // `link: false` on the one eligible shape: the flag goes away.
-_d23_optout_plain: (_copyLine & {c: {
-	link: false, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
-}}).out & "COPY --from=img /bin/busybox /bin/busybox"
+_d23_optout_plain: (_copyLine & {
+	c: {
+		link: false, from: {name: "img"}, parents: false, srcs: ["/bin/busybox"], dst: "/bin/busybox", exclude: []
+	}
+}).out & "COPY --from=img /bin/busybox /bin/busybox"
 
 // --- D24: a dependency waited on for health carries `restart: true`, so
 // the dependent is recreated inside the `up` that recreates it and
@@ -864,7 +873,7 @@ _d24: #project & {
 			compose: {
 				up: true
 				depends_on: {
-					"d24-db":  condition: "service_healthy"
+					"d24-db": condition:  "service_healthy"
 					"d24-bus": condition: "service_started"
 					"d24-app-cache": {condition: "service_healthy", restart: false}
 				}
@@ -961,7 +970,7 @@ _d27: #project & {
 	}
 }
 _d27_port: (_hostDefault & {project: "d27", target: "door", name: "tls", port: {port: 8443}}).out
-_d27_dc: (#dockerComposeGen & {project: _d27, depManifests: {}})
+_d27_dc:   (#dockerComposeGen & {project: _d27, depManifests: {}})
 _d27_dc: compose: files: door: services: "d27-door": environment: ORIGIN: "${ORIGIN:-https://localhost:${DOOR_HOST_PORT:-\(_d27_port)}}"
 _d27_door_private: (_d27_dc.compose.files.door.services."d27-door".ports == _|_) & true
 _d27_dc: compose: ports: services: "d27-door": ports: ["${DOOR_HOST_PORT:-\(_d27_port)}:8443"]
@@ -1038,7 +1047,7 @@ _d28_dep:   strings.Contains(_d28_body, "COPY --from=d28-setup_srcs --parents /m
 _d28_outs:  strings.Contains(_d28_body, "--parents /monorepo/${BAYT_DIR:+${BAYT_DIR}/}out/d28 /") & true
 _d28_ctxs:  strings.Contains(_d28_body, "AS build_ctxs\nARG BAYT_DIR\nWORKDIR /monorepo/${BAYT_DIR}\n") & true
 _d28_clamp: strings.Contains(_d28_body, "&& { d=$(dirname /monorepo/${BAYT_DIR}); while [ \"$d\" != / ]; do touch -hd @${SOURCE_DATE_EPOCH:-0} \"$d\" || exit; d=$(dirname \"$d\"); done; }") & true
-_d28_args: [for s in ["d28-build", "d28-build_srcs", "d28-build_outs", "d28-build_bayt"] {_d28_dc.compose.files.build.services[s].build.args.BAYT_DIR}] & [for _ in [1, 2, 3, 4] {"${MODE:+apps/d28}"}]
+_d28_args:  [for s in ["d28-build", "d28-build_srcs", "d28-build_outs", "d28-build_bayt"] {_d28_dc.compose.files.build.services[s].build.args.BAYT_DIR}] & [for _ in [1, 2, 3, 4] {"${MODE:+apps/d28}"}]
 // A project without one spells its dir.
 _d28_static: strings.Contains(_d1_dc.dockerfiles.build, "ARG BAYT_DIR") & false
 
@@ -1046,7 +1055,7 @@ _d28_static: strings.Contains(_d1_dc.dockerfiles.build, "ARG BAYT_DIR") & false
 // closure does. It lists every fragment, and a fragment may name a service
 // only an include declares: a replay reading the root failed on a runner's
 // switched context that only the include's services defined.
-_d29_inc: _d17_dc.compose.bayt_root.include
+_d29_inc:  _d17_dc.compose.bayt_root.include
 _d29_last: _d29_inc[len(_d29_inc)-1] & {path: "../compose.overlay.yaml", required: false}
 
 // --- D30: a target's own build args reach compose beside the frontend pin.
@@ -1063,3 +1072,31 @@ _d30: #project & {
 _d30_args: (#dockerComposeGen & {project: _d30, depManifests: {}}).compose.files.build.services."d30-build".build.args
 _d30_mode: _d30_args.MODE & "${MODE:-}"
 _d30_pin:  _d30_args.BUILDKIT_SYNTAX & #buildkitSyntax
+
+// --- D31: unresolved disjunctions across >=4 image-copy entries or >=4 cmds
+// hit evalv3's 2^N cross-product cap during list comprehensions and leave
+// exported lists incomplete (only `cue export` catches it; `cue eval` passes).
+_d31: #project & {
+	name: "d31"
+	dir:  "d31"
+	targets: "dist": {
+		dockerfile: {
+			from: name: "example.com/base:1@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+			defaultPreamble: {
+				"p1": copy: {from: name: "example.com/a:1@sha256:1111111111111111111111111111111111111111111111111111111111111111", srcs: ["/a"], dst: "/a"}
+				"p2": copy: {from: name: "example.com/b:1@sha256:2222222222222222222222222222222222222222222222222222222222222222", srcs: ["/b"], dst: "/b"}
+			}
+			defaultCopy: {
+				"c1": {from: name: "example.com/c:1@sha256:3333333333333333333333333333333333333333333333333333333333333333", srcs: ["/c"], dst: "/c"}
+				"c2": {from: name: "example.com/d:1@sha256:4444444444444444444444444444444444444444444444444444444444444444", srcs: ["/d"], dst: "/d"}
+			}
+		}
+		cmd: {
+			"step1":   {priority: -3, shell: "sh", dockerfile: do: "echo 1"}
+			"step2":   {priority: -2, shell: "sh", dockerfile: do: "echo 2"}
+			"step3":   {priority: -1, dockerfile: {do: "echo 3", mounts: [{type: "cache", target: "/cache", scope: "global"}]}}
+			"builtin": {shell: "sh", dockerfile: do: "echo 4"}
+		}
+	}
+}
+_d31_render: #render & {project: _d31, depManifests: {}}

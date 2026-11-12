@@ -158,8 +158,8 @@ _ct_bare: #project & {
 }
 _ct_bare_from: _ct_bare.targets[_ct_n1].bake.cache.from
 _ct_bare_from: []
-_ct_bare_to: _ct_bare.targets[_ct_n1].bake.cache.to
-_ct_bare_to: []
+_ct_bare_to:   _ct_bare.targets[_ct_n1].bake.cache.to
+_ct_bare_to:   []
 _ct_pass: #project & {
 	name: "cp"
 	dir:  "cp"
@@ -172,8 +172,8 @@ _ct_pass: #project & {
 }
 _ct_pass_from: _ct_pass.targets[_ct_n1].bake.cache.from
 _ct_pass_from: ["type=local,src=/tmp/c"]
-_ct_pass_to: _ct_pass.targets[_ct_n1].bake.cache.to
-_ct_pass_to: ["type=local,dest=/tmp/c"]
+_ct_pass_to:   _ct_pass.targets[_ct_n1].bake.cache.to
+_ct_pass_to:   ["type=local,dest=/tmp/c"]
 
 // The key set, because a selector for a missing key is incomplete rather than
 // wrong, and `cue eval` tolerates incomplete.
@@ -183,6 +183,6 @@ _ct_srcs_xbake: [for k, _ in _ct_dc.compose.files[_ct_n1].services."ct-some-proj
 // caller binds the struct, so both emitters — which let-bind and select — leave
 // an unconditionally bounded scope undetected, and passthrough breaks for the
 // next caller who binds one to a field.
-_ct_direct: (#bakeCacheRefs & {c: {from: ["type=local,src=/tmp/c"], to: []}, t: "some-project-unit-test"})
+_ct_direct:      (#bakeCacheRefs & {c: {from: ["type=local,src=/tmp/c"], to: []}, t: "some-project-unit-test"})
 _ct_direct_from: _ct_direct.from & ["type=local,src=/tmp/c"]
 _ct_direct_to:   _ct_direct.to & []

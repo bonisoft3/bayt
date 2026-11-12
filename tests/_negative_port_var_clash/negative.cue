@@ -10,10 +10,10 @@ _p: bayt.#project & {
 	targets: {
 		web: {
 			expose: admin_http: {port: 8001, env: "ADMIN_PORT"}
-			entrypoint: do: "web"
+			entrypoint: do:     "web"
 		}
 		"web-admin": {
-			expose: http: {port: 8000, env: "PORT"}
+			expose: http:   {port: 8000, env: "PORT"}
 			entrypoint: do: "admin"
 		}
 	}

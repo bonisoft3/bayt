@@ -4,7 +4,7 @@ _passthrough: #project & {
 	name: "passthrough"
 	dir:  "."
 	files: "say.yaml": {say: lint: do: "task lint"}
-	targets: lint: {files: "settings.json": {enabled: true}}
+	targets: lint:     {files: "settings.json": {enabled: true}}
 }
 _passthroughRendered: #passthroughFrom & {project: _passthrough}
 _passthroughRendered: files: [

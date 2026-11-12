@@ -25,25 +25,25 @@ _proc_project: #project & {
 			healthcheck: {port: 3001, path: "/ready"}
 			expose: {
 				// Pinned where people type it; run mode still moves it.
-				http: {port: 3000, env: "PGRST_SERVER_PORT", host: 3300}
+				http:  {port: 3000, env: "PGRST_SERVER_PORT", host: 3300}
 				admin: {port: 3001, env: "PGRST_ADMIN_SERVER_PORT"}
 			}
 			entrypoint: {
 				do: "postgrest"
 				env: {
 					PGRST_DB_URI: {peer: "database", port: "pg", prefix: "postgres://u:p@", suffix: "/app"}
-					DB_HOST: {peer: "database", port: "pg", part: "host"}
-					DB_NOTE: "database migrations ran"
-					MIRROR: "mirror.database:5432"
-					DB_NAME: "database"
+					DB_HOST:      {peer: "database", port: "pg", part: "host"}
+					DB_NOTE:      "database migrations ran"
+					MIRROR:       "mirror.database:5432"
+					DB_NAME:      "database"
 					// A process names its own ports via #portRef without `peer`.
-					SELF: {port: "http", host: "localhost", prefix: "http://", suffix: "/rpc"}
+					SELF:        {port: "http", host: "localhost", prefix: "http://", suffix: "/rpc"}
 					CACHE_IMAGE: "database:18-alpine"
-					PG_IMAGE: "database:5432-alpine"
-					DB_ADDR: {peer: "database", port: "pg", part: "host"}
-					GO_DSN: ["u:p@tcp(", {peer: "database", port: "pg"}, ")/app"]
-					OBSERVER:  "database"
-					ADMIN_DSN: "postgres://database:1234@127.0.0.1:5432/app"
+					PG_IMAGE:    "database:5432-alpine"
+					DB_ADDR:     {peer: "database", port: "pg", part: "host"}
+					GO_DSN:      ["u:p@tcp(", {peer: "database", port: "pg"}, ")/app"]
+					OBSERVER:    "database"
+					ADMIN_DSN:   "postgres://database:1234@127.0.0.1:5432/app"
 				}
 				after: database: "healthy"
 			}
@@ -53,7 +53,7 @@ _proc_project: #project & {
 				working_dir: "backend"
 			}
 			dockerfile: from: name: "postgrest/postgrest:v12"
-			compose: {}
+			compose:  {}
 			taskfile: {}
 		}
 		// A process with work of its own: its build still runs as a go-task
@@ -104,7 +104,7 @@ _proc_project: #project & {
 		}
 		integrate: {
 			taskfile: {}
-			deps: [":crud", ":worker"]
+			deps:     [":crud", ":worker"]
 			entrypoint: {
 				do:    #"deno run check.ts ${CRUD_URL} \d+"#
 				shell: "sh"
@@ -122,19 +122,19 @@ _proc_project: #project & {
 
 _proc_ref: {
 	// No `env` to carry it: the port keeps its number on the host.
-	pg:   "5432"
-	http: "${CRUD_HTTP_PORT:-3300}"
+	pg:    "5432"
+	http:  "${CRUD_HTTP_PORT:-3300}"
 	admin: (_hostPort & {project: "native", target: "crud", name: "admin", port: {port: 3001, env: "X"}}).out
 }
 
 // One instance for every assertion: each costs a full evaluation.
 _proc_gen: #processComposeGen & {project: _proc_project, depManifests: {}}
-_proc: _proc_gen.file.processes
+_proc:     _proc_gen.file.processes
 
 // The host runs the host toolchain, names every port by its variable, and
 // reaches peers on loopback under both spellings compose resolves.
 _proc: crud: {
-	entrypoint: ["mise", "x", "postgrest@14", "--", "postgrest"]
+	entrypoint:  ["mise", "x", "postgrest@14", "--", "postgrest"]
 	working_dir: "backend"
 	environment: [
 		"ADMIN_DSN=postgres://database:1234@127.0.0.1:5432/app",
@@ -183,11 +183,11 @@ _proc: integrate: {
 // microcheck install its probe needs.
 _proc_tf: (#taskfileGen & {project: _proc_project, depManifests: {}}).files.integrate.tasks
 _proc_tf: default: deps: ["::bayt:crud", "::bayt:worker"]
-_proc_tf: {[!~"^default$"]: _|_}
+_proc_tf:   {[!~"^default$"]: _|_}
 _proc_file: _proc_gen.file
 _proc_file: {ordered_shutdown: true, environment: ["MISE_LOCKED=0"]}
 _proc: "integrate:build": entrypoint: ["task", "-t", ".bayt/Taskfile.yml", "bayt:integrate"]
-_proc: "bayt:httpcheck": entrypoint: ["bayt", "microcheck", "httpcheck", "--help"]
+_proc: "bayt:httpcheck": entrypoint:  ["bayt", "microcheck", "httpcheck", "--help"]
 _proc: integrate: depends_on: close({
 	crud: condition:              "process_healthy"
 	"integrate:build": condition: "process_completed_successfully"
@@ -216,7 +216,7 @@ _proc_seconds: [90, 2, 1, 1, 1]
 
 // The container keeps canonical ports and the image's toolchain, and waits
 // on its peer by service name.
-_proc_docker: #dockerComposeGen & {project: _proc_project, depManifests: {}}
+_proc_docker:            #dockerComposeGen & {project: _proc_project, depManifests: {}}
 _proc_dockerfile:        _proc_docker.dockerfiles.crud
 _proc_dockerfile_ep:     strings.Contains(_proc_dockerfile, "ENTRYPOINT [\"postgrest\"]") & true
 _proc_dockerfile_expose: strings.Contains(_proc_dockerfile, "EXPOSE 3000\nEXPOSE 3001") & true
@@ -274,14 +274,14 @@ _proc_auth_project: #project & {
 		healthcheck: {
 			url:           "http://localhost:3000/health"
 			authorization: "Bearer secret"
-			headers: ["X-Custom: 123"]
+			headers:       ["X-Custom: 123"]
 		}
 		entrypoint: do: "server"
 		compose: {}
 	}
 }
-_proc_auth:         (#processComposeGen & {project: _proc_auth_project, depManifests: {}}).file.processes.srv
-_proc_auth:         readiness_probe: exec: command: "\(_microcheckHost) httpcheck -H \"Authorization: Bearer secret\" -H \"X-Custom: 123\" http://localhost:3000/health"
+_proc_auth: (#processComposeGen & {project: _proc_auth_project, depManifests: {}}).file.processes.srv
+_proc_auth: readiness_probe: exec: command: "\(_microcheckHost) httpcheck -H \"Authorization: Bearer secret\" -H \"X-Custom: 123\" http://localhost:3000/health"
 _proc_auth_compose: (#dockerComposeGen & {project: _proc_auth_project, depManifests: {}}).compose.files.srv.services."auth_test-srv".healthcheck
 _proc_auth_compose: test: ["CMD", "httpcheck", "-H", "Authorization: Bearer secret", "-H", "X-Custom: 123", "http://localhost:3000/health"]
 
@@ -333,14 +333,14 @@ _proc_host_only_project: #project & {
 }
 _proc_host_only_pc: (#processComposeGen & {project: _proc_host_only_project, depManifests: {}}).file.processes.launch
 _proc_host_only_pc: {
-	entrypoint: ["java", "-jar", "app.jar"]
+	entrypoint:  ["java", "-jar", "app.jar"]
 	environment: ["DB_URL=jdbc:postgresql://127.0.0.1:5432/postgres", "MODE=host", "PORT=${LAUNCH_HTTP_PORT:-8080}"]
 	readiness_probe: {
 		exec: command: "curl -sf http://127.0.0.1:8080/health"
 		period_seconds: 1
 	}
 }
-_proc_host_only_dc: #dockerComposeGen & {project: _proc_host_only_project, depManifests: {}}
+_proc_host_only_dc:    #dockerComposeGen & {project: _proc_host_only_project, depManifests: {}}
 _proc_host_only_no_ep: !strings.Contains(_proc_host_only_dc.dockerfiles.launch, "ENTRYPOINT") & true
 _proc_host_only_ex:    strings.Contains(_proc_host_only_dc.dockerfiles.launch, "EXPOSE 8080") & true
 _proc_host_only_svc:   _proc_host_only_dc.compose.files.launch.services."host_only-launch"
@@ -354,13 +354,13 @@ _proc_host_only_svc: {
 }
 
 Tests: process_compose: {
-	host:      _proc
-	task:      _proc_tf
-	file:      _proc_file
-	runtime:   _proc_rt
-	seconds:   _proc_seconds
-	argv:      _proc_argv
-	container: [_proc_container, _proc_inc, _proc_pinned, _proc_bake]
+	host:       _proc
+	task:       _proc_tf
+	file:       _proc_file
+	runtime:    _proc_rt
+	seconds:    _proc_seconds
+	argv:       _proc_argv
+	container:  [_proc_container, _proc_inc, _proc_pinned, _proc_bake]
 	door:       _proc_docker.dockerfiles.door
 	dockerfile: [_proc_dockerfile_ep, _proc_dockerfile_expose, _proc_bayt_scope]
 	compose:    _proc_docker.compose.files.crud.services."native-crud"

@@ -1,7 +1,7 @@
 use std/assert
+use ../runtime/tools.nu [run-cue]
 
-const source = (path self | path dirname)
-const repo = ($source | path join ".." ".." ".." | path expand)
+const root = (path self | path dirname | path dirname)
 
 def render [extra: string]: nothing -> record {
 	let program = '
@@ -20,11 +20,11 @@ _project: bayt.#project & {
 }
 out: (bayt.#render & {project: _project, depManifests: {}}).docker.dockerfiles.check
 '
-	($program | str replace "EXTRA" $extra) | do { ^cue export - -e out --out text } | complete
+	($program | str replace "EXTRA" $extra) | do { run-cue export - -e out --out text } | complete
 }
 
 def main [] {
-	cd $repo
+	cd $root
 	let injected = render ""
 	assert equal $injected.exit_code 0 $injected.stderr
 	assert ($injected.stdout | str contains "task -t .bayt/Taskfile.yml bayt:check") $injected.stdout

@@ -5,9 +5,9 @@
 package bayt
 
 // --- I1: Each preset's `from.name` resolves through the lock table.
-_i1_nubox: nubox & {from: name: lock.images.leap}
+_i1_nubox:   nubox & {from: name: lock.images.leap}
 _i1_busybox: busybox & {from: name: lock.images.busybox}
-_i1_bkid: bkid & {from: name: lock.images.docker}
+_i1_bkid:    bkid & {from: name: lock.images.docker}
 
 // --- I3: scratch sets from=null; the emitter writes `FROM scratch`
 // without an additional_contexts entry.
@@ -25,7 +25,7 @@ _i6_probe: #project & {
 	name: "i6"
 	dir:  "test/i6"
 	targets: {
-		"build": {dockerfile: nubox}
+		"build":   {dockerfile: nubox}
 		"release": {dockerfile: busybox}
 	}
 }

@@ -30,10 +30,10 @@ _p: bayt.#project & {
 					"pin": {priority: -19, copy: {
 						from: {name: "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"}
 						srcs: ["/bin/busybox"]
-						dst: "/busybox"
+						dst:  "/busybox"
 					}}
 					"pkgs": {priority: -18} & (zypper.#install & {pkgs: ["which=2.23-160000.2.2"]}).out
-					"apk": {priority: -17} & (apk.#install & {pkgs: ["curl", "jq"]}).out
+					"apk":  {priority: -17} & (apk.#install & {pkgs: ["curl", "jq"]}).out
 				}
 				copy: [{srcs: ["src/app.conf"], dst: "/etc/app.conf"}]
 			}
@@ -43,7 +43,7 @@ _p: bayt.#project & {
 		// container axis only.
 		"deps": {
 			cmd: "builtin": dockerfile: (apt.#install & {pkgs: ["curl"]}).out
-			dockerfile: from: name: "debian:bookworm-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+			dockerfile: from: name:     "debian:bookworm-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 		}
 	}
 }
@@ -97,9 +97,9 @@ _apt_keeps_lists: _aptCmd.do & !~"rm -rf /var/lib/apt/lists"
 _apt_pkgs_present:    _aptCmd.do & =~"--no-install-recommends curl"
 _zypper_pkgs_present: _zypperEntry.do & =~"which=2\\.23-160000\\.2\\.2"
 
-_zypperEntry: _p.targets.build.dockerfile.defaultPreamble.pkgs
+_zypperEntry:   _p.targets.build.dockerfile.defaultPreamble.pkgs
 _zypper_scopes: [for m in _zypperEntry.mounts {m.scope}] & ["global", "target"]
-_zypper_seeds: _zypperEntry.do & =~"^s=/zypper-store; d=/var/cache/zypp/packages"
+_zypper_seeds:  _zypperEntry.do & =~"^s=/zypper-store; d=/var/cache/zypp/packages"
 
 // Walking only one depth drops the rest from the store with no error: the
 // install still works, it just re-downloads forever.
@@ -129,9 +129,9 @@ _apkEntry: _p.targets.build.dockerfile.defaultPreamble.apk
 _apk_pkgs_present: _apkEntry.do & =~"curl jq"
 _apk_cache_dir:    _apkEntry.do & =~"--cache-dir=/var/cache/apk"
 _apk_no_nocache:   _apkEntry.do & !~"--no-cache"
-_apk_scopes: [for m in _apkEntry.mounts {m.scope}] & ["global", "target"]
-_apk_seeds:     _apkEntry.do & =~"^s=/apk-store; d=/var/cache/apk"
-_apk_publishes: _apkEntry.do & =~"mktemp .* && cp .* && mv -f"
+_apk_scopes:       [for m in _apkEntry.mounts {m.scope}] & ["global", "target"]
+_apk_seeds:        _apkEntry.do & =~"^s=/apk-store; d=/var/cache/apk"
+_apk_publishes:    _apkEntry.do & =~"mktemp .* && cp .* && mv -f"
 
 // The snapshot option is off unless asked for, and when asked for it emits
 // exactly the rewrite verified against the noble base: only the distro's
@@ -154,8 +154,8 @@ _apt_snapshot_precedes_update:      _aptSnap.do & =~"sed -i.*&& rm -f /etc/apt/a
 // which is the normal iteration state — BuildKit commits no layer for a
 // failed RUN, so nothing is gained by withholding the store write.
 _aptBuildOnly: (apt.#install & {
-	pkgs: ["build-essential"]
-	then: ["make", "make install"]
+	pkgs:  ["build-essential"]
+	then:  ["make", "make install"]
 	purge: ["build-essential"]
 }).out
 
@@ -183,8 +183,8 @@ _apt_purge_noninteractive: _aptBuildOnly.do & =~"noninteractive apt-get purge"
 // Each half is independently optional, and each alone must still render a
 // command that parses — the empty and multi-line arms are rejected by the
 // schema, so what is left to pin is that neither omission strands a `;`.
-_aptThenOnly: (apt.#install & {pkgs: ["gcc"], then: ["make"]}).out
-_aptPurgeOnly: (apt.#install & {pkgs: ["gcc"], purge: ["gcc"]}).out
+_aptThenOnly:    (apt.#install & {pkgs: ["gcc"], then: ["make"]}).out
+_aptPurgeOnly:   (apt.#install & {pkgs: ["gcc"], purge: ["gcc"]}).out
 _apt_then_only:  _aptThenOnly.do & =~"done; :; \\(cd \"\\$p\" && make\\) \\|\\| exit$"
 _apt_purge_only: _aptPurgeOnly.do & =~"done; :; DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq --auto-remove gcc \\|\\| exit$"
 
@@ -194,8 +194,8 @@ _apt_purge_only: _aptPurgeOnly.do & =~"done; :; DEBIAN_FRONTEND=noninteractive a
 _apt_unchanged_by_default: _aptCmd.do & =~"--no-install-recommends curl \\|\\| exit; cd "
 
 _apkBuildOnly: (apk.#install & {
-	pkgs: ["gcc", "musl-dev"]
-	then: ["cc -o /out x.c"]
+	pkgs:  ["gcc", "musl-dev"]
+	then:  ["cc -o /out x.c"]
 	purge: ["gcc", "musl-dev"]
 }).out
 
@@ -203,8 +203,8 @@ _apk_sequence:             _apkBuildOnly.do & =~"gcc musl-dev \\|\\| exit; cd .*
 _apk_unchanged_by_default: _apkEntry.do & =~"curl jq \\|\\| exit; cd "
 
 _zypperBuildOnly: (zypper.#install & {
-	pkgs: ["gcc=13-150000.1.1"]
-	then: ["make"]
+	pkgs:  ["gcc=13-150000.1.1"]
+	then:  ["make"]
 	purge: ["gcc"]
 }).out
 

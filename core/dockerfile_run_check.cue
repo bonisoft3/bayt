@@ -15,7 +15,7 @@ _dr1: #project & {
 			// RUN-only: no base `do`, so no task; the RUN carries its own
 			// network:none independent of resolve's RUN.
 			cmd: "materialize": {
-				priority: 1
+				priority:   1
 				dockerfile: {do: "materialize-here", shell: "sh", network: "none"}
 			}
 		}
@@ -24,8 +24,8 @@ _dr1: #project & {
 
 // Dockerfile: both cmds render as RUNs; the RUN-only materialize keeps
 // its own `--network=none`.
-_dr1_dc:   (#dockerComposeGen & {project: _dr1, depManifests: {}})
-_dr1_body: _dr1_dc.dockerfiles.deps
+_dr1_dc:              (#dockerComposeGen & {project: _dr1, depManifests: {}})
+_dr1_body:            _dr1_dc.dockerfiles.deps
 _dr1_has_resolve:     strings.Contains(_dr1_body, "resolve-here") & true
 _dr1_has_materialize: strings.Contains(_dr1_body, "materialize-here") & true
 _dr1_materialize_net: strings.Contains(_dr1_body, "--network=none") & true
@@ -39,8 +39,8 @@ _dr1_tf: files: deps: tasks: {[!="default"]: _|_}
 
 // Secret recovery and teardown must surround Task, not disappear when RUNs become incremental.
 _dr2: #project & {
-	name: "dr2"
-	dir: "dr2"
+	name:     "dr2"
+	dir:      "dr2"
 	activate: ""
 	targets: check: {
 		taskfile: incremental: false
@@ -50,35 +50,35 @@ _dr2: #project & {
 			secrets: token: environment: "TOKEN"
 		}
 		cmd: builtin: {
-			do: "echo leaf-command"
+			do:    "echo leaf-command"
 			shell: "sh"
 			dockerfile: {
 				network: "host"
 				inject: {
 					secrets: [{id: "token", var: contents: "TOKEN"}]
-					steps: [{pre: "echo setup-marker", post: "echo teardown-marker"}]
+					steps:   [{pre: "echo setup-marker", post: "echo teardown-marker"}]
 				}
 			}
 		}
 	}
 }
-_dr2_body: (#dockerComposeGen & {project: _dr2, depManifests: {}}).dockerfiles.check
-_dr2_secret: strings.Contains(_dr2_body, "--mount=type=secret,id=token") & true
-_dr2_export: strings.Contains(_dr2_body, "export TOKEN=") & true
-_dr2_setup: strings.Contains(_dr2_body, "echo setup-marker") & true
-_dr2_teardown: strings.Contains(_dr2_body, "trap 'echo teardown-marker' EXIT") & true
-_dr2_network: strings.Contains(_dr2_body, "--network=host") & true
-_dr2_task: strings.Contains(_dr2_body, "task -t .bayt/Taskfile.yml bayt:check") & true
+_dr2_body:       (#dockerComposeGen & {project: _dr2, depManifests: {}}).dockerfiles.check
+_dr2_secret:     strings.Contains(_dr2_body, "--mount=type=secret,id=token") & true
+_dr2_export:     strings.Contains(_dr2_body, "export TOKEN=") & true
+_dr2_setup:      strings.Contains(_dr2_body, "echo setup-marker") & true
+_dr2_teardown:   strings.Contains(_dr2_body, "trap 'echo teardown-marker' EXIT") & true
+_dr2_network:    strings.Contains(_dr2_body, "--network=host") & true
+_dr2_task:       strings.Contains(_dr2_body, "task -t .bayt/Taskfile.yml bayt:check") & true
 _dr2_not_inline: strings.Contains(_dr2_body, "echo leaf-command") & false
-_dr2_staged: strings.Contains(_dr2_body, "COPY .bayt/Taskfile.yml") & true
-_dr2_leaf: (#taskfileGen & {project: _dr2, depManifests: {}}).files.check.tasks.default.cmds & ["sh -c \"echo leaf-command\""]
+_dr2_staged:     strings.Contains(_dr2_body, "COPY .bayt/Taskfile.yml") & true
+_dr2_leaf:       (#taskfileGen & {project: _dr2, depManifests: {}}).files.check.tasks.default.cmds & ["sh -c \"echo leaf-command\""]
 
 // Host-only cmd (`dockerfile: null`): emits a go-task in Taskfile, but no
 // RUN in Dockerfile (e.g. host binary provisioning when Dockerfile gets the
 // binary from its base image).
 _dr3: #project & {
-	name: "dr3"
-	dir:  "dr3"
+	name:     "dr3"
+	dir:      "dr3"
 	activate: ""
 	targets: browser: {
 		taskfile: {}
@@ -87,8 +87,8 @@ _dr3: #project & {
 		cmd: "playwright": {priority: 1, do: "playwright install chromium", shell: "sh", dockerfile: null}
 	}
 }
-_dr3_body: (#dockerComposeGen & {project: _dr3, depManifests: {}}).dockerfiles.browser
-_dr3_has_mise:       strings.Contains(_dr3_body, "mise install") & true
-_dr3_no_playwright:  strings.Contains(_dr3_body, "playwright install chromium") & false
-_dr3_tf:             (#taskfileGen & {project: _dr3, depManifests: {}}).files.browser.tasks
-_dr3_tf_playwright:  _dr3_tf._cmd_playwright.cmds & ["sh -c \"playwright install chromium\""]
+_dr3_body:          (#dockerComposeGen & {project: _dr3, depManifests: {}}).dockerfiles.browser
+_dr3_has_mise:      strings.Contains(_dr3_body, "mise install") & true
+_dr3_no_playwright: strings.Contains(_dr3_body, "playwright install chromium") & false
+_dr3_tf:            (#taskfileGen & {project: _dr3, depManifests: {}}).files.browser.tasks
+_dr3_tf_playwright: _dr3_tf._cmd_playwright.cmds & ["sh -c \"playwright install chromium\""]

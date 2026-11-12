@@ -12,8 +12,8 @@ _g1: gradle & {
 
 // Assertions on propagation through the stack defaults + overrides.
 _g1: activate: "mise x --"
-_g1: targets: build: cmd: "builtin": do:            "./gradlew assemble"
-_g1: targets: build: cmd: "builtin": windows: do:   ".\\gradlew.bat assemble"
+_g1: targets: build: cmd: "builtin": do: "./gradlew assemble"
+_g1: targets: build: cmd: "builtin": windows: do:    ".\\gradlew.bat assemble"
 _g1: targets: build: cmd: "builtin": windows: shell: "pwsh"
 
 // --- G2: Consumer adds cross-project deps.

@@ -1,29 +1,29 @@
 #!/usr/bin/env -S mise tool-stub
 bin = "cue"
-version = "0.16.1"
+version = "0.18.0-rc.4"
 
 [platforms.darwin-arm64]
-url = "https://github.com/cue-lang/cue/releases/download/v0.16.1/cue_v0.16.1_darwin_arm64.tar.gz"
-checksum = "blake3:2b6f5f61ca1520da8210cdff50bebf8ca49c160bb5374b53e7f50900349594bb"
-size = 9022599 # 8.60 MiB
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_darwin_arm64.tar.gz"
+checksum = "blake3:101c216b66288a9f7a09f4556cf767a80b5c7879ec2b589762a8dda7a0e9979e"
+size = 9692821 # 9.2 MiB
 
 [platforms.darwin-amd64]
-url = "https://github.com/cue-lang/cue/releases/download/v0.16.1/cue_v0.16.1_darwin_amd64.tar.gz"
-checksum = "blake3:9875a11616f208732afff23b6f7808b5b0fb07dd4c77d507ec4c4d9f5685db64"
-size = 9747101 # 9.30 MiB
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_darwin_amd64.tar.gz"
+checksum = "blake3:8f6614ab538fa1ce4080495b51fb8598ec075f8e68f23f917906a254db8f0490"
+size = 10557651 # 10.1 MiB
 
 [platforms.linux-amd64]
-url = "https://github.com/cue-lang/cue/releases/download/v0.16.1/cue_v0.16.1_linux_amd64.tar.gz"
-checksum = "blake3:77b53047de2b6fa1be826fd16929312b9ea85d916a9dfe0db55575d7a10460b3"
-size = 9572775 # 9.13 MiB
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_linux_amd64.tar.gz"
+checksum = "blake3:439686f72577cb58f3be071d21cd6f5a3e9ec1d0be2a46a444af2fa383217a1b"
+size = 10362353 # 9.9 MiB
 
 [platforms.linux-arm64]
-url = "https://github.com/cue-lang/cue/releases/download/v0.16.1/cue_v0.16.1_linux_arm64.tar.gz"
-checksum = "blake3:6e042cbfd4b5a298424dfdc22d25ea8f735a0bcc7982f7c2333d8c7ddbfb67fd"
-size = 8670729 # 8.27 MiB
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_linux_arm64.tar.gz"
+checksum = "blake3:7172801ae682af29f681d10fb65d66dfa370b3fcfa76e3994a81413c1cdf5bd5"
+size = 9304678 # 8.9 MiB
 
 [platforms.windows-amd64]
-url = "https://github.com/cue-lang/cue/releases/download/v0.16.1/cue_v0.16.1_windows_amd64.zip"
-checksum = "blake3:4243c99802d6fdb58c60d572f26d77fa7ef4980cf290001a84558e50f605e3b4"
-size = 9794199 # 9.34 MiB
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_windows_amd64.zip"
 bin = "cue.exe"
+checksum = "blake3:b8bfd223ef4137d25bd847c460f97036dbb25a5c420c949b9ddda46693c002af"
+size = 10597572 # 10.1 MiB

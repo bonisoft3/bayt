@@ -59,7 +59,7 @@ package bayt
 //   targets: "build": bayt.incremental & { ... }
 incremental: {
 	dockerfile: incremental: true
-	taskfile:   incremental: true
+	taskfile: incremental:   true
 	// In-task work-avoidance calls bayt-runtime (cache run, fingerprint).
 	// The copy entry's `image:` override aliases the fixed `bayt-runtime`
 	// additional_contexts key to the pinned digest.
@@ -67,7 +67,7 @@ incremental: {
 		"bayt-runtime": {priority: -6, copy: {
 			from: {name: "bayt", image: lock.images.bayt}
 			srcs: ["."]
-			dst: "/monorepo/plugins/bayt/runtime"
+			dst:  "/monorepo/plugins/bayt/runtime"
 		}}
 		"bayt-path": {priority: -5, line: "ENV PATH=/monorepo/plugins/bayt/runtime:${PATH}"}
 	}

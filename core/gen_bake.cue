@@ -14,33 +14,39 @@ import (
 	"strings"
 )
 
-#bakeGen: W={
+#bakeGen: {
+	project:      #project
+	depManifests: {[string]: _}
+	let _project = project
+	let _depManifests = depManifests
 	#bakeFrom
-	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+	_m: (#manifestGen & {project: _project, depManifests: _depManifests})
 }
 
-#bakeFrom: G={
-	project: #project
-	depManifests:   {[string]: _}
+#bakeFrom: {
+	project:      #project
+	depManifests: {[string]: _}
 
 	_m: _
+	let _project = project
+	let _files = _m.files
 
 	// Release targets: `bake.image` names the registry ref, so the HCL is the
 	// build recipe skaffold / goreleaser / depot bake with (whether they push
 	// is the PUSH_IMAGE env var, not a generate-time decision). Plain `bake: {}`
 	// (compose-x-bake-only cache wiring) has no image and is skipped — it wants
 	// no skaffold buildCommand.
-	_emit: {for n, t in G._m.files if t.bake != _|_ if t.bake.image != _|_ {(n): t}}
+	_emit: {for n, t in _files if t.bake != _|_ if t.bake.image != _|_ {(n): t}}
 
 	// Federated target names (<project.name>-<n>), sorted for a stable
 	// matrix list. The HCL's matrix iterates these, so `name` is one of
 	// them and the positional selects which target(s) build.
-	_fedNames: list.Sort([for n, _ in _emit {"\(G.project.name)-\(n)"}], list.Ascending)
+	_fedNames:   list.Sort([for n, _ in _emit {"\(_project.name)-\(n)"}], list.Ascending)
 	_matrixList: strings.Join([for f in _fedNames {"\"\(f)\""}], ", ")
 
 	// Every target that emits a compose service, i.e. everything bake can
 	// name. Wider than _emit (which is release-image targets only).
-	_svc: {for n, t in G._m.files if t.dockerfile != _|_ {(n): t}}
+	_svc: {for n, t in _files if t.dockerfile != _|_ {(n): t}}
 
 	// The walk runs in compose SERVICE-name space: `depends_on` keys are
 	// service names, and a service name is what a bake target is called.
@@ -50,41 +56,34 @@ import (
 	// mirrors every depends_on key into `additional_contexts: target:<key>`.
 	_rtEdges: {
 		for n, _ in _svc {
-			("\(G.project.name)-\(n)"): list.Concat([
-				[for k, _ in [
-					if G.project.targets[n].compose != _|_ {G.project.targets[n].compose.depends_on},
-					{},
-				][0] {k}],
-				// The entrypoint's waits join the service's depends_on (gen_compose);
-				// a repeat of a declared key is folded by _rtClosure.
-				[if G.project.targets[n].compose != _|_ if G.project.targets[n].entrypoint != _|_ for k, _ in G.project.targets[n].entrypoint.after {(_serviceName & {project: G.project.name, target: k}).out}],
-			])
+			("\(_project.name)-\(n)"): [for k, _ in {
+				if _project.targets[n].compose != _|_ {
+					for dk, _ in _project.targets[n].compose.depends_on {(dk): true}
+					if _project.targets[n].entrypoint != _|_ {
+						for ek, _ in _project.targets[n].entrypoint.after {
+							((_serviceName & {project: _project.name, target: ek}).out): true
+						}
+					}
+				}
+			} {k}]
 		}
 	}
 
-	// _rtClosure — self + transitive runtime deps, recursive over this map
-	// (staged induction; depends_on is a DAG, so it terminates). A dep with
-	// no entry of its own is an overlay leaf: contribute the name, stop.
-	_rtClosure: {
-		for s, deps in _rtEdges {
-			(s): (_uniqStrings & {in: list.Concat([
-				[s],
-				list.FlattenN([for d in deps {[
-					if _rtClosure[d] != _|_ {_rtClosure[d]},
-					[d],
-				][0]}], 1),
-			])}).out
-		}
-	}
-
-	// The bake group: the integrate service plus its transitive runtime
-	// deps. Emitted only when the project has an integrate service to
-	// root the walk.
-	_rtEntry: "\(G.project.name)-integrate"
-	_rtGroupNames: [
-		if _svc["integrate"] != _|_ {list.Sort(_rtClosure[_rtEntry], list.Ascending)},
-		[],
-	][0]
+	// Bounded frontier walk from integrate; a recursive per-node closure map
+	// revisits diamond subgraphs per path. A dep with no entry in _rtEdges is an
+	// overlay leaf: included in the frontier, never expanded further.
+	_rtEntry: "\(_project.name)-integrate"
+	_rtSteps: [
+		if _svc["integrate"] != _|_ {{(_rtEntry): true}},
+		if _svc["integrate"] == _|_ {{}},
+		for i, _ in [for _, _ in _svc {1}] {
+			{
+				for k, _ in _rtSteps[i] {(k): true}
+				for k, _ in _rtSteps[i] if _rtEdges[k] != _|_ for d in _rtEdges[k] {(d): true}
+			}
+		},
+	]
+	_rtGroupNames: list.Sort([for k, _ in _rtSteps[len(_rtSteps)-1] {k}], list.Ascending)
 
 	_rtGroupList: strings.Join([for f in _rtGroupNames {"\"\(f)\""}], ", ")
 

@@ -16,13 +16,13 @@ import "strings"
 
 _pc_preamble: {
 	"env": {name: "env", priority: -20, line: "ENV FOO=bar"}
-	// Spelled out field by field because `in` is typed `#MapAsList`, not
-	// `_preambleEl` — the fixture gets none of the schema's defaults, so a
-	// field added to _copyEntry and read by _copyLine has to be added here
-	// too. `link` is one; a rename is not a `--link` shape anyway.
+	// Spelled out field by field because `in` is not typed `_preambleEl` —
+	// the fixture gets none of the schema's defaults, so a field added to
+	// _copyEntry and read by _copyLine has to be added here too. `link` is
+	// one; a rename is not a `--link` shape anyway.
 	"pin": {name: "pin", priority: -19, copy: {
-		from: {name: "busybox:musl@sha256:03db"}
-		srcs: ["/bin/busybox"]
+		from:    {name: "busybox:musl@sha256:03db"}
+		srcs:    ["/bin/busybox"]
 		dst:     "/busybox"
 		link:    true
 		parents: false
@@ -46,13 +46,13 @@ _pc_run_arm: _pc_lines[2] & "RUN --mount=type=cache,target=/var/cache/pkg,id=pro
 
 // Scope carries sharing; these pin the other two arms.
 _pc_default_sharing: (_mount & {
-	m: {type: "cache", target: "/t", scope: "target", required: false}
+	m:       {type: "cache", target: "/t", scope: "target", required: false}
 	project: "proj"
 	name:    "tgt"
 }).out & "--mount=type=cache,target=/t,id=proj-tgt:/t,sharing=locked"
 
 _pc_default_shared: (_mount & {
-	m: {type: "cache", target: "/t", scope: "global", required: false}
+	m:       {type: "cache", target: "/t", scope: "global", required: false}
 	project: "proj"
 	name:    "tgt"
 }).out & "--mount=type=cache,target=/t,id=/t,sharing=shared"
@@ -72,7 +72,7 @@ _pc_p: #project & {
 	name: "pc"
 	dir:  "pc"
 	targets: "build": {
-		srcs: globs: ["src/**"]
+		srcs: globs:    ["src/**"]
 		cmd: "builtin": {do: "true", shell: "sh"}
 		dockerfile: {
 			from: name: "alpine"
@@ -81,13 +81,13 @@ _pc_p: #project & {
 				srcs: ["runtime"]
 				dst:  "/opt/runtime"
 			}
-			add: [{url: "https://example.com/blob", sha256: "0000000000000000000000000000000000000000000000000000000000000000", dest: "/blob"}]
+			add:  [{url: "https://example.com/blob", sha256: "0000000000000000000000000000000000000000000000000000000000000000", dest: "/blob"}]
 			copy: [{srcs: ["src/app.conf"], dst: "/etc/app.conf"}]
 		}
 	}
 }
 
-_pc_dc:   (#dockerComposeGen & {project: _pc_p, depManifests: {}})
+_pc_dc:         (#dockerComposeGen & {project: _pc_p, depManifests: {}})
 _pc_dockerfile: _pc_dc.dockerfiles.build
 
 _pc_ctx_wired: _pc_dc.compose.files.build.services."pc-build".build.additional_contexts.bayt &

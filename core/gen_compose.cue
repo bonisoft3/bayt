@@ -65,15 +65,16 @@ _mount: {
 	project: string
 	name:    string
 	out:     string
-	let _t  = m.type
+	let _t = m.type
 	let _tg = [if m.target != _|_ {",target=\(m.target)"}, ""][0]
 	let _sc = [if m.source != _|_ {",source=\(m.source)"}, ""][0]
 	let _rq = [if m.required {",required=true"}, ""][0]
+
 	// Scope carries both id and sharing (see #mount): only the diagonal is
 	// motivated, so there is no separate sharing knob to get wrong.
 	// Bound outside the lookup structs: a `project` key would otherwise
 	// shadow the `project` parameter inside these interpolations.
-	let _targetScopeId  = "\(project)-\(name):\(m.target)"
+	let _targetScopeId = "\(project)-\(name):\(m.target)"
 	let _projectScopeId = "\(project):\(m.target)"
 	let _cacheId = [
 		if m.type == "cache" {{
@@ -106,13 +107,14 @@ _mount: {
 // _execArg — one exec-form argument as a JSON string: backslash first, so the
 // quote pass does not re-escape it. Unescaped, a quote in an argument leaves
 // the array no JSON, and Docker runs it as no such command.
-_execArg: A={
+_execArg: {
 	in: string
-	let _esc1 = strings.Replace(A.in, "\\", "\\\\", -1)
+	let _in = in
+	let _esc1 = strings.Replace(_in, "\\", "\\\\", -1)
 	out: "\"" + strings.Replace(_esc1, "\"", "\\\"", -1) + "\""
 }
 
-_runForm: F={
+_runForm: {
 	prefix: string
 	shell:  string
 	do:     string
@@ -121,16 +123,16 @@ _runForm: F={
 	// form avoids the JSON-escape dance and lets quotes and backslashes
 	// flow through verbatim. Other shells take the exec form with the cmd
 	// JSON-escaped: backslash first, so the quote pass doesn't re-escape it.
-	let _esc1 = strings.Replace(F.do, "\\", "\\\\", -1)
+	let _esc1 = strings.Replace(do, "\\", "\\\\", -1)
 	let _esc2 = strings.Replace(_esc1, "\"", "\\\"", -1)
 	out: [
-		if F.shell == "exec" {
-			let _tokens = strings.Split(F.do, " ")
+		if shell == "exec" {
+			let _tokens = strings.Split(do, " ")
 			let _quoted = [for tk in _tokens if tk != "" {"\"\(tk)\""}]
-			"RUN \(F.prefix)[\(strings.Join(_quoted, ", "))]"
+			"RUN \(prefix)[\(strings.Join(_quoted, ", "))]"
 		},
-		if F.shell == "sh" {"RUN \(F.prefix)\(F.do)"},
-		"RUN \(F.prefix)[\"\(F.shell)\", \"-c\", \"\(_esc2)\"]",
+		if shell == "sh" {"RUN \(prefix)\(do)"},
+		"RUN \(prefix)[\"\(shell)\", \"-c\", \"\(_esc2)\"]",
 	][0]
 }
 
@@ -138,7 +140,7 @@ _runForm: F={
 // `dockerfile.copy` (gen_compose) and the preamble's copy arm (gen_bayt)
 // so both spell COPY the same way.
 _copyLine: {
-	c: _
+	c:   _
 	out: string
 	// --link only on a same-path --from rebase: --from preserves the source's
 	// dir mtimes only when src == dst (a rename synthesizes the new dest dir at
@@ -149,79 +151,88 @@ _copyLine: {
 	// ineligible shape is the direction that breaks
 	// tests/export_repro_it.nu, so the shape test is not a consumer's to
 	// override. Suppressing costs cache reuse and nothing else.
-	let _cLink    = [if c.link if c.from != null if !c.parents if len(c.srcs) == 1 if c.srcs[0] == c.dst {"--link "}, ""][0]
-	let _cChmod   = [if c.chmod != _|_ {"--chmod=\(c.chmod) "}, ""][0]
-	let _cChown   = [
+	let _cLink = [if c.link if c.from != null if !c.parents if len(c.srcs) == 1 if c.srcs[0] == c.dst {"--link "}, ""][0]
+	let _cChmod = [if c.chmod != _|_ {"--chmod=\(c.chmod) "}, ""][0]
+	let _cChown = [
 		if (c.chown & string) != _|_ {"--chown=\(c.chown) "},
 		if (c.chown & {uid: int}) != _|_ {"--chown=\(c.chown.uid):\(c.chown.gid) "},
 		"",
 	][0]
 	let _cParents = [if c.parents {"--parents "}, ""][0]
 	let _cExclude = strings.Join([for e in c.exclude {"--exclude=\(e) "}], "")
-	let _cFrom    = [
+	let _cFrom = [
 		if c.from == null {""},
 		if c.from != null {"--from=\(c.from.name) "},
 	][0]
-	let _cSrcs    = strings.Join(c.srcs, " ")
+	let _cSrcs = strings.Join(c.srcs, " ")
 	out: "COPY \(_cLink)\(_cChmod)\(_cChown)\(_cParents)\(_cExclude)\(_cFrom)\(_cSrcs) \(c.dst)"
 }
 
-_copyParents: P={
-	srcs: [...string]
+_copyParents: {
+	srcs:     [...string]
 	excludes: [...string]
-	_parts: list.Concat([["COPY --parents"], [for e in P.excludes {"--exclude=\(e)"}], P.srcs, ["./"]])
-	_single: strings.Join(_parts, " ")
+	_parts:   list.Concat([["COPY --parents"], [for e in excludes {"--exclude=\(e)"}], srcs, ["./"]])
+	_single:  strings.Join(_parts, " ")
 	out: [
 		if len(_single) <= 60000 {_single},
 		strings.Join(_parts, " \\\n  "),
 	][0]
 }
 
-#dockerComposeGen: W={
+#dockerComposeGen: {
+	project:      #project
+	depManifests: {[string]: _}
+	let _project = project
+	let _depManifests = depManifests
 	#dockerComposeFrom
-	_m: (#manifestGen & {project: W.project, depManifests: W.depManifests})
+	_m: (#manifestGen & {project: _project, depManifests: _depManifests})
 }
 
-#dockerComposeFrom: G={
-	project: #project
-	depManifests:   {[string]: _}
+#dockerComposeFrom: {
+	project:      #project
+	depManifests: {[string]: _}
+	let _project = project
+	let _depManifests = depManifests
 
 	_m: _
+	let _manifest = _m
+	let _inheritedDepKeysFn = _inheritedDepKeys
 
 	// #project.imageDir: the project's own in-image paths are spelled with
 	// the BAYT_DIR build arg every one of its stages declares.
-	_argDir:   G.project.imageDir != _|_
-	_dirArg:   [if _argDir {["ARG BAYT_DIR"]}, []][0]
+	_argDir:     _project.imageDir != _|_
+	_dirArg:     [if _argDir {["ARG BAYT_DIR"]}, []][0]
 	_argWorkdir: "/monorepo/${BAYT_DIR}"
 	_argPrefix:  "${BAYT_DIR:+${BAYT_DIR}/}"
 
 	// Only targets that declared a dockerfile block.
-	_emit: {for n, t in G._m.files if t.dockerfile != _|_ {(n): t}}
+	_emit: {for n, t in _manifest.files if t.dockerfile != _|_ {(n): t}}
 
 	// Every port a service publishes, by its host variable: the default host
 	// port it binds when the variable is unset. Each variable and each default
 	// is the project's alone, or two services would bind one host port.
 	let _pubs = [
-		for n, t in G._m.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ {
+		for n, t in _manifest.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ {
 			let _var = (_publishVar & {target: n, name: p, port: e}).out
-			let _port = (_hostDefault & {project: G.project._portIdentity, target: n, name: p, port: e}).out
+			let _port = (_hostDefault & {project: _project._portIdentity, target: n, name: p, port: e}).out
 			target: n
-			who:  "\(n).expose.\(p)"
-			var:  _var
-			port: _port
+			who:    "\(n).expose.\(p)"
+			var:    _var
+			port:   _port
 			// The variable as a compose value with its default, spelled once.
 			spelling: "${\(_var):-\(_port)}"
 		},
 	]
+
 	// First claim per variable, so a second is reported by name below rather
 	// than as a conflict here.
 	_published: {for i, x in _pubs if len([for j, y in _pubs if j < i if y.var == x.var {y}]) == 0 {(x.var): x.spelling}}
 	// What the project's host processes bind: a published port sharing one's
 	// default or variable would bind it twice. A target that is both is not a
 	// clash: launch starts it one way or the other, never both.
-	let _procPorts = (_hostProcPorts & {files: G._m.files, identity: G.project._portIdentity}).out
+	let _procPorts = (_hostProcPorts & {files: _manifest.files, identity: _project._portIdentity}).out
 	_publishClashes: {
-		for n, t in G._m.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ if t.compose == _|_ {
+		for n, t in _manifest.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ if t.compose == _|_ {
 			"\(n).expose.\(p)": error("\(n).expose.\(p) publishes a port, but \(n) has no compose service to publish it")
 		}
 		for i, x in _pubs for j, y in _pubs if i < j if x.var == y.var {(x.who): error("\(x.who) and \(y.who) both publish under \(x.var)")}
@@ -233,10 +244,11 @@ _copyParents: P={
 	// variable's default too, so a value built on the port (an origin) follows
 	// wherever it binds.
 	let _pubVars = [for v, _ in _published {v}]
-	_withPublished: F={
+	_withPublished: {
 		in: string
-		_steps: [F.in, for i, v in _pubVars {strings.Replace(F._steps[i], "${\(v)}", _published[v], -1)}]
-		out: F._steps[len(_pubVars)]
+		let _in = in
+		_steps: [_in, for i, v in _pubVars {strings.Replace(_steps[i], "${\(v)}", _published[v], -1)}]
+		out:    _steps[len(_pubVars)]
 	}
 
 	// Synthetic stages emitted alongside each user target. They're
@@ -257,22 +269,21 @@ _copyParents: P={
 	// inside .bayt/ for cross-project include paths. `.bayt/` depth =
 	// project depth + 1; workspace-root (depth 0) → "../" (one level
 	// up from /.bayt/ to /).
-	_rootFromBayt: strings.Repeat("../", G._m._depth+1)
+	_rootFromBayt: strings.Repeat("../", _manifest._depth + 1)
 
 	// Helper: qualified service name for a target, used in compose
 	// service keys and Dockerfile `COPY --from=<svc>` references.
 	_svcName: {
-		pn: string
-		tn: string
+		pn:  string
+		tn:  string
 		out: (_serviceName & {project: pn, target: tn}).out
 	}
-
 
 	// Combined emit set: user-target dockerfiles + synthetic `_srcs` /
 	// `_outs` per target + the per-project `bayt` synthetic. Used to
 	// gate _targetDeps's same-project filter so synthetic refs like
 	// `:x:bayt` pass through to _depCopies. Without this, the filter
-	// `G._emit[d.name] != _|_` would drop any synthetic ref because
+	// `_emit[d.name] != _|_` would drop any synthetic ref because
 	// synthetics aren't in `_emit`.
 	_allEmit: {
 		for n, _ in _emit {(n): true}
@@ -285,12 +296,12 @@ _copyParents: P={
 	// (gated on dir match + _allEmit) plus all cross-project transitive
 	// deps. Used by both _depCopies (Dockerfile path) and _depEntries
 	// (compose additional_contexts path).
-	_targetDeps: T={
+	_targetDeps: {
 		t:   _
 		out: [...]
 		out: list.Concat([
-			[for d in T.t.chainedDeps if d.dir == T.t.dir if _allEmit[d.name] != _|_ {d}],
-			[for d in T.t.transitiveCrossDeps {d}],
+			[for d in t.chainedDeps if d.dir == t.dir if _allEmit[d.name] != _|_ {d}],
+			[for d in t.transitiveCrossDeps {d}],
 		])
 	}
 
@@ -304,11 +315,11 @@ _copyParents: P={
 	// interface, ref the `:outs` synth explicitly (`:foo:outs`) — it arrives
 	// here as a `_outs` synth dep, and a synth copies only when it carries
 	// outs (the synth service isn't emitted for an empty-outs dep).
-	_depEdge: E={
+	_depEdge: {
 		d: _
-		let _isSynth = strings.HasSuffix(E.d.name, "_srcs") || strings.HasSuffix(E.d.name, "_outs") || strings.HasSuffix(E.d.name, "_bayt")
-		copy: [if _isSynth {len(E.d.outs.globs) > 0}, true][0]
-		ctxSvc: "\(E.d.project)-\(E.d.name)"
+		let _isSynth = strings.HasSuffix(d.name, "_srcs") || strings.HasSuffix(d.name, "_outs") || strings.HasSuffix(d.name, "_bayt")
+		copy:   [if _isSynth {len(d.outs.globs) > 0}, true][0]
+		ctxSvc: "\(d.project)-\(d.name)"
 	}
 
 	// Helper: dep keys ("<project>-<name>") that the FROM-chained
@@ -317,18 +328,19 @@ _copyParents: P={
 	// the Dockerfile dep-COPY filter and the compose
 	// additional_contexts filter use this to avoid emitting redundant
 	// references to content the upstream stage already inherits.
-	_inheritedDepKeys: K={
+	_inheritedDepKeys: {
 		t:   _
 		out: [...string]
 		out: [
-			if K.t.dockerfile.from == null {[]},
-			if K.t.dockerfile.from != null && K.t.dockerfile.from.ref == _|_ {[]},
-			if K.t.dockerfile.from != null && K.t.dockerfile.from.ref != _|_ {
-				let _ref      = K.t.dockerfile.from.ref
-				let _parts    = strings.Split(_ref, ":")
-				let _proj     = [if _parts[0] == "" {K.t.project}, _parts[0]][0]
-				let _name     = _parts[1]
-				let _upstream = [if _parts[0] == "" {G._m.files[_name]}, G.depManifests[_ref]][0]
+			if t.dockerfile.from == null {[]},
+			if t.dockerfile.from != null && t.dockerfile.from.ref == _|_ {[]},
+			if t.dockerfile.from != null && t.dockerfile.from.ref != _|_ {
+				let _ref = t.dockerfile.from.ref
+				let _parts = strings.Split(_ref, ":")
+				let _proj = [if _parts[0] == "" {t.project}, _parts[0]][0]
+				let _name = _parts[1]
+				let _upstream = [if _parts[0] == "" {_manifest.files[_name]}, _depManifests[_ref]][0]
+
 				// Upstream's self-key joins the dep keys: its filesystem
 				// flows through FROM, so an explicit COPY --from=<upstream>
 				// would duplicate content the stage already has.
@@ -344,15 +356,15 @@ _copyParents: P={
 	// One optional `include:` entry to a dep's per-target compose file.
 	// Same-project deps are local; cross-project deps resolve via
 	// _rootFromBayt + the dep's dir.
-	_includeEntry: F={
+	_includeEntry: {
 		ownDir: string
 		depDir: string
 		file:   string
-		let _dp = [if F.depDir != "" {"\(F.depDir)/"}, ""][0]
+		let _dp = [if depDir != "" {"\(depDir)/"}, ""][0]
 		out: {
 			path: [
-				if F.depDir == F.ownDir {"./compose.\(F.file).yaml"},
-				"\(_rootFromBayt)\(_dp).bayt/compose.\(F.file).yaml",
+				if depDir == ownDir {"./compose.\(file).yaml"},
+				"\(_rootFromBayt)\(_dp).bayt/compose.\(file).yaml",
 			][0]
 			required: false
 		}
@@ -377,7 +389,7 @@ _copyParents: P={
 		t: _
 		c: _
 
-		execution?: string
+		execution?:  string
 		extraMounts: *[] | [...string]
 
 		// Each `[if cond { a }, default][0]` picks `a` when cond holds
@@ -418,9 +430,9 @@ _copyParents: P={
 		// base `do`. The windows/linux/darwin OS axes are host-only
 		// (gen_taskfile) — a container is always linux, so no OS selection
 		// happens here.
-		let _do        = [if c.dockerfile != _|_ && c.dockerfile.do != _|_ {c.dockerfile.do}, c.do][0]
-		let _shell     = [if c.dockerfile != _|_ && c.dockerfile.shell != _|_ {c.dockerfile.shell}, c.shell][0]
-		let _activated = [if execution != _|_ {execution}, if len(t.activate) > 0                       {"\(t.activate) \(_do)"}, _do][0]
+		let _do = [if c.dockerfile != _|_ && c.dockerfile.do != _|_ {c.dockerfile.do}, c.do][0]
+		let _shell = [if c.dockerfile != _|_ && c.dockerfile.shell != _|_ {c.dockerfile.shell}, c.shell][0]
+		let _activated = [if execution != _|_ {execution}, if len(t.activate) > 0 {"\(t.activate) \(_do)"}, _do][0]
 
 		// --- inject body assembly ---
 		// Auto-emitted pre lines from secrets[].var sugar.
@@ -440,8 +452,7 @@ _copyParents: P={
 						if s.var.path != _|_ {"if [ -s \"\(_path)\" ]; then mkdir -p \"$(dirname \"\(s.var.path)\")\"; cp -p \"\(_path)\" \"\(s.var.path)\"; fi"},
 					]
 				},
-			])
-			},
+			])},
 		][0]
 		let _defaultStepsList = [
 			if _inject != null && _inject.defaultSteps != _|_ && _inject.defaultSteps != null {
@@ -456,6 +467,7 @@ _copyParents: P={
 		let _allSteps = list.Concat([_defaultStepsList, _injectSteps])
 		let _allPres = list.Concat([_varPres, [for st in _allSteps {st.pre}]])
 		let _allPosts = [for st in _allSteps if st.post != _|_ {st.post}]
+
 		// LIFO teardown.
 		let _postsLifo = [for i, _ in _allPosts {_allPosts[len(_allPosts)-1-i]}]
 
@@ -503,9 +515,9 @@ _copyParents: P={
 			"FROM \(t.dockerfile.from.name) AS \(_stage)",
 		][0]
 		_workdir: [
-			if t.dockerfile.workdir != _|_  {t.dockerfile.workdir},
-			if G._argDir                    {G._argWorkdir},
-			if t.dir == ""                  {"/monorepo"},
+			if t.dockerfile.workdir != _|_ {t.dockerfile.workdir},
+			if _argDir {_argWorkdir},
+			if t.dir == "" {"/monorepo"},
 			"/monorepo/\(t.dir)",
 		][0]
 
@@ -576,7 +588,7 @@ _copyParents: P={
 		// same-project) but share the COPY line shape, so a single
 		// line-render closure keeps both branches honest.
 		let _depCopyLine = {
-			d: _
+			d:   _
 			out: string
 			// Ref shape → COPY shape dispatch:
 			//
@@ -595,13 +607,13 @@ _copyParents: P={
 			//     scratch stage that only carries the filtered fileset.
 			// A root project spells no segment: `/monorepo/./x` under --parents
 			// pivots at `/./` and lands the file at `/x`.
-			let _own         = G._argDir && d.project == G.project.name
-			let _dp          = [if _own {G._argPrefix}, if d.dir != "" if d.dir != "." {"\(d.dir)/"}, ""][0]
-			let _bulkDest    = [if _own {G._argWorkdir}, if d.dir != "" {"/monorepo/\(d.dir)"}, "/monorepo"][0]
-			let _isSynth     = strings.HasSuffix(d.name, "_srcs") || strings.HasSuffix(d.name, "_outs")
+			let _own = _argDir && d.project == _project.name
+			let _dp = [if _own {_argPrefix}, if d.dir != "" if d.dir != "." {"\(d.dir)/"}, ""][0]
+			let _bulkDest = [if _own {_argWorkdir}, if d.dir != "" {"/monorepo/\(d.dir)"}, "/monorepo"][0]
+			let _isSynth = strings.HasSuffix(d.name, "_srcs") || strings.HasSuffix(d.name, "_outs")
 			let _excludeTail = strings.Join([for e in d.outs.exclude {"--exclude=\(e)"}], " ")
-			let _excludeJ    = [if len(d.outs.exclude) > 0  {" \(_excludeTail)"}, ""][0]
-			let _globPaths   = strings.Join([for g in d.outs.globs {"/monorepo/\(_dp)\(g)"}], " ")
+			let _excludeJ = [if len(d.outs.exclude) > 0 {" \(_excludeTail)"}, ""][0]
+			let _globPaths = strings.Join([for g in d.outs.globs {"/monorepo/\(_dp)\(g)"}], " ")
 			out: [
 				// Scaffolding synth — bulk tree copy: the `<x>_bayt` stage
 				// is the closure's scaffolding at canonical paths.
@@ -615,20 +627,20 @@ _copyParents: P={
 			][0]
 		}
 		let _emitForDep = {
-			d: _
+			d:   _
 			out: bool
 			out: !list.Contains(_inheritedDepKeys, "\(d.project)-\(d.name)") &&
-				(G._depEdge & {"d": d}).copy
+				(_depEdge & {"d": d}).copy
 		}
 		_depCopies: [
 			if t.dockerfile.from != null
-			for d in (G._targetDeps & {"t": t}).out
+			for d in (_targetDeps & {"t": t}).out
 			if (_emitForDep & {"d": d}).out {
 				(_depCopyLine & {"d": d}).out
 			},
 		]
 
-		_inheritedDepKeys: (G._inheritedDepKeys & {"t": t}).out
+		_inheritedDepKeys: (_inheritedDepKeysFn & {"t": t}).out
 
 		// `--parents` preserves source path
 		// structure in the destination. Without it we'd have to emit
@@ -725,7 +737,7 @@ _copyParents: P={
 			".bayt/Taskfile.bayt.yml",
 			if t.taskfile != _|_ {".bayt/Taskfile.\(t.name).yaml"},
 			".bayt/bayt.\(t.name).json",
-			if G._m.projectManifest.gradleInit {".bayt/init.gradle.kts"},
+			if _manifest.projectManifest.gradleInit {".bayt/init.gradle.kts"},
 		]
 		_selfTaskfileCopies: [
 			"COPY \(strings.Join(_selfTaskfileSources, " ")) ./.bayt/",
@@ -733,14 +745,14 @@ _copyParents: P={
 
 		_incrementalCopies: list.Concat([
 			if t.dockerfile.incremental {[
-				for d in t.transitiveDeps if G._m.files[d] != _|_ {
+				for d in t.transitiveDeps if _manifest.files[d] != _|_ {
 					"COPY .bayt/Taskfile.\(d).yaml .bayt/bayt.\(d).json ./.bayt/"
 				},
 			]},
 			if !t.dockerfile.incremental {[]},
 		])
 
-		let _dockerCmds = [for c in t.cmds if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c}]
+		_dockerCmds: [for c in t.cmds if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c}]
 
 		// Mounts collected from target level + every cmd in the rulemap.
 		// Incremental mode runs all cmds through `task`, so its single
@@ -767,12 +779,12 @@ _copyParents: P={
 		// addressable task store. Cross-project / cross-build reuse
 		// goes through cache.nu's network backends
 		// (`BAYT_CACHE_URL` / `BAYT_CACHE_REGISTRY`).
-		_baytCacheMount: {type: "cache", target: "/root/.cache/bayt"}
+		_baytCacheMount:    {type: "cache", target: "/root/.cache/bayt"}
 		_baytCacheMountStr: (_mount & {m: _baytCacheMount, project: t.project, name: t.name}).out
 
-		_injectedCommands: [for c in _dockerCmds if c.dockerfile != _|_ if c.dockerfile.inject != _|_ {c}]
+		_injectedCommands: [for c in _dockerCmds if c.dockerfile != _|_ if c.dockerfile.inject != _|_ {c.name}]
 		_incrementalExecution: [
-			if t.dockerfile.incremental && len(_injectedCommands) > 0 && len(t.cmds) != 1 {error("incremental RUN injection requires a single task command")},
+			if t.dockerfile.incremental if len(_injectedCommands) > 0 && len(t.cmds) != 1 {error("incremental RUN injection requires a single task command")},
 			for c in t.cmds if t.dockerfile.incremental if c.do == _|_ {error("incremental RUN requires a host task command")},
 			for c in t.cmds if t.dockerfile.incremental if c.dockerfile != _|_ if c.dockerfile == null {error("incremental RUN cannot skip a task with dockerfile: null")},
 			for c in _dockerCmds if t.dockerfile.incremental if c.dockerfile != _|_ if c.dockerfile.do != _|_ if c.do != c.dockerfile.do {error("incremental RUN cannot replace a task with dockerfile.do")},
@@ -786,9 +798,10 @@ _copyParents: P={
 				let _mountStr = [if len(_allMounts) > 0 {strings.Join(_allMounts, " ") + " "}, ""][0]
 				if len(t.cmds) == 1 {
 					[(_runLine & {
-						"t": t, "c": t.cmds[0]
+						"t":         t
+						"c":         t.cmds[0]
 						extraMounts: [_baytCacheMountStr]
-						execution: "task -t .bayt/Taskfile.yml bayt:\(t.name)"
+						execution:   "task -t .bayt/Taskfile.yml bayt:\(t.name)"
 					}).out]
 				}
 				if len(t.cmds) != 1 {
@@ -893,6 +906,7 @@ _copyParents: P={
 			if _cm != null && (_cm & [...string]) != _|_ && (_cm & string) == _|_ {_cm},
 			[],
 		][0]
+
 		// Prepend the project's activate tokens (e.g. `mise x --`) to
 		// the CMD so the launch container's PATH carries the same
 		// toolchain wrap that build-time RUNs already get. Same shape
@@ -959,12 +973,12 @@ _copyParents: P={
 				[
 					if hc.test[0] == "NONE" {["HEALTHCHECK NONE"]},
 					if hc.test[0] != "NONE" {
-						let _interval     = [if hc.interval     != _|_ {"--interval=\(hc.interval) "},         ""][0]
-						let _timeout      = [if hc.timeout      != _|_ {"--timeout=\(hc.timeout) "},           ""][0]
-						let _retries      = [if hc.retries      != _|_ {"--retries=\(hc.retries) "},           ""][0]
+						let _interval = [if hc.interval != _|_ {"--interval=\(hc.interval) "}, ""][0]
+						let _timeout = [if hc.timeout != _|_ {"--timeout=\(hc.timeout) "}, ""][0]
+						let _retries = [if hc.retries != _|_ {"--retries=\(hc.retries) "}, ""][0]
 						let _start_period = [if hc.start_period != _|_ {"--start-period=\(hc.start_period) "}, ""][0]
 						let _cmd = [
-							if hc.test[0] == "CMD"       {json.Marshal(hc.test[1:])},
+							if hc.test[0] == "CMD" {json.Marshal(hc.test[1:])},
 							if hc.test[0] == "CMD-SHELL" {hc.test[1]},
 						][0]
 						["HEALTHCHECK \(_interval)\(_timeout)\(_retries)\(_start_period)CMD \(_cmd)"]
@@ -989,7 +1003,7 @@ _copyParents: P={
 			_multiArchAddStages,
 			[
 				_from,
-				for a in G._dirArg {a},
+				for a in _dirArg {a},
 				"WORKDIR \(_workdir)",
 				for p in t.dockerfile.preamble {p},
 				for l in _addLines {l},
@@ -1024,34 +1038,34 @@ _copyParents: P={
 
 	// Stage WORKDIR for a project. Mirrors _renderDockerfile's _workdir
 	// rule: dir=="" → /monorepo (workspaceroot); else /monorepo/<dir>.
-	_syntheticWorkdir: W={
+	_syntheticWorkdir: {
 		dir: string
 		out: string
 		out: [
-			if G._argDir   {G._argWorkdir},
-			if W.dir == "" {"/monorepo"},
-			"/monorepo/\(W.dir)",
+			if _argDir {_argWorkdir},
+			if dir == "" {"/monorepo"},
+			"/monorepo/\(dir)",
 		][0]
 	}
 
 	// A chainedDeps entry's key: its bare name in this project, the
-	// `<project>:<name>` ref into G.depManifests across projects. Edges
+	// `<project>:<name>` ref into depManifests across projects. Edges
 	// read per-dep facts from the key-indexed flag sets below: binding a
 	// dep's whole manifest per edge copies it per edge.
-	_depKey: D={
+	_depKey: {
 		d:   _
-		out: [if D.d.project == G.project.name {D.d.name}, "\(D.d.project):\(D.d.name)"][0]
+		out: [if d.project == _project.name {d.name}, "\(d.project):\(d.name)"][0]
 	}
 
 	// Deps whose `COPY --from=<dep>_srcs` stage exists. A cross manifest
 	// may lack `emitsSrcs` (stale on-disk regen); that reads as false.
 	_depsWithSrcs: {
-		for n, f in G._m.files if f.emitsSrcs {(n): true}
-		for r, f in G.depManifests if f.emitsSrcs != _|_ if f.emitsSrcs {(r): true}
+		for n, f in _manifest.files if f.emitsSrcs {(n): true}
+		for r, f in _depManifests if f.emitsSrcs != _|_ if f.emitsSrcs {(r): true}
 	}
 	_depsWithDockerfile: {
-		for n, f in G._m.files if f.dockerfile != _|_ {(n): true}
-		for r, f in G.depManifests if f.dockerfile != _|_ {(r): true}
+		for n, f in _manifest.files if f.dockerfile != _|_ {(n): true}
+		for r, f in _depManifests if f.dockerfile != _|_ {(r): true}
 	}
 
 	// A target's `_srcs`-bearing chained deps: same filter feeds the
@@ -1059,10 +1073,10 @@ _copyParents: P={
 	// additional_contexts (_syntheticSrcsService), so it lives here once.
 	// Skips `:x:bayt` (scaffolding synths have no `_srcs` variant) and deps
 	// whose manifest doesn't emit `_srcs`.
-	_srcsChainDeps: D={
+	_srcsChainDeps: {
 		t:   _
 		out: [...]
-		out: [for d in D.t.chainedDeps if d.name != "bayt" if _depsWithSrcs[(_depKey & {"d": d}).out] != _|_ {d}]
+		out: [for d in t.chainedDeps if d.name != "bayt" if _depsWithSrcs[(_depKey & {"d": d}).out] != _|_ {d}]
 	}
 
 	// _clampFlatten — the shared synthetic-image skeleton. A busybox `_ctxs`
@@ -1078,7 +1092,7 @@ _copyParents: P={
 	// (buildkit stamps implicitly-created dirs at build time) but sit outside the
 	// scoped walk, so they are clamped explicitly.
 	// `BAYT_CLAMP=0` skips the clamp to measure its cost (the digest then floats).
-	_clampFlatten: F={
+	_clampFlatten: {
 		ctxsStage: string
 		stage:     string
 		workdir:   string
@@ -1087,27 +1101,27 @@ _copyParents: P={
 
 		// Strict ancestor dirs of workdir: "/monorepo/a/b" →
 		// ["/monorepo", "/monorepo/a"]; empty when workdir is /monorepo.
-		_wdSegs: strings.Split(F.workdir, "/")
+		_wdSegs:    strings.Split(workdir, "/")
 		_ancestors: [for i, _ in _wdSegs if i >= 2 {strings.Join(list.Slice(_wdSegs, 0, i), "/")}]
 
 		_epoch: "@${SOURCE_DATE_EPOCH:-0}"
 		// A build-arg workdir has its depth only at build time, so its
 		// ancestors are walked there.
 		_clamp: strings.Join(list.Concat([
-			["find \(F.workdir) -exec touch -hd \(_epoch) {} +"],
-			[if G._argDir {"{ d=$(dirname \(F.workdir)); while [ \"$d\" != / ]; do touch -hd \(_epoch) \"$d\" || exit; d=$(dirname \"$d\"); done; }"}],
-			[if !G._argDir if len(_ancestors) > 0 {"touch -hd \(_epoch) \(strings.Join(_ancestors, " "))"}],
+			["find \(workdir) -exec touch -hd \(_epoch) {} +"],
+			[if _argDir {"{ d=$(dirname \(workdir)); while [ \"$d\" != / ]; do touch -hd \(_epoch) \"$d\" || exit; d=$(dirname \"$d\"); done; }"}],
+			[if !_argDir if len(_ancestors) > 0 {"touch -hd \(_epoch) \(strings.Join(_ancestors, " "))"}],
 		]), " && ")
 
 		out: strings.Join(list.Concat([
-			["FROM \(lock.images.busybox) AS \(F.ctxsStage)"], G._dirArg, ["WORKDIR \(F.workdir)"],
-			F.bodyLines,
+			["FROM \(lock.images.busybox) AS \(ctxsStage)"], _dirArg, ["WORKDIR \(workdir)"],
+			bodyLines,
 			[
 				"ARG SOURCE_DATE_EPOCH",
 				"ARG BAYT_CLAMP=1",
 				"RUN if [ \"${BAYT_CLAMP:-1}\" != 0 ]; then \(_clamp); fi",
-				"FROM scratch AS \(F.stage)",
-				"COPY --from=\(F.ctxsStage) /monorepo /monorepo",
+				"FROM scratch AS \(stage)",
+				"COPY --from=\(ctxsStage) /monorepo /monorepo",
 			],
 		]), "\n") + "\n"
 	}
@@ -1117,25 +1131,26 @@ _copyParents: P={
 	// itself has a _srcs image (transitive content flows because each
 	// dep's _srcs already contains its own transitive chain). Both
 	// same- and cross-project deps participate.
-	_renderSyntheticSrcs: R={
-		t:          _
-		_workdir:   (_syntheticWorkdir & {dir: R.t.dir}).out
-		_stage:     "\(R.t.name)_srcs"
+	_renderSyntheticSrcs: {
+		t: _
+		let _t = t
+		_workdir: (_syntheticWorkdir & {dir: _t.dir}).out
+		_stage:   "\(_t.name)_srcs"
 		// Shared (not project-qualified) on purpose: per-project ctxs names
 		// destabilise the outer bake cache key on deep graphs. See
 		// docs/bayt-synthetic-digest-investigation.md.
-		_ctxsStage: "\(R.t.name)_ctxs"
+		_ctxsStage: "\(_t.name)_ctxs"
 		// Each cmd's srcs already hold the target's (see gen_bayt's _ownSrcGlobs).
-		_globs: (_uniqStrings & {in: list.Concat([R.t.srcs.globs, for c in R.t.cmds if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c.srcs.globs}])}).out
+		_globs: (_uniqStrings & {in: list.Concat([_t.srcs.globs, for c in _t.cmds if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c.srcs.globs}])}).out
 		_srcCopy: [
 			if len(_globs) > 0 {
-				(_copyParents & {srcs: _globs, excludes: R.t.srcs.exclude}).out
+				(_copyParents & {srcs: _globs, excludes: _t.srcs.exclude}).out
 			},
 		]
 		// Non-link: the clamp normalises mtimes anyway, and a `--link`
 		// cross-stage copy re-synthesises the dest parent chain.
 		_depCopies: [
-			for d in (_srcsChainDeps & {"t": R.t}).out {
+			for d in (_srcsChainDeps & {"t": _t}).out {
 				"COPY --from=\(d.project)-\(d.name)_srcs /monorepo /monorepo"
 			},
 		]
@@ -1152,18 +1167,18 @@ _copyParents: P={
 	// additional_contexts wired in the compose service below). Unclamped,
 	// the digest floats per build even with the producing stage cache-hit
 	// (guarded by d9_outs_clamp).
-	_renderSyntheticOuts: R={
-		t:          _
-		_workdir:   (_syntheticWorkdir & {dir: R.t.dir}).out
-		_stage:     "\(R.t.name)_outs"
-		_ctxsStage: "\(R.t.name)_outs_ctxs"
-		_excludeFlags: [for e in R.t.outs.exclude {"--exclude=\(e)"}]
-		_excludeJoin: [if len(_excludeFlags) > 0 {" \(strings.Join(_excludeFlags, " "))"}, ""][0]
-		_dirPath:  [if G._argDir {G._argPrefix}, if R.t.dir != "" if R.t.dir != "." {"\(R.t.dir)/"}, ""][0]
-		_outsPaths: strings.Join([for g in R.t.outs.globs {"/monorepo/\(_dirPath)\(g)"}], " ")
+	_renderSyntheticOuts: {
+		t:             _
+		_workdir:      (_syntheticWorkdir & {dir: t.dir}).out
+		_stage:        "\(t.name)_outs"
+		_ctxsStage:    "\(t.name)_outs_ctxs"
+		_excludeFlags: [for e in t.outs.exclude {"--exclude=\(e)"}]
+		_excludeJoin:  [if len(_excludeFlags) > 0 {" \(strings.Join(_excludeFlags, " "))"}, ""][0]
+		_dirPath:      [if _argDir {_argPrefix}, if t.dir != "" if t.dir != "." {"\(t.dir)/"}, ""][0]
+		_outsPaths:    strings.Join([for g in t.outs.globs {"/monorepo/\(_dirPath)\(g)"}], " ")
 		_copy: [
-			if len(R.t.outs.globs) > 0 {
-				"COPY --from=\(R.t.project)-\(R.t.name)\(_excludeJoin) --parents \(_outsPaths) /"
+			if len(t.outs.globs) > 0 {
+				"COPY --from=\(t.project)-\(t.name)\(_excludeJoin) --parents \(_outsPaths) /"
 			},
 		]
 		out: (_clampFlatten & {
@@ -1178,12 +1193,12 @@ _copyParents: P={
 	// mapped to its PARENT's `_bayt` service (a `:build:srcs` dep
 	// needs build's scaffolding) and deduped. Emission gate: same-project
 	// via _allEmit, cross via _depsWithDockerfile.
-	_baytChain: C={
+	_baytChain: {
 		t:   _
 		out: [...string]
 		let _entries = list.Concat([
-			[for d in C.t.chainedDeps {d}],
-			[for d in C.t.transitiveCrossDeps {d}],
+			[for d in t.chainedDeps {d}],
+			[for d in t.transitiveCrossDeps {d}],
 		])
 		let _mapped = [
 			for d in _entries
@@ -1197,7 +1212,7 @@ _copyParents: P={
 			][0]
 			let _ok = [
 				if _isSynth {true},
-				if d.dir == G.project.dir {_allEmit[d.name] != _|_},
+				if d.dir == _project.dir {_allEmit[d.name] != _|_},
 				_depsWithDockerfile[(_depKey & {"d": d}).out] != _|_,
 			][0]
 			if _ok {"\(d.project)-\(_p)_bayt"},
@@ -1212,14 +1227,15 @@ _copyParents: P={
 	// transitive scaffolding closure in one COPY — and nothing from
 	// sibling targets, so their definition churn never invalidates a
 	// consumer layer. Guarded by D9/D10.
-	_renderSyntheticBaytT: R={
-		t:          _
-		_n:         R.t.name
-		_workdir:   (_syntheticWorkdir & {dir: R.t.dir}).out
+	_renderSyntheticBaytT: {
+		t: _
+		let _t = t
+		_n:         _t.name
+		_workdir:   (_syntheticWorkdir & {dir: _t.dir}).out
 		_stage:     "\(_n)_bayt"
 		_ctxsStage: "\(_n)_bayt_ctxs"
-		_files:     R.t.synthetics.bayt.outs.globs
-		_chain:     (_baytChain & {"t": R.t}).out
+		_files:     _t.synthetics.bayt.outs.globs
+		_chain:     (_baytChain & {"t": _t}).out
 		out: (_clampFlatten & {
 			ctxsStage: _ctxsStage
 			stage:     _stage
@@ -1249,10 +1265,11 @@ _copyParents: P={
 	// recreated inside the `up` that recreates it, so `--wait` waits on the
 	// dependent's new health rather than the health it had. An explicit
 	// `restart` on the entry wins.
-	_restartOnHealthy: R={
+	_restartOnHealthy: {
 		in: {[string]: _}
+		let _in = in
 		out: {
-			for k, v in R.in {
+			for k, v in _in {
 				// Nested guards, not `&&` (CUE doesn't short-circuit).
 				(k): [
 					if v.condition != _|_ if v.condition == "service_healthy" if v.restart == _|_ {v & {restart: true}},
@@ -1266,25 +1283,27 @@ _copyParents: P={
 	// Service key = qualified name; Dockerfile stage name stays bare
 	// (stage names are local to one Dockerfile).
 	_service: {
-		n: string
-		t: _
+		n:   string
+		t:   _
 		svc: (_svcName & {pn: t.project, tn: n}).out
 
 		out: {
 			// The entrypoint's waits, built once for the build tree and the run tree.
-			let _waits = (_containerWaits & {"t": t, files: G._m.files}).out
+			let _waits = (_containerWaits & {"t": t, files: _manifest.files}).out
 			let _imagesPull = [
-				if G.project.bake != _|_ if G.project.bake.images != _|_ {G.project.bake.images.pull},
+				if _project.bake != _|_ if _project.bake.images != _|_ {_project.bake.images.pull},
 				false,
 			][0]
+
 			// Registry prefix for pull-mode image refs: images.registry,
 			// else cache.registry (image blobs dedup against cache
 			// blobs in the same repository).
 			let _imagesRegistry = [
-				if _imagesPull if G.project.bake.images.registry != _|_ {G.project.bake.images.registry + "/"},
-				if _imagesPull if G.project.bake.cache.registry != _|_ {G.project.bake.cache.registry + "/"},
+				if _imagesPull if _project.bake.images.registry != _|_ {_project.bake.images.registry + "/"},
+				if _imagesPull if _project.bake.cache.registry != _|_ {_project.bake.cache.registry + "/"},
 				"",
 			][0]
+
 			// Image and bake tags (SPEC.md, Image tags and refs). Bake reads only
 			// build.tags, so the project-scoped image leads the list.
 			let _local = !_imagesPull && (t.compose == _|_ || t.compose.image == _|_)
@@ -1294,17 +1313,18 @@ _copyParents: P={
 				"bayt-\(svc):${BAYT_IMAGE_TAG:-${COMPOSE_PROJECT_NAME}}",
 			][0]
 			let _tags = [_image, for x in ["bayt-\(svc):latest"] if _local {x}]
+
 			// Build block: context is one up from .bayt/ (= project root)
 			// so `COPY src/...` in the Dockerfile reaches real files.
 			build: {
 				context:    ".."
 				dockerfile: ".bayt/Dockerfile.\(n)"
 				target:     n
-				tags: _tags
+				tags:       _tags
 
 				// A target's own build args (compose.build.args) beside the
 				// frontend pin, which they cannot replace.
-				if G._argDir {args: BAYT_DIR: G.project.imageDir}
+				if _argDir {args: BAYT_DIR: _project.imageDir}
 				args: {
 					BUILDKIT_SYNTAX: #buildkitSyntax
 					if t.compose != _|_ if t.compose.build != _|_ if t.compose.build.args != _|_ {t.compose.build.args}
@@ -1317,7 +1337,7 @@ _copyParents: P={
 				// set so an incremental build that chains through a
 				// same-project setup into a workspace-root setup carries
 				// the workspace-root context too. Same-project gating on
-				// G._emit; cross-project assumes the federated compose
+				// _emit; cross-project assumes the federated compose
 				// graph supplies the dep service via the includes derived
 				// from _m.projectManifest.crossProjectDirs at the root.
 				// Same dedup as _depCopies: drop entries the FROM-chained
@@ -1327,15 +1347,16 @@ _copyParents: P={
 				// actually emit, so dropping these directly shrinks the
 				// payload (and lets us keep cross-project FROM-chains
 				// without overflowing 4 MB).
-				let _inheritedKeys = (G._inheritedDepKeys & {"t": t}).out
+				let _inheritedKeys = (_inheritedDepKeysFn & {"t": t}).out
 				let _depEntries = [
-					for d in (G._targetDeps & {"t": t}).out
-					let _edge = (G._depEdge & {"d": d})
+					for d in (_targetDeps & {"t": t}).out
+					let _edge = (_depEdge & {"d": d})
 					if !list.Contains(_inheritedKeys, "\(d.project)-\(d.name)")
 					if _edge.copy {
 						_edge.ctxSvc
 					},
 				]
+
 				// from-ref: present a single additional_contexts entry so
 				// the Dockerfile can FROM the named alias. Keeps every
 				// FROM source uniform (image / sibling stage / bake target
@@ -1384,6 +1405,7 @@ _copyParents: P={
 						[for k, _ in _mergedDeps {k}]
 					},
 				][0]
+
 				// Preamble copy arms feed the same collector as
 				// `dockerfile.copy`: they render at a different position but
 				// need identical additional_contexts wiring — notably the
@@ -1402,6 +1424,7 @@ _copyParents: P={
 					if t.compose != _|_ && t.compose.build == _|_ {{}},
 					if t.compose != _|_ && t.compose.build != _|_ {t.compose.build.additional_contexts},
 				][0]
+
 				// Ref-arm FROM (`from: ref:`) and ref-arm copy entries
 				// need explicit `service:<qualified-name>` redirects so
 				// bake resolves the alias to the sibling target's compose
@@ -1413,6 +1436,7 @@ _copyParents: P={
 				// directly (picked up below as _userAddlCtx).
 				let _selfFromIsRef = t.dockerfile.from != null && t.dockerfile.from.ref != _|_
 				let _copyRefEntries = [for f in _copyContextEntries if f.ref != _|_ {f}]
+
 				// Image-based copy.from entries (e.g. bayt-runtime / `bayt`
 				// from capabilities.incremental + sayt.inject) wire the
 				// `bayt: docker-image://…` additional_contexts entry that
@@ -1476,6 +1500,7 @@ _copyParents: P={
 						if len(t.bake.platforms) > 0 {
 							platforms: t.bake.platforms
 						}
+
 						// Daemon-local aliases for the type=docker load
 						// flow. Under images:pull nothing loads
 						// locally, and a registry push would resolve
@@ -1492,6 +1517,7 @@ _copyParents: P={
 						if len(t.bake.cache.to) > 0 {
 							"cache-to": t.bake.cache.to
 						}
+
 						// Targets carrying compose runtime config
 						// (`compose: {}` set on the target) emit an output
 						// so the inner bake's positional `<target>`
@@ -1541,11 +1567,12 @@ _copyParents: P={
 			if _imagesPull && (t.compose == _|_ || t.compose.pull_policy == _|_) {
 				pull_policy: "${BAYT_PULL_POLICY:-build}"
 			}
+
 			// A compose block is what runs a container, so the sugar's
 			// environment and waits join it there, overridden per key by the
 			// compose block's own.
 			if t.compose != _|_ {
-				let _baseEnv = (_containerEnv & {"t": t, files: G._m.files}).out
+				let _baseEnv = (_containerEnv & {"t": t, files: _manifest.files}).out
 				let _environment = {
 					for k, v in _baseEnv if t.compose.environment[k] == _|_ {(k): v}
 					for k, v in t.compose.environment {(k): v}
@@ -1555,11 +1582,11 @@ _copyParents: P={
 					for k, v in t.compose.depends_on {(k): v}
 				}
 				let r = t.compose
-				if r.image != _|_ {image:   r.image}
+				if r.image != _|_ {image: r.image}
 				if r.command != _|_ {command: r.command}
 				if r.entrypoint != _|_ {entrypoint: r.entrypoint}
 				if len(_environment) > 0 {
-					environment: {for k, v in _environment {(k): (G._withPublished & {in: v}).out}}
+					environment: {for k, v in _environment {(k): (_withPublished & {in: v}).out}}
 				}
 				if r.env_file != _|_ {env_file: r.env_file}
 				if len(r.ports) > 0 {ports: r.ports}
@@ -1583,6 +1610,7 @@ _copyParents: P={
 				if r.security_opt != _|_ {security_opt: r.security_opt}
 				if r.devices != _|_ {devices: r.devices}
 				if r.cap_add != _|_ {cap_add: r.cap_add}
+
 				// healthcheck is open-struct ({...}) in #compose so users
 				// pass compose-spec values verbatim — bayt doesn't
 				// re-validate compose's own schema for this.
@@ -1598,7 +1626,7 @@ _copyParents: P={
 
 			let _hmrWorkdir = [
 				if t.dockerfile != _|_ && t.dockerfile.workdir != _|_ {t.dockerfile.workdir},
-				if G._argDir {"/monorepo/\(G.project.imageDir)"},
+				if _argDir {"/monorepo/\(_project.imageDir)"},
 				if t.dir == "" {"/monorepo"},
 				"/monorepo/\(t.dir)",
 			][0]
@@ -1618,16 +1646,19 @@ _copyParents: P={
 	// _xbakeCache: a synthetic's x-bake cache block — a project-qualified tag (so
 	// each synthetic under a shared scope is distinct) at the caller's cache-to
 	// mode. #bakeCacheRefs bounds the tag's length.
-	_xbakeCache: X={
+	_xbakeCache: {
 		svc:  string
 		mode: *"min" | "max"
+		let _svc = svc
+		let _mode = mode
 		out: {
-			if G.project.bake != _|_ {
+			if _project.bake != _|_ {
 				let _r = (#bakeCacheRefs & {
-					c:    G.project.bake.cache
-					t:    X.svc
-					mode: X.mode
+					c:    _project.bake.cache
+					t:    _svc
+					mode: _mode
 				})
+
 				// No refs, no key: a contentless `x-bake` has no consumer.
 				if len(_r.from) > 0 || len(_r.to) > 0 {
 					"x-bake": {
@@ -1642,22 +1673,24 @@ _copyParents: P={
 	// T_srcs service: pulls from each direct dep's _srcs image via
 	// additional_contexts. Transitive content flows through each dep's
 	// own _srcs (which carries its own chained copies).
-	_syntheticSrcsService: S={
+	_syntheticSrcsService: {
 		n: string
 		t: _
-		_svc: "\(S.t.project)-\(S.n)"
+		let _n = n
+		let _t = t
+		_svc: "\(_t.project)-\(_n)"
 		_depCtxEntries: [
-			for d in (_srcsChainDeps & {"t": S.t}).out {
+			for d in (_srcsChainDeps & {"t": _t}).out {
 				"\(d.project)-\(d.name)_srcs"
 			},
 		]
 		out: {
 			build: {
-				context: ".."
-				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
-				target:     S.n
+				context:    ".."
+				dockerfile: ".bayt/Dockerfile.\(_t.name)"
+				target:     _n
 				args: BUILDKIT_SYNTAX: #buildkitSyntax
-				if G._argDir {args: BAYT_DIR: G.project.imageDir}
+				if _argDir {args: BAYT_DIR: _project.imageDir}
 				if len(_depCtxEntries) > 0 {
 					additional_contexts: {
 						for e in _depCtxEntries {
@@ -1677,18 +1710,20 @@ _copyParents: P={
 	// (leaf-only, no transitive walk). Kept standalone (not on
 	// _syntheticService): its single context is unconditional, and routing
 	// it through the helper's `if len>0` gate reorders the emitted key.
-	_syntheticOutsService: S={
-		n:       string
-		t:       _
-		_svc:    "\(S.t.project)-\(S.n)"
-		_parent: "\(S.t.project)-\(S.t.name)"
+	_syntheticOutsService: {
+		n: string
+		t: _
+		let _n = n
+		let _t = t
+		_svc:    "\(_t.project)-\(_n)"
+		_parent: "\(_t.project)-\(_t.name)"
 		out: {
 			build: {
-				context: ".."
-				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
-				target:     S.n
+				context:    ".."
+				dockerfile: ".bayt/Dockerfile.\(_t.name)"
+				target:     _n
 				args: BUILDKIT_SYNTAX: #buildkitSyntax
-				if G._argDir {args: BAYT_DIR: G.project.imageDir}
+				if _argDir {args: BAYT_DIR: _project.imageDir}
 				additional_contexts: {
 					(_parent): "service:\(_parent)"
 				}
@@ -1702,18 +1737,20 @@ _copyParents: P={
 
 	// T_bayt service: additional_contexts wire each chain dep's `_bayt`
 	// service so the stage's COPY --from refs resolve through the graph.
-	_syntheticBaytTService: S={
+	_syntheticBaytTService: {
 		n: string
 		t: _
-		_svc:   "\(S.t.project)-\(S.n)"
-		_chain: (_baytChain & {"t": S.t}).out
+		let _n = n
+		let _t = t
+		_svc:   "\(_t.project)-\(_n)"
+		_chain: (_baytChain & {"t": _t}).out
 		out: {
 			build: {
 				context:    ".."
-				dockerfile: ".bayt/Dockerfile.\(S.t.name)"
-				target:     S.n
+				dockerfile: ".bayt/Dockerfile.\(_t.name)"
+				target:     _n
 				args: BUILDKIT_SYNTAX: #buildkitSyntax
-				if G._argDir {args: BAYT_DIR: G.project.imageDir}
+				if _argDir {args: BAYT_DIR: _project.imageDir}
 				if len(_chain) > 0 {
 					additional_contexts: {
 						for e in _chain {
@@ -1736,7 +1773,7 @@ _copyParents: P={
 	compose: {
 		files: {
 			// Empty unless two published ports clash, so a clash fails any read.
-			G._publishClashes
+			_publishClashes
 
 			for n, t in _emit {
 				(n): {
@@ -1745,6 +1782,7 @@ _copyParents: P={
 					// Dockerfile.<n>). No includes — see bayt_root below on
 					// why include trees must stay flat.
 					let svc = (_svcName & {pn: t.project, tn: n}).out
+
 					// `let` the names: inside `{n: "\(n)_srcs"}` the `\(n)` would
 					// bind the struct's own `n` field (CUE scoping) → cycle.
 					let _srcsName = "\(n)_srcs"
@@ -1805,23 +1843,24 @@ _copyParents: P={
 			// projects keep the exact per-target closure. `:x:bayt`-
 			// depping targets (the bkid tier) are excluded — they ARE
 			// the layer the closure loads inside.
-			let _unionClosure = (_uniqStrings & {in: list.FlattenN([
-				for _, t2 in _emit
-				if len([for d in t2.chainedDeps if strings.HasSuffix(d.name, "_bayt") {d}]) == 0 {
-					t2.upClosure
-				},
-			], 1)
+			let _unionClosure = (_uniqStrings & {
+				in: list.FlattenN([
+					for _, t2 in _emit
+					if len([for d in t2.chainedDeps if strings.HasSuffix(d.name, "_bayt") {d}]) == 0 {
+						t2.upClosure
+					},
+				], 1)
 			}).out
 			for n, t in _emit if t.compose != _|_ if t.compose.up {
 				let _svc = (_svcName & {pn: t.project, tn: n}).out
 				let _paths = [
-					if len(G.project.compose.includes) > 0 {_unionClosure},
+					if len(_project.compose.includes) > 0 {_unionClosure},
 					t.upClosure,
 				][0]
 				"\(n).closure": {
 					include: list.Concat([
 						[for p in _paths {{path: "\(_rootFromBayt)\(p)", required: false}}],
-						[for o in G.project.compose.includes {{path: "../\(o)", required: false}}],
+						[for o in _project.compose.includes {{path: "../\(o)", required: false}}],
 					])
 					services: "bayt": {
 						extends: {
@@ -1840,12 +1879,12 @@ _copyParents: P={
 		// Empty when the project publishes nothing.
 		ports: {
 			let _svcPorts = {
-				for n, t in G._m.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ {
+				for n, t in _manifest.files if t.expose != _|_ for p, e in t.expose if e.publish != _|_ {
 					let _v = (_publishVar & {target: n, name: p, port: e}).out
-					((_svcName & {pn: G.project.name, tn: n}).out): {
-						"\(p)": "\(G._published[_v]):\(e.port)"
+					((_svcName & {pn: _project.name, tn: n}).out): {
+						"\(p)": "\(_published[_v]):\(e.port)"
 						if e.udp != _|_ if e.udp {
-							"\(p)_udp": "\(G._published[_v]):\(e.port)/udp"
+							"\(p)_udp": "\(_published[_v]):\(e.port)/udp"
 						}
 					}
 				}
@@ -1865,13 +1904,14 @@ _copyParents: P={
 			// service plus its `_srcs`/`_outs` services.
 			let _localIncludes = [for n, _ in _emit {{path: "./compose.\(n).yaml", required: false}}]
 			let _crossIncludes = [
-				for dep in G._m.projectManifest.crossProjectDirs {
-					(_includeEntry & {ownDir: G.project.dir, depDir: dep, file: "bayt"}).out
+				for dep in _manifest.projectManifest.crossProjectDirs {
+					(_includeEntry & {ownDir: _project.dir, depDir: dep, file: "bayt"}).out
 				},
 			]
+
 			// The project's own includes, as every closure has them: a fragment
 			// here may name a service only they declare.
-			let _projectIncludes = [for o in G.project.compose.includes {{path: "../\(o)", required: false}}]
+			let _projectIncludes = [for o in _project.compose.includes {{path: "../\(o)", required: false}}]
 			let _allIncludes = list.Concat([_localIncludes, _crossIncludes, _projectIncludes])
 			if len(_allIncludes) > 0 {
 				include: _allIncludes
@@ -1892,7 +1932,7 @@ _copyParents: P={
 		root: {
 			include: [{
 				path: [
-					if len(G._published) == 0 {"./compose.bayt.yaml"},
+					if len(_published) == 0 {"./compose.bayt.yaml"},
 					["./compose.bayt.yaml", "./compose.bayt.ports.yaml"],
 				][0]
 				required: false
@@ -1901,7 +1941,7 @@ _copyParents: P={
 			if len(_emit) > 0 {
 				services: {
 					for n, t in _emit {
-						let _svc = (_svcName & {pn: G.project.name, tn: n}).out
+						let _svc = (_svcName & {pn: _project.name, tn: n}).out
 						(n): {
 							extends: {
 								file:    "./compose.\(n).yaml"

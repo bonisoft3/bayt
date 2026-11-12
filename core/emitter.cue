@@ -11,7 +11,7 @@
 // conjunct on `_m` copies the shared manifest into every generator.
 package bayt
 
-#render: G={
+#render: {
 	project:      #project
 	depManifests: {[string]: _}
 	// Workspace-root-relative dir of the bayt checkout ("" = consumer
@@ -21,14 +21,19 @@ package bayt
 	runtime: *"" | string
 	// The consuming repo's CUE module path, injected the same way.
 	module: *"" | string
-	project: _module: G.module
+	let _project = project
+	let _depManifests = depManifests
+	let _runtime = runtime
+	let _mod = module
+	project: _module: _mod
 
-	passthrough: (#passthroughFrom & {project: G.project})
-	manifest: (#manifestGen & {"project":      G.project, "depManifests": G.depManifests})
-	taskfile: (#taskfileFrom & {_m: G.manifest, "project":      G.project, "depManifests": G.depManifests, "runtime": G.runtime})
-	docker:   (#dockerComposeFrom & {_m: G.manifest, "project": G.project, "depManifests": G.depManifests})
-	skaffold: (#skaffoldFrom & {_m: G.manifest, "project":      G.project, "depManifests": G.depManifests})
-	vscode:   (#vscodeFrom & {_m: G.manifest, "project":        G.project, "depManifests": G.depManifests})
-	bake:     (#bakeFrom & {_m: G.manifest, "project":          G.project, "depManifests": G.depManifests})
-	processCompose: (#processComposeFrom & {_m: G.manifest, "project": G.project, "depManifests": G.depManifests, "runtime": G.runtime})
+	passthrough: (#passthroughFrom & {project: _project})
+	manifest:    (#manifestGen & {project: _project, depManifests: _depManifests})
+	let _manifest = manifest
+	taskfile:       (#taskfileFrom & {_m: _manifest, project: _project, depManifests: _depManifests, runtime: _runtime})
+	docker:         (#dockerComposeFrom & {_m: _manifest, project: _project, depManifests: _depManifests})
+	skaffold:       (#skaffoldFrom & {_m: _manifest, project: _project, depManifests: _depManifests})
+	vscode:         (#vscodeFrom & {_m: _manifest, project: _project, depManifests: _depManifests})
+	bake:           (#bakeFrom & {_m: _manifest, project: _project, depManifests: _depManifests})
+	processCompose: (#processComposeFrom & {_m: _manifest, project: _project, depManifests: _depManifests, runtime: _runtime})
 }

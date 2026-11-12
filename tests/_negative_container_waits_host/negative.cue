@@ -10,7 +10,7 @@ _p: bayt.#project & {
 	targets: {
 		migrate: entrypoint: do: "migrate"
 		crud: {
-			deps: [":migrate"]
+			deps:       [":migrate"]
 			entrypoint: {do: "postgrest", after: migrate: "completed"}
 			dockerfile: from: name: "postgrest/postgrest:v12"
 			compose: {}

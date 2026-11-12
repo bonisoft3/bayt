@@ -1,4 +1,5 @@
 use std/assert
+use ../runtime/tools.nu [run-cue]
 
 const repo = (path self | path dirname | path join ".." ".." ".." | path expand)
 const frontend = "docker/dockerfile:1.27@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e"
@@ -36,7 +37,7 @@ _project: bayt.#project & {
 out: bayt.#render & {project: _project, depManifests: {}}
 ' | str replace "RUN_ID" $run)
 	try {
-		let bundle = ($program | ^cue export - -e out | from json)
+		let bundle = ($program | run-cue export - -e out | from json)
 		mkdir ($fixture | path join ".bayt")
 		$bundle.taskfile.root | to yaml | save ($fixture | path join ".bayt/Taskfile.yml")
 		$bundle.taskfile.bayt_root | to yaml | save ($fixture | path join ".bayt/Taskfile.bayt.yml")
@@ -49,7 +50,7 @@ out: bayt.#render & {project: _project, depManifests: {}}
 		assert ($success.stderr | str contains "TASK_BACKTICK") $success.stderr
 		assert ($success.stderr | str contains "CLEANUP_MARKER") $success.stderr
 		assert (not ($success.stderr | str contains "synthetic-test-token")) "secret content reached the build log"
-		let failed_bundle = ($program | str replace "value=TASK_LEAF" "value=FAILED_LEAF" | str replace 'echo "$value"' 'echo "$value"; exit 23' | ^cue export - -e out | from json)
+		let failed_bundle = ($program | str replace "value=TASK_LEAF" "value=FAILED_LEAF" | str replace 'echo "$value"' 'echo "$value"; exit 23' | run-cue export - -e out | from json)
 		$failed_bundle.taskfile.files.check | to yaml | save -f ($fixture | path join ".bayt/Taskfile.check.yaml")
 		let failure = build $fixture
 		assert ($failure.exit_code != 0) "a failed Task leaf must fail the build"

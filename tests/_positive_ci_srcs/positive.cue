@@ -19,8 +19,8 @@ _p: bayt.#project & {
 	dir:  "pcs"
 	targets: {
 		"integrate": {cmd: "builtin": do: "true", srcs: globs: ["it/**"], dockerfile: bayt.nubox}
-		"test": {cmd: "builtin": do: "true", srcs: globs: ["test/**"], dockerfile: bayt.nubox}
-		"ci":      sayt.ci & {deps: [":integrate:srcs", "pcs:test:srcs", ":bayt", ":integrate:bayt", ":test:bayt"]}
+		"test":      {cmd: "builtin": do: "true", srcs: globs: ["test/**"], dockerfile: bayt.nubox}
+		"ci":        sayt.ci & {deps: [":integrate:srcs", "pcs:test:srcs", ":bayt", ":integrate:bayt", ":test:bayt"]}
 	}
 }
 
