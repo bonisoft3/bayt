@@ -327,7 +327,9 @@ it stores the outs after a miss that succeeds. `--similar` restores the closest
 entry as warm state on a miss, on the local backend only; bazel-remote and ORAS
 answer no similarity lookup. The key is input-only: a toolchain change
 invalidates because `.mise.toml` and `mise.lock` reach every consumer's key
-through the workspace-root setup target's outs. A failed GET warns and counts
+through the workspace-root setup target's outs; a `path:` tool a mise file
+among the inputs names has no lock entry, so its tree is its version, hashed
+from its repository's root and folded in as its own hash. A failed GET warns and counts
 as a miss; an unresolvable manifest warns and bypasses the cache, running the
 command raw and storing nothing; a restore that fails partway
 clears the target's declared outs first; a failed PUT, a missing `oras` CLI

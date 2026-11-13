@@ -98,6 +98,42 @@ def format-xattrs [x: record]: nothing -> string {
   $x | transpose name value | sort-by name | each { |it| $"($it.name)=\"($it.value)\"" } | str join ";"
 }
 
+# The repository a tree sits in, so its ignore rules compose from the top as
+# the tree's own walk would; the tree itself where git cannot answer (the build
+# container has no .git).
+def tree-root [dir: string]: nothing -> string {
+  if (which git | is-empty) { return $dir }
+  let top = (do -i { ^git -C $dir rev-parse --show-toplevel } | complete)
+  if $top.exit_code != 0 { return $dir }
+  $top.stdout | str trim | path expand
+}
+
+# The `path:` tools the mise files among a target's inputs name. A pinned tool
+# reaches the key through its lock entry; a path tool has none, so its tree is
+# its version (the monorepo's mise.local.toml names the platform's trees).
+def path-tool-trees [files: list<string>, project: string]: nothing -> list<record> {
+  $files
+  | where { |p| ($p | path basename) =~ '^\.?mise(\.[A-Za-z0-9_-]+)?\.toml$' }
+  | each { |f|
+      let full = ($project | path join $f)
+      let base = ($full | path dirname)
+      (open --raw $full | from toml | get -o tools | default {}) | transpose name spec | each { |t|
+        let kind = ($t.spec | describe)
+        let version = if $kind == "string" { $t.spec } else if ($kind | str starts-with "record") { $t.spec | get -o version | default "" } else { "" }
+        if not ($version | str starts-with "path:") { null } else {
+          let dir = ($base | path join ($version | str substring 5..) | path expand)
+          if ($dir | path type) != "dir" {
+            error make { msg: $"fingerprint: ($f) names tool ($t.name) at ($version), which is no directory" }
+          }
+          {dir: $dir, root: (tree-root $dir)}
+        }
+      } | compact
+    }
+  | flatten
+  | uniq-by dir
+  | sort-by dir
+}
+
 # compute-fingerprint — file enumeration + hashing in one pass.
 # Returns {hash, inputs}; shapes depend on `docker`:
 #
@@ -145,6 +181,7 @@ export def compute-fingerprint [
   dep_hashes: list<string> = []
   index: record = {}
   trees: record = {}            # scope -> enumeration, built once per invocation
+  seen: list<string> = []       # path-tool trees already on the chain above
 ]: nothing -> record {
   let gpaths = $paths
   let globs = ($gpaths | where { |p| is-glob $p })
@@ -190,6 +227,19 @@ export def compute-fingerprint [
   if ($files | is-empty) {
     error make { msg: $"fingerprint: no files found for: ($paths | str join ' ')" }
   }
+
+  # A tree a path tool names is an input, as a pinned tool's lock entry is:
+  # its own closure, content only, from its repository's root, with its own
+  # stamps and index never among its files. The trees under one root are
+  # enumerated together (one git call set, not one per tree), and one a tree
+  # above already closes over is not walked again.
+  let tools = (path-tool-trees $files $project | where { |t| $t.dir not-in $seen })
+  let dep_hashes = ($dep_hashes ++ ($tools | group-by root | transpose root group | each { |g|
+    let planned = (enumerate-scopes $g.root ($g.group | each { |t| $t.dir | path relative-to $g.root }))
+    $g.group | each { |t|
+      (compute-fingerprint ["**/*"] [".task/**"] false $g.root $t.dir [] {} $planned ($seen ++ ($tools | get dir))).hash
+    }
+  } | flatten))
 
   let idx = if ($index | is-empty) { load-index $root } else { $index }
   let root_exp = ($root | path expand)

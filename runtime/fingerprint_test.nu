@@ -22,6 +22,7 @@ def main [] {
 	# determinism + sensitivity
 	test_a_synthetic_dep_resolves_from_its_parent
 	test_a_compiler_source_view_invalidates_generation
+	test_a_path_tool_tree_is_part_of_the_toolchain
 	test_an_unemitted_srcs_view_contributes_nothing
 	test_an_unemitted_other_view_is_an_error
 	test_outs_view_chains_through_producer_and_cmd_srcs
@@ -116,6 +117,31 @@ def test_a_compiler_source_view_invalidates_generation [] {
 	assert equal $before.exit 0 $before.stderr
 	assert equal $after.exit 0 $after.stderr
 	assert not equal $before.stdout $after.stdout
+}
+
+# A `path:` tool has no lock entry to reach the key through: its tree is the
+# toolchain. An app's generate read "up to date" across edits to the compiler
+# tree its mise.local.toml named.
+def test_a_path_tool_tree_is_part_of_the_toolchain [] {
+	let tmp = (make-tmp)
+	let app = ($tmp | path join "app")
+	mkdir ($app | path join ".bayt") ($tmp | path join "tool") ($tmp | path join "other")
+	"old compiler" | save ($tmp | path join "tool/compiler.ts")
+	"other tool" | save ($tmp | path join "other/main.ts")
+	"[tools]\n\"github:x/tool\" = \"path:../tool\"\n\"github:x/other\" = { version = \"path:../other\" }\n\"github:x/pinned\" = \"1.2.3\"\n" | save ($app | path join "mise.local.toml")
+	write-manifest ($app | path join ".bayt/bayt.generate.json") ["mise.local.toml"] --name generate
+	let before = (run-fp $app ["-q" "--manifest" ".bayt/bayt.generate.json"])
+	let again = (run-fp $app ["-q" "--manifest" ".bayt/bayt.generate.json"])
+	"new compiler" | save -f ($tmp | path join "tool/compiler.ts")
+	let after = (run-fp $app ["-q" "--manifest" ".bayt/bayt.generate.json"])
+	"new other" | save -f ($tmp | path join "other/main.ts")
+	let other = (run-fp $app ["-q" "--manifest" ".bayt/bayt.generate.json"])
+	rm -rf $tmp
+	for r in [$before $again $after $other] { assert equal $r.exit 0 $r.stderr }
+	# The index the first walk wrote under the tree is not one of its files.
+	assert equal $before.stdout $again.stdout
+	assert not equal $before.stdout $after.stdout
+	assert not equal $after.stdout $other.stdout
 }
 
 def make-tmp []: nothing -> string {
@@ -266,7 +292,7 @@ def test_outs_view_chains_through_producer_and_cmd_srcs [] {
 	print "test an outs view chains through its producer and cmd srcs..."
 	let tmp = (make-tmp)
 	mkdir ($tmp | path join ".bayt")
-	"v1\n" | save -f ($tmp | path join ".mise.toml")
+	"[tools]\n# v1\n" | save -f ($tmp | path join ".mise.toml")
 	"own\n" | save -f ($tmp | path join "own.txt")
 	{
 		name: "setup", dir: "", emitsSrcs: true
@@ -288,7 +314,7 @@ def test_outs_view_chains_through_producer_and_cmd_srcs [] {
 
 	let before = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.integrate.json"])
 	assert ($before.exit == 0) $"unexpected exit: ($before.stderr)"
-	"v2\n" | save -f ($tmp | path join ".mise.toml")
+	"[tools]\n# v2\n" | save -f ($tmp | path join ".mise.toml")
 	let after = (run-fp $tmp ["-q" "--manifest" ".bayt/bayt.integrate.json"])
 	assert ($after.exit == 0) $"unexpected exit: ($after.stderr)"
 	assert ($before.stdout != $after.stdout) "editing .mise.toml in setup.cmds[*].srcs did not move integrate's hash through launch_outs"
