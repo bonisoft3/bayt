@@ -102,6 +102,8 @@ def main [] {
 	let mise  = ["./stacks/mise/"]
 	let deno  = ["./stacks/deno/"]
 	let cargo = ["./stacks/cargo/"]
+	let npm   = ["./stacks/npm/"]
+	let composer = ["./stacks/composer/"]
 	let neg  = ["./tests/_negative/"]
 	let neg_add = ["./tests/_negative_add/"]
 	let neg_view = ["./tests/_negative_from_view/"]
@@ -115,6 +117,7 @@ def main [] {
 	let neg_then_empty = ["./tests/_negative_then_empty/"]
 	let neg_then_multiline = ["./tests/_negative_then_multiline/"]
 	let neg_unpinned = ["./tests/_negative_unpinned_zypper/"]
+	let neg_composer_scripts = ["./tests/_negative_composer_scripts/"]
 	let neg_unpinned_lock = ["./tests/_negative_unpinned_lock/"]
 	let neg_reserved = ["./tests/_negative_reserved_name/"]
 	let neg_nonascii = ["./tests/_negative_nonascii_scope/"]
@@ -149,6 +152,10 @@ def main [] {
 	$failed = $failed + (eval-pass "stacks/mise" $mise)
 	$failed = $failed + (eval-pass "stacks/deno" $deno)
 	$failed = $failed + (eval-pass "stacks/cargo" $cargo)
+	$failed = $failed + (eval-pass "stacks/npm" $npm)
+	$failed = $failed + (eval-pass "stacks/composer" $composer)
+	$failed = $failed + (export-pass "composer install + autoload render" [...$composer "-e" "_c1_render"])
+	$failed = $failed + (export-pass "sayt.npm render" [...$sayt "-e" "_n2_render"])
 	$failed = $failed + (eval-pass "ci `:X:bayt` with `:X:srcs` must pass" $pos_ci_srcs)
 	$failed = $failed + (eval-pass "distros fragment in both positions" $pos_preamble)
 	print "negative suites"
@@ -162,6 +169,7 @@ def main [] {
 	$failed = $failed + (eval-fail "a multi-line `then` entry must fail" $neg_then_multiline)
 	$failed = $failed + (eval-fail "an unpinned zypper package must fail" $neg_unpinned)
 	$failed = $failed + (eval-fail "an unpinned zypper lock entry must fail" $neg_unpinned_lock)
+	$failed = $failed + (eval-fail "a composer install without --no-scripts must fail" $neg_composer_scripts)
 	$failed = $failed + (eval-fail-msg "a target name colliding with a synthetic must fail, naming the key" $neg_reserved "_reservedNames.thing_srcs")
 	$failed = $failed + (eval-fail-msg "a scope outside the tag charset must hit the budget bound, not SliceRunes" $neg_nonascii "out of bound >=18")
 	$failed = $failed + (eval-fail-msg "a peer port the peer does not expose has no host spelling" $neg_undeclared_port "names port admin of crud, which crud does not expose")

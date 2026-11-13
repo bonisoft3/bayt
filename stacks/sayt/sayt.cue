@@ -22,7 +22,7 @@
 //      stacks. Sayt-side fields only — NO toolchain assumptions.
 //
 //   2. The standard sayt-verb mappings for common toolchain combos:
-//      sayt.gradle, sayt.pnpm, sayt.pnpmWorkspace. These are
+//      sayt.gradle, sayt.pnpm, sayt.npm, sayt.pnpmWorkspace. These are
 //      complete bayt.#project shapes that wire the 10 verbs to a
 //      specific toolchain stack — useful for projects that follow
 //      the standard mapping. Projects with atypical mappings
@@ -69,6 +69,7 @@ import (
 	Go "github.com/bonisoft3/bayt/stacks/go"
 	Gradle "github.com/bonisoft3/bayt/stacks/gradle"
 	Mise "github.com/bonisoft3/bayt/stacks/mise"
+	Npm "github.com/bonisoft3/bayt/stacks/npm"
 	Pnpm "github.com/bonisoft3/bayt/stacks/pnpm"
 	Uv "github.com/bonisoft3/bayt/stacks/uv"
 )
@@ -692,6 +693,77 @@ pnpm: bayt.#project & {
 		"verify":   *(verify & Mise.exec & Pnpm.testE2E) | null
 		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
 		"lint":     *(lint & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+	}
+}
+
+// sayt.npm — per-project npm, shaped like sayt.pnpm. Where sayt.pnpm
+// pins build/test srcs and outs, these are defaults: npm projects are
+// mostly standalone vite apps whose layout (dist/, an explicit source
+// list) a leaf states once instead of opting out of the verb.
+//
+// Srcs sit in the framework-side `defaultGlobs`/`defaultExclude`,
+// keyed by the glob itself, so a leaf's `globs`/`exclude` add to them
+// and a leaf replaces one by nulling its key (`defaultGlobs: "**/*":
+// null`). Outs are a default on the whole struct (`*{…} | _`): a leaf's
+// `outs.globs` replaces it, its `outs.exclude` adds to it. A default on
+// `globs` itself would collide with the schema's `*[]`.
+npm: bayt.#project & {
+	activate: *"mise x --" | string
+
+	targets: {
+		"setup": *(Mise.install & Npm.install & {
+			// Empty activate so each cmd controls its own prefix, as in
+			// sayt.pnpm: `mise install` bare, npm ci through `mise x --`.
+			activate: ""
+			taskfile: setup.taskfile
+			deps:     setup.deps
+			// Deleted node_modules must fail the status skip; npm's
+			// cache is the store, `npm ci` the restore.
+			state: globs: ["node_modules"]
+		}) | null
+		"doctor": *(doctor & Mise.doctor) | null
+		"build": *(build & Mise.exec & Npm.build & {
+			srcs: (_npmSrcs & {in: Npm.srcsBuild}).out
+			outs: *{globs: ["dist/**/*"]} | _
+			// FROM setup: node_modules and the mise toolchain flow in
+			// without re-running `npm ci`.
+			dockerfile: from: ref: ":setup"
+		}) | null
+		"test": *(test & Mise.exec & Npm.test & {
+			srcs: (_npmSrcs & {in: Npm.srcsTest}).out
+			outs: *{globs: ["coverage/**/*", "test-results/**/*"]} | _
+		}) | null
+		"launch": *(launch & Mise.exec & Npm.dev & {
+			// Baseline hmr, as sayt.pnpm's: sync the whole tree,
+			// rebuild on manifest/lockfile change.
+			hmr: {
+				code:  *["./"] | [...string]
+				tools: *["package.json", "package-lock.json"] | [...string]
+			}
+		}) | null
+		"integrate": *(integrate & Mise.exec & Npm.testInt & {
+			srcs: (_npmSrcs & {in: Npm.srcsIntegrate}).out
+			dockerfile: from: ref: ":build"
+		}) | null
+		"release": *(release & Mise.exec & {
+			// A no-op chained off build, as sayt.pnpm's: the packaging
+			// step varies per project.
+			cmd: "builtin": do:    *"true" | string
+			dockerfile: from: ref: ":build"
+		}) | null
+		"verify":   *(verify & Mise.exec & Npm.testE2E) | null
+		"generate": *(generate & configSrcs & {cmd: "builtin": do: *"bayt generate" | string}) | null
+		"lint":     *(lint & {cmd: "builtin": do: *"sayt --script rulemap.nu lint" | string}) | null
+	}
+}
+
+// _npmSrcs — a stacks/npm source set as sayt.npm's keyed defaults (see
+// sayt.npm).
+_npmSrcs: {
+	in: {globs: [...string], exclude: [...string]}
+	out: {
+		defaultGlobs:   {for g in in.globs {(g): *{glob: g} | null}}
+		defaultExclude: {for g in in.exclude {(g): *{glob: g} | null}}
 	}
 }
 
