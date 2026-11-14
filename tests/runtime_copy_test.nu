@@ -37,12 +37,11 @@ def test_every_bayt_copy_takes_the_whole_context [dockerfiles: list<string>] {
 }
 
 # The other side of the agreement: the published tree has no `runtime/` inside
-# it, which is what makes `.` the only correct selector. The config and lock
-# above the stubs ride along, so a consumer's locked mise resolves them.
+# it, which is what makes `.` the only correct selector.
 def test_the_runtime_image_root_is_the_tree [root: string] {
   let df = ($root | path join "plugins/bayt/Dockerfile.runtime")
   assert ($df | path exists) "Dockerfile.runtime is missing"
   let copies = (open --raw $df | lines | where { |l| $l starts-with "COPY " })
-  assert equal $copies ["COPY runtime/ /" "COPY mise.toml mise.lock /"]
+  assert equal $copies ["COPY runtime/ /"]
   print "  PASS  the runtime image's root is the runtime tree"
 }

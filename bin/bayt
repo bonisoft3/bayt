@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 set -e
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-# The runtime stubs' lock sits beside mise.toml one level up; mise reads it
-# only from a trusted config.
-MISE_TRUSTED_CONFIG_PATHS="$DIR/..${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}" exec "$DIR/../runtime/nu.toml" "$DIR/../bayt.nu" "$@"
+# The runtime stubs' lock sits beside them; mise reads it only from a trusted
+# config.
+MISE_TRUSTED_CONFIG_PATHS="$DIR/../runtime${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}" exec "$DIR/../runtime/nu.toml" "$DIR/../bayt.nu" "$@"

@@ -1,0 +1,4 @@
+# The lock beside this file holds the runtime stubs beside it, so a consumer in
+# locked mode resolves them, from the tree or from the runtime image alike.
+[settings]
+lockfile = true

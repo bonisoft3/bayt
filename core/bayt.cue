@@ -554,8 +554,13 @@ noop: #cmd & {
 
 	extra_hosts: [...string]
 
-	// Lines emitted after the cmd RUN, before EXPOSE.
-	epilogue: [...string]
+	// Lines emitted after the cmd RUN, before EXPOSE. A `{srcs}` entry is a
+	// plain `COPY <srcs> ./` there, and also joins its files to the target's
+	// `_srcs` view, which a raw line cannot: a tree assembled from `_srcs`
+	// views then carries what the late copy reads. Workdir-root names only,
+	// which a plain COPY keeps without --parents and the directories it would
+	// stamp with the build's time.
+	epilogue: [...(string | close({srcs: [...(string & =~"^[^/]+$")] & [_, ...]}))]
 	// Export only these absolute paths from a scratch final stage, discarding build history.
 	finalCopy?: [...(string & =~"^/")]
 

@@ -1017,7 +1017,10 @@ _copyParents: {
 				for l in _exposes {l},
 				for l in _entrypoint {l},
 				for l in _cmdLine {l},
-				for l in t.dockerfile.epilogue {l},
+				for l in t.dockerfile.epilogue for x in [
+					if (l & string) != _|_ {l},
+					if (l & string) == _|_ {strings.Join(list.Concat([["COPY"], l.srcs, ["./"]]), " ")},
+				] {x},
 				for l in _userLine {l},
 				for l in _healthcheckLine {l},
 			],
@@ -1141,7 +1144,11 @@ _copyParents: {
 		// docs/bayt-synthetic-digest-investigation.md.
 		_ctxsStage: "\(_t.name)_ctxs"
 		// Each cmd's srcs already hold the target's (see gen_bayt's _ownSrcGlobs).
-		_globs: (_uniqStrings & {in: list.Concat([_t.srcs.globs, for c in _t.cmds if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c.srcs.globs}])}).out
+		_globs: (_uniqStrings & {in: list.Concat([
+			_t.srcs.globs,
+			for c in _t.cmds if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c.srcs.globs},
+			if _t.dockerfile != _|_ for l in _t.dockerfile.epilogue if (l & string) == _|_ {l.srcs},
+		])}).out
 		_srcCopy: [
 			if len(_globs) > 0 {
 				(_copyParents & {srcs: _globs, excludes: _t.srcs.exclude}).out

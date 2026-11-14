@@ -25,12 +25,11 @@ def stub-path [name: string]: nothing -> path {
 	if ((libc-flavor) == "musl") and ($musl | path exists) { $musl } else { $base }
 }
 
-# A stub's lock sits beside mise.toml: one level up in the source tree, beside
-# the stubs where the runtime image's root is copied; the parent covers both,
-# and mise reads a lock only from a trusted config.
+# The stubs' lock sits beside them, under mise.toml; mise reads a lock only
+# from a trusted config.
 def --wrapped run-stub [name: string, ...args] {
 	let input = $in
-	let trusted = ([($bayt_root | path dirname)] ++ ($env.MISE_TRUSTED_CONFIG_PATHS? | default "" | split row (char esep) | where $it != "")) | uniq | str join (char esep)
+	let trusted = ([$bayt_root] ++ ($env.MISE_TRUSTED_CONFIG_PATHS? | default "" | split row (char esep) | where $it != "")) | uniq | str join (char esep)
 	with-env {MISE_TRUSTED_CONFIG_PATHS: $trusted} { $input | ^mise tool-stub (stub-path $name) ...$args }
 }
 

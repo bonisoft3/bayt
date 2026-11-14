@@ -317,6 +317,9 @@ _expandCopy: {
 					t.srcs.globs,
 					for _, c in t.cmd if c != null if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {(_expandGlobs & {in: c.srcs.defaultGlobs}).out},
 					for _, c in t.cmd if c != null if [if c.dockerfile != _|_ {c.dockerfile != null}, true][0] {c.srcs.globs},
+					// A late `{srcs}` epilogue copy reads these too: the view and
+					// the fingerprint hold them, the build stage copies them late.
+					if t.dockerfile != _|_ for l in t.dockerfile.epilogue if (l & string) == _|_ {l.srcs},
 				])
 			}).out
 		}

@@ -1,4 +1,0 @@
-# The lock beside this file holds bayt's runtime stubs, so a consumer in locked mode
-# resolves them from the release it installed.
-[settings]
-lockfile = true

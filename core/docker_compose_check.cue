@@ -5,7 +5,10 @@
 // without a dockerfile being skipped, and develop.watch passthrough.
 package bayt
 
-import "strings"
+import (
+	"list"
+	"strings"
+)
 
 // --- D1: a single target with a dockerfile block. The federation root
 // (compose.bayt.yaml) lists the per-target file as an include with
@@ -1100,3 +1103,22 @@ _d31: #project & {
 	}
 }
 _d31_render: #render & {project: _d31, depManifests: {}}
+
+// --- D29: a late `{srcs}` epilogue copy. The stage copies the file where the
+// epilogue stands, after the cmd, as a raw line would; the target's `_srcs`
+// view and its manifest view hold it too, so a tree assembled from views
+// (CI's nested builds) carries what the late copy reads, and an edit to it
+// moves the fingerprint. A raw line reaches neither.
+_d29: #project & {
+	name: "d29"
+	dir:  "d29"
+	targets: "setup": {
+		cmd: "builtin": {do: "true", srcs: globs: ["a.toml"]}
+		dockerfile: busybox
+		dockerfile: epilogue: [{srcs: ["[l]ocal.toml"]}, "RUN true"]
+	}
+}
+_d29_df: (#dockerComposeGen & {project: _d29, depManifests: {}}).dockerfiles.setup
+_d29_late: strings.Contains(_d29_df, "bayt.setup.json ./.bayt/\nCOPY [l]ocal.toml ./\nRUN true\n") & true
+_d29_ctxs: strings.Contains(_d29_df, "COPY --parents a.toml [l]ocal.toml ./") & true
+_d29_view: list.Contains((#manifestGen & {project: _d29, depManifests: {}})._ownSrcGlobs.setup, "[l]ocal.toml") & true

@@ -7,13 +7,13 @@ use std assert
 
 def main [] {
 	const root = (path self | path dirname | path dirname)
-	let lock = (open --raw ($root | path join "mise.lock") | from toml)
+	let lock = (open --raw ($root | path join "runtime" "mise.lock") | from toml)
 	let stubs = (glob ($root | path join "runtime" "*.toml") | where {|f| (open --raw $f) =~ '(?m)^\[platforms\.' })
 	assert ($stubs | is-not-empty) "no runtime stubs found"
 	for stub in $stubs {
 		let name = ($stub | path basename)
-		assert ($"http:($name)" in ($lock.tools | columns)) $"($name) has no entry in plugins/bayt/mise.lock; run `mise generate tool-stub --lock runtime/($name)`"
-		assert ($"runtime/($name)" in $lock.tool-stubs) $"($name) is not listed in mise.lock's tool-stubs; `mise lock` would drop its entry"
+		assert ($"http:($name)" in ($lock.tools | columns)) $"($name) has no entry in plugins/bayt/runtime/mise.lock; from plugins/bayt/runtime run `mise generate tool-stub --lock ($name)`"
+		assert ($name in $lock.tool-stubs) $"($name) is not listed in mise.lock's tool-stubs; `mise lock` would drop its entry"
 	}
 	print $"  PASS  ($stubs | length) runtime stubs are locked beside mise.toml"
 }
