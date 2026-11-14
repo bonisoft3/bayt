@@ -45,13 +45,20 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 // index. No `rm -rf /var/lib/apt/lists/*` tail — the lists live on a mount,
 // so that would only delete the next build's index.
 #install: {
-	// Bare names. Debian and Ubuntu keep one revision per package in
+	// Pin each to its upstream major.minor with an apt wildcard, epoch
+	// included: `git=1:2.47.*`. An exact pin is a build failure with a date
+	// on it, since Debian and Ubuntu keep one revision per package in
 	// -updates/-security — the noble archive offers curl 8.5.0-2ubuntu10.12
-	// and 8.5.0-2ubuntu10 and nothing between — so an exact pin here is a
-	// build failure with a date on it. For reproducibility, either
-	// `snapshot` below or a leap base and distros/zypper, whose archive
-	// retains versions.
-	pkgs: [...string]
+	// and 8.5.0-2ubuntu10 and nothing between — and a bare name drifts
+	// across majors wherever the archive moves one. A stable release holds
+	// each package's upstream major.minor for its life, so the wildcard
+	// resolves for as long as the base does. A third-party repo that ships
+	// minors as they land (PGDG) holds only the major. `snapshot` below
+	// fixes the whole resolution instead, on Ubuntu.
+	//
+	// Each element reaches the shell single-quoted, so a `*` cannot glob
+	// against the RUN's working directory.
+	pkgs: [...string & !~"'"]
 
 	// Build-only packages, all inside the install's own RUN: `then` runs
 	// once they are in place, `purge` takes them out again, and
@@ -111,7 +118,7 @@ _store: {type: "cache", target: "/apt-store", scope: "global"}
 	let _publish = "; cd \"$d\" && for f in *.deb; do [ -f \"$f\" ] || continue; o=\"$s/$f\"; [ -e \"$o\" ] && continue; t=\"$(mktemp \"$s/.pXXXXXX\")\" && cp \"$f\" \"$t\" && mv -f \"$t\" \"$o\"; done; :"
 
 	out: {
-		do:     "\(_pwd)\(_seed)\(_snap)rm -f /etc/apt/apt.conf.d/docker-clean && echo 'Binary::apt::APT::Keep-Downloaded-Packages \"true\";' > /etc/apt/apt.conf.d/keep-cache && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \(strings.Join(pkgs, " ")) || exit\(_publish)\(_then)\(_purge)"
+		do:     "\(_pwd)\(_seed)\(_snap)rm -f /etc/apt/apt.conf.d/docker-clean && echo 'Binary::apt::APT::Keep-Downloaded-Packages \"true\";' > /etc/apt/apt.conf.d/keep-cache && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \(strings.Join([for p in pkgs {"'\(p)'"}], " ")) || exit\(_publish)\(_then)\(_purge)"
 		shell:  "sh"
 		mounts: [_store, _archiveMount, _listsMount]
 	}

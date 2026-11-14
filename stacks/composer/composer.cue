@@ -17,9 +17,9 @@ import "list"
 // composer writes cache entries through a temp file and rename, so
 // concurrent access is safe. Two targets because composer picks its
 // cache dir from the image: wherever XDG is in use (an /etc/xdg dir,
-// as on leap and so nubox) it is ~/.cache/composer, even when
-// ~/.composer exists; otherwise ~/.composer/cache. A mount at only
-// one of them leaves the other base installing uncached.
+// as on leap) it is ~/.cache/composer, even when ~/.composer exists;
+// otherwise, as on debian slim and so nubox, ~/.composer/cache. A
+// mount at only one of them leaves the other base installing uncached.
 cacheMounts: [
 	{type: "cache", target: "/root/.cache/composer", scope: "global"},
 	{type: "cache", target: "/root/.composer/cache", scope: "global"},

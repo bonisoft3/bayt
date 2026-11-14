@@ -111,9 +111,11 @@ generate into scan and per-level phases.
 ## Image pins and the archive
 
 The pinning policy is the README's [design principle 7](README.md#design-principles).
-`nubox` is leap rather than a rolling distro such as wolfi for the same reason:
-a rolling base moves its digest on every refresh, while leap's releases live
-long enough that a moved pin is rare and its diff gets read.
+`nubox` is Debian stable slim rather than a rolling distro such as wolfi for
+the same reason: a rolling base moves its digest on every refresh, while a
+stable release lives long enough that a moved pin is rare and its diff gets
+read. Its packages are bare names, as apt takes them, so they move with the
+archive's point releases while the base digest holds still.
 
 ## Validating a change to the runtime emission
 

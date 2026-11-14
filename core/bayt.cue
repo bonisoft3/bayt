@@ -431,7 +431,7 @@ noop: #cmd & {
 	//                       then `FROM <name> AS <target>`. `context`
 	//                       defaults to `docker-image://<name>`, so the
 	//                       common image-FROM case is one line:
-	//                         from: name: lock.images.leap
+	//                         from: name: lock.images.debian
 	//
 	//   {ref}             — Bazel-style target ref shorthand:
 	//                         ":target"          → same-project target

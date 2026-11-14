@@ -10,7 +10,7 @@
 //
 // Compose into a target's dockerfile block:
 //
-//   targets: "build":   dockerfile: nubox       // leap, includes lazybox
+//   targets: "build":   dockerfile: nubox       // debian, includes lazybox
 //   targets: "release": dockerfile: busybox     // musl runtime
 //   targets: "ci":      dockerfile: bayt.bkid  // docker:cli + socat
 //
@@ -24,7 +24,7 @@ package bayt
 // A distro fragment imports only stdlib, which is what keeps this
 // acyclic — do not add a core import to distros/ to reach #mount.
 import (
-	"github.com/bonisoft3/bayt/distros/zypper"
+	"github.com/bonisoft3/bayt/distros/apt"
 	"encoding/toml"
 )
 
@@ -37,35 +37,28 @@ _lazyboxOverlay: {
 	"path-env":     {priority: -9, line: "ENV PATH=/root/.local/bin:/root/.local/share/lazybox/bin:$PATH"}
 }
 
-// nubox — leap-based, includes lazybox + mise + nushell. Use for
+// nubox — Debian slim, includes lazybox + mise + nushell. Use for
 // build / test / integrate. Lazybox self-bootstraps with posix sh
 // as the only dep — it ships busybox, static-curl, ca-certs, and a
 // mise shim under /root/.local/share/lazybox/.
 //
-// Installs GNU findutils + which (absent in leap 16.0's slim base);
-// gradle's gradlew probes for both at startup and dies otherwise.
-// libatomic1 likewise: node 26's linux binary links it, so a mise-installed
-// node fails its own `node -v` install check without it.
+// Installs what the slim base lacks and builds assume: git; libatomic1,
+// which node 26's linux binary links, so a mise-installed node fails its
+// own `node -v` install check without it; curl, which recipes fetch with;
+// ca-certificates, the /etc/ssl/certs bundle lazybox's static curl and
+// git's TLS read; procps, the ps/pgrep/pkill a test drives a running
+// image's processes with.
 nubox: {
 	// `from` is bound to the leaf disjunct, so `bayt.nubox & {from: ref: ...}`
 	// fails CUE evaluation. Chained-FROM consumers don't compose the
 	// preset; they set `dockerfile: from: ref:` directly.
 	from: close({
-		name: *lock.images.leap | string
+		name: *lock.images.debian | string
 	})
 	defaultPreamble: _lazyboxOverlay & {
-		// Leap's OpenSSL configuration loads its distro-specific JITTER
-		// provider; Lazybox's static curl must use its own library defaults.
-		"static-curl-config": {priority: -8, line: """
-			RUN mv /root/.local/share/lazybox/libexec/static-curl /root/.local/share/lazybox/libexec/static-curl.bin
-			COPY --chmod=0755 <<'STATIC_CURL' /root/.local/share/lazybox/libexec/static-curl
-			#!/bin/sh
-			OPENSSL_CONF="${OPENSSL_CONF:-/dev/null}" exec "$(dirname "$0")/static-curl.bin" "$@"
-			STATIC_CURL
-			"""}
 		"mise-trusted": {priority: -8, line: "ENV MISE_TRUSTED_CONFIG_PATHS=/monorepo"}
-		"gnu-shell-utils": {priority: -7} & (zypper.#install & {
-			pkgs: ["findutils=4.10.0-160000.2.2", "which=2.23-160000.2.2", "git-core=2.51.0-160000.1.2", "libatomic1=15.3.0+git11272-160000.1.1"]
+		"base-pkgs": {priority: -7} & (apt.#install & {
+			pkgs: ["git=1:2.47.*", "libatomic1=14.2.*", "curl=8.14.*", "ca-certificates=20250419*", "procps=2:4.0.*"]
 		}).out
 	}
 }

@@ -681,7 +681,7 @@ pnpm: bayt.#project & {
 		"release": *(release & Mise.exec & {
 			// Chain release off build so the artifact (.output/) and
 			// node toolchain are present without re-running
-			// `pnpm build`. Inherits build's base (nubox/leap), which
+			// `pnpm build`. Inherits build's base (nubox), which
 			// is larger than ideal for production — projects that want
 			// a minimal runtime image (e.g. node:slim + COPY .output)
 			// override `dockerfile.from` per-target. Default cmd is

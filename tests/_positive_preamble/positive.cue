@@ -91,10 +91,8 @@ _apt_keeps_lists: _aptCmd.do & !~"rm -rf /var/lib/apt/lists"
 
 // The package list must actually reach the command. Getting this wrong is
 // silent — the install runs with no packages and no error (see distros/apt
-// on why `pkgs` cannot be hidden). The bare name is deliberate: apt takes
-// unpinned packages because its archive keeps one revision, so requiring a
-// pin would encode a build failure with a date on it.
-_apt_pkgs_present:    _aptCmd.do & =~"--no-install-recommends curl"
+// on why `pkgs` cannot be hidden).
+_apt_pkgs_present:    _aptCmd.do & =~"--no-install-recommends 'curl'"
 _zypper_pkgs_present: _zypperEntry.do & =~"which=2\\.23-160000\\.2\\.2"
 
 _zypperEntry:   _p.targets.build.dockerfile.defaultPreamble.pkgs
@@ -159,7 +157,7 @@ _aptBuildOnly: (apt.#install & {
 	purge: ["build-essential"]
 }).out
 
-_apt_publish_follows_install: _aptBuildOnly.do & =~"install -y -qq --no-install-recommends build-essential \\|\\| exit; cd "
+_apt_publish_follows_install: _aptBuildOnly.do & =~"install -y -qq --no-install-recommends 'build-essential' \\|\\| exit; cd "
 _apt_then_follows_publish:    _aptBuildOnly.do & =~"done; :; \\(cd \"\\$p\" && make && make install\\) \\|\\| exit"
 _apt_purge_follows_then:      _aptBuildOnly.do & =~"make install\\) \\|\\| exit; DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq --auto-remove build-essential \\|\\| exit$"
 
@@ -191,7 +189,12 @@ _apt_purge_only: _aptPurgeOnly.do & =~"done; :; DEBIAN_FRONTEND=noninteractive a
 // Absent both, the command is exactly what it was: install, then publish.
 // Asserting the adjacency rather than the absence of a substring — an empty
 // `then` rendering as a stray `;` would pass a mere absence check.
-_apt_unchanged_by_default: _aptCmd.do & =~"--no-install-recommends curl \\|\\| exit; cd "
+_apt_unchanged_by_default: _aptCmd.do & =~"--no-install-recommends 'curl' \\|\\| exit; cd "
+
+// A major.minor wildcard pin reaches apt as written: unquoted, the shell
+// would expand `*` against the RUN's working directory before apt saw it.
+_aptWildcard:         (apt.#install & {pkgs: ["git=1:2.47.*", "curl"]}).out
+_apt_wildcard_quoted: _aptWildcard.do & =~"--no-install-recommends 'git=1:2\\.47\\.\\*' 'curl' \\|\\| exit"
 
 _apkBuildOnly: (apk.#install & {
 	pkgs:  ["gcc", "musl-dev"]
