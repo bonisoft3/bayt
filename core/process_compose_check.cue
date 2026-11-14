@@ -49,7 +49,7 @@ _proc_project: #project & {
 			}
 			deps: [":database:outs"]
 			"process-compose": {
-				activate:    "mise x postgrest@14 --"
+				activate:    "mise x --"
 				working_dir: "backend"
 			}
 			dockerfile: from: name: "postgrest/postgrest:v12"
@@ -134,7 +134,7 @@ _proc:     _proc_gen.file.processes
 // The host runs the host toolchain, names every port by its variable, and
 // reaches peers on loopback under both spellings compose resolves.
 _proc: crud: {
-	entrypoint:  ["mise", "x", "postgrest@14", "--", "postgrest"]
+	entrypoint:  ["mise", "x", "--", "postgrest"]
 	working_dir: "backend"
 	environment: [
 		"ADMIN_DSN=postgres://database:1234@127.0.0.1:5432/app",
@@ -185,7 +185,7 @@ _proc_tf: (#taskfileGen & {project: _proc_project, depManifests: {}}).files.inte
 _proc_tf: default: deps: ["::bayt:crud", "::bayt:worker"]
 _proc_tf:   {[!~"^default$"]: _|_}
 _proc_file: _proc_gen.file
-_proc_file: {ordered_shutdown: true, environment: ["MISE_LOCKED=0"]}
+_proc_file: {ordered_shutdown: true}
 _proc: "integrate:build": entrypoint: ["task", "-t", ".bayt/Taskfile.yml", "bayt:integrate"]
 _proc: "bayt:httpcheck": entrypoint:  ["bayt", "microcheck", "httpcheck", "--help"]
 _proc: integrate: depends_on: close({

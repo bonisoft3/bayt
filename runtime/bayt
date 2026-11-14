@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
 set -e
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$DIR/nu.toml" "$DIR/bayt.nu" "$@"
+# The stubs' lock sits beside mise.toml one level up in the source tree, and
+# beside them where the runtime image's root is copied; the parent covers both.
+MISE_TRUSTED_CONFIG_PATHS="$DIR/..${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}" exec "$DIR/nu.toml" "$DIR/bayt.nu" "$@"

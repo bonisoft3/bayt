@@ -221,9 +221,6 @@ import (
 		version: "0.5"
 		// Dependents stop before what they wait on, as they started after it.
 		ordered_shutdown: true
-		// Host processes resolve their `activate` pins, versions no lockfile
-		// lists; probes inherit the environment too.
-		environment: ["MISE_LOCKED=0"]
 		processes: {
 			_clashes
 

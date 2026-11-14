@@ -27,8 +27,7 @@ class ProcessCompose(unittest.TestCase):
     def setUpClass(cls):
         cls.nu = subprocess.check_output(['nu', '-c', '$nu.current-exe'], text=True).strip()
         for stub, flag in [(SAYT / 'task.toml', '--version'), (SAYT / 'process-compose.toml', 'version')]:
-            subprocess.check_output(['mise', 'tool-stub', str(stub), flag],
-                                    env=dict(os.environ, MISE_LOCKED='0'), cwd=ROOT)
+            subprocess.check_output(['mise', 'tool-stub', str(stub), flag], cwd=ROOT)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='bayt-process-compose-')
@@ -47,8 +46,7 @@ class ProcessCompose(unittest.TestCase):
         self.env = dict(os.environ,
                         PATH=f'{self.bin}:{Path(self.nu).parent}:' + os.environ['PATH'],
                         BAYT_CACHE_DIR=str(self.base / 'cache'),
-                        BAYT_CACHE_URL='', BAYT_CACHE_REGISTRY='', BAYT_CACHE_TOKEN='',
-                        MISE_LOCKED='0')
+                        BAYT_CACHE_URL='', BAYT_CACHE_REGISTRY='', BAYT_CACHE_TOKEN='')
 
     def generate(self, check, after=None, server=SERVER):
         targets = {
@@ -77,7 +75,7 @@ out: {
 ''')
         data = json.loads(subprocess.check_output(
             ['mise', 'tool-stub', str(RUNTIME / 'cue.toml'), 'export', str(source), '-e', 'out'],
-            cwd=ROOT, text=True, env=dict(os.environ, MISE_LOCKED='0')))
+            cwd=ROOT, text=True))
         folder = self.project / '.bayt'
         folder.mkdir(exist_ok=True)
         for name, manifest in data['manifests'].items():

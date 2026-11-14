@@ -178,9 +178,8 @@ starts from what its image baked in; an image whose process needs a wrapper
 says so in `dockerfile.do`. On the host the target's `activate` wraps the
 entrypoint and its probes, whole command and shell included, and
 `process-compose.activate` replaces it where the process's toolchain differs from
-the one the target's build cmds run under. The file sets `MISE_LOCKED=0` for
-every process and probe: host toolchains are pinned by version in `activate`,
-which no lockfile lists.
+the one the target's build cmds run under; both resolve their tools from the
+project's own config and lock, as `mise x --` does.
 
 **Containers.** The compose side lowers only into a target with a `compose`
 block, which is what runs a container; `compose.environment` and

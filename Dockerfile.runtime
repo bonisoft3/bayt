@@ -6,6 +6,8 @@
 # Must reference no bayt artifact: the generator pins this by digest, so a
 # reference back would make that pin a self-reference with no fixed point.
 #
-# Root IS the runtime tree, so consumers COPY `.`.
+# Root IS the runtime tree, so consumers COPY `.`; the config and lock above
+# the stubs travel with them, so a consumer in locked mode resolves the stubs.
 FROM scratch
 COPY runtime/ /
+COPY mise.toml mise.lock /
