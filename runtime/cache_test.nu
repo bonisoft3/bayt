@@ -25,6 +25,7 @@ def main [] {
 	test_outs_exclude_under_a_glob_prefix
 	test_hit_restores_and_runs_cmd
 	test_hit_full_restores_without_running
+	test_full_keys_each_cmd_apart
 	test_glob_srcs_reach_the_cache
 	test_cross_dep_without_outs_refuses
 	test_cross_dep_ignores_internal_task_stamps
@@ -98,10 +99,12 @@ def run-cache [
 	--debug: string = "",        # path for BAYT_CACHE_DEBUG
 	--user: string = "",         # override $USER for this invocation
 	--branch: string = "",       # set BAYT_CACHE_BRANCH
+	--cmd-name: string = "",     # run one cmd of a multi-cmd manifest (cache.nu's --cmd)
 ]: nothing -> record {
 	let flags = ([
 		(if $full    { ["--full"]    } else { [] }),
 		(if $similar { ["--similar"] } else { [] }),
+		(if ($cmd_name | is-not-empty) { ["--cmd" $cmd_name] } else { [] }),
 	] | flatten)
 	mut envs = { BAYT_CACHE_DIR: $fix.cache }
 	if ($debug | is-not-empty)  { $envs = ($envs | merge { BAYT_CACHE_DEBUG: $debug }) }
@@ -246,6 +249,42 @@ def test_corrupt_entry_degrades_to_miss [] {
 }
 
 # (3) warm cache + --full → cmd is NOT invoked, outs come from cache.
+# A multi-cmd target runs one `cache run --cmd <c>` per cmd. Two cmds with
+# no srcs of their own share the target's scope, so they must still not
+# share an entry: the second would hit the first's (stored before it ran)
+# and, under --full, skip. As onhappy-backend's build: composer
+# dump-autoload, then the Vite build, whose manifest never got written.
+def test_full_keys_each_cmd_apart [] {
+	print "test --full keys each cmd of a multi-cmd target apart..."
+	let fix = (make-fixture)
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["vendor/autoload.txt", "public/build/manifest.json"], exclude: []}
+		state: {globs: []}
+		chainedDeps: []
+		cmds: [
+			{name: "composer", do: "dump", srcs: {globs: [], exclude: []}}
+			{name: "builtin", do: "assets", srcs: {globs: [], exclude: []}}
+		]
+	} | to json | save -f $fix.manifest
+	let first = (run-cache $fix [sh -c "mkdir -p vendor && echo autoload > vendor/autoload.txt"] --full --cmd-name composer)
+	assert ($first.exit == 0) $"the first cmd should run: ($first.exit)"
+	let second = (run-cache $fix [sh -c "echo ASSETS_RAN; mkdir -p public/build && echo '{}' > public/build/manifest.json"] --full --cmd-name builtin)
+	assert ($second.exit == 0) $"the second cmd should run: ($second.exit)"
+	assert ($second.stdout | str contains "ASSETS_RAN") "the second cmd must not hit the first cmd's entry"
+	assert ($fix.project | path join "public" "build" "manifest.json" | path exists) "the second cmd's out should be built"
+
+	# Each cmd's own entry still hits on a rerun.
+	rm -rf ($fix.project | path join "vendor") ($fix.project | path join "public")
+	let again = (run-cache $fix [sh -c "echo ASSETS_RAN"] --full --cmd-name builtin)
+	assert (not ($again.stdout | str contains "ASSETS_RAN")) "a rerun of the same cmd hits its own entry"
+	assert ($fix.project | path join "public" "build" "manifest.json" | path exists) "and restores its outs"
+	print "  ok\n"
+}
+
 def test_hit_full_restores_without_running [] {
 	print "test hit + --full restores without running cmd..."
 	let fix = (make-fixture)

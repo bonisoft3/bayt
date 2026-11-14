@@ -325,7 +325,9 @@ command on that hit, which suits a command whose own no-op is expensive, such
 as gradle's daemon start; otherwise it runs the command over the warm outs, and
 it stores the outs after a miss that succeeds. `--similar` restores the closest
 entry as warm state on a miss, on the local backend only; bazel-remote and ORAS
-answer no similarity lookup. The key is input-only: a toolchain change
+answer no similarity lookup. A multi-cmd target's cmds each run their own
+`cache run --cmd <c>`, keyed by the cmd's scope and its name, so two cmds
+with no srcs of their own never share an entry. The key is input-only: a toolchain change
 invalidates because `.mise.toml` and `mise.lock` reach every consumer's key
 through the workspace-root setup target's outs; a `path:` tool a mise file
 among the inputs names has no lock entry, so its tree is its version, hashed

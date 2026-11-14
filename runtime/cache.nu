@@ -749,7 +749,12 @@ export def --wrapped "main run" [
 		let fp = (manifest-fingerprint $resolved)
 		{
 			ok: true,
-			key: $fp.hash,
+			# Each cmd of a multi-cmd target keeps its own entry. Its scope
+			# is the manifest plus its own srcs, so two cmds with none (a
+			# composer dump-autoload, then the asset build) hash alike, and
+			# the second would hit the entry the first stored before it ran
+			# and, under --full, skip.
+			key: (if ($cmd | is-empty) { $fp.hash } else { $"($fp.hash)\n($cmd)" | hash sha256 }),
 			inputs: $fp.inputs,
 			# Payload = declared outs only. resolve-manifest's outs union
 			# state for the presence probe; state never enters the cache.
