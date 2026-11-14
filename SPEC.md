@@ -337,11 +337,23 @@ under ORAS, or a failed GC dies. The backends, their environment and
 bazel-remote's storage layout are [`cache.nu`](runtime/cache.nu)'s.
 
 **`bayt cache check`** is a single-command `cache.full` target's task-level
-`if:`, spelled `bayt cache check …; [ $? -ne 10 ]`, which go-task evaluates
-before the deps. It exits 10 when the target is satisfied without running
-anything: the stamp holds the key and every declared out and `state` path is
-present, or an exact hit restored the outs and the check wrote the stamp.
-Anything else exits 0, and go-task runs the deps, `status:` and the command.
+`if:`, spelled `bayt cache check …[ --outs-only]; [ $? -ne 10 ]`, which go-task evaluates
+before the deps. By default it never exits 10: it first drops the stamps of
+every dep whose `state` is missing, while that is still visible, then on an
+exact hit restores the outs, so go-task runs the deps, which rebuild their
+state over outs already in place. It never writes the stamp: any dep that
+runs may rewrite an out it shares a path with, so the target's own `cache run
+--full` restores the outs again after the deps, skips the command and stamps
+it. A target stamp from an earlier run would skip that second restore, so the
+check also drops it whenever a dep is going to run, as decided by that dep's
+own `status:` check (per cmd for a multi-cmd dep; always when not
+incremental). `--outs-only` is the leaf optimization, emitted for a
+`cache.full` target that no other target depends on and that is not `public`:
+it exits 10 when the target is satisfied without running anything (the stamp
+holds the key and every declared out and `state` path is present, or an exact
+hit restored the outs and the check wrote the stamp), which skips the whole
+subgraph. Anything else exits 0, and go-task runs the deps, `status:` and the
+command.
 The check walks the key from manifests, trusting only the stamp of a dep with
 no manifest on disk. `task --force` bypasses `status:`, not `if:`; to force a
 run, delete the stamp and outs, or set `BAYT_CACHE_ENABLED=false` with no

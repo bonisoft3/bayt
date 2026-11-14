@@ -24,8 +24,8 @@ def --wrapped "main microcheck" [checker: string, ...args] {
 	run-microcheck $checker ...$args
 }
 
-def "main cache check" [--manifest: string, --stamp-file: string] {
-	cache main check --manifest $manifest --stamp-file $stamp_file
+def "main cache check" [--manifest: string, --stamp-file: string, --outs-only] {
+	cache main check --manifest $manifest --stamp-file $stamp_file --outs-only=$outs_only
 }
 
 def "main cache gc" [--max-bytes: int = 10737418240] {

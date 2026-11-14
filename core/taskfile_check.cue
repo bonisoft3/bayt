@@ -287,9 +287,9 @@ _t10_tf: bayt_root: tasks: cross_workspaceroot_setup: {
 _t10_tf: files: build: tasks: default: deps: ["::bayt:setup", "::bayt:cross_libx_build"]
 _t10_tf: files: setup: tasks: default: deps: ["::bayt:cross_workspaceroot_setup"]
 
-// --- T11: a single-cmd cache.full target carries the cache check as its
-// task-level `if:`, which go-task evaluates before the deps; only the check's
-// exit 10 skips. A target that is not full (T1) gets none.
+// --- T11: a single-cmd cache.full leaf carries the cache check, with
+// --outs-only, as its task-level `if:`, which go-task evaluates before the
+// deps; only the check's exit 10 skips. A target that is not full (T1) gets none.
 _t11: #project & {
 	name: "t11"
 	dir:  "t11"
@@ -304,13 +304,49 @@ _t11: #project & {
 	}
 }
 _t11_tf: (#taskfileGen & {project: _t11, depManifests: {}})
-_t11_tf: files: build: tasks: default: if: =~"^mise x -- bayt cache check --manifest '\\{\\{\\.TASKFILE_DIR\\}\\}/bayt\\.build\\.json' --stamp-file \\.task/bayt/build\\.hash; \\[ \\$\\? -ne 10 \\]$"
+_t11_tf: files: build: tasks: default: if: =~"^mise x -- bayt cache check --manifest '\\{\\{\\.TASKFILE_DIR\\}\\}/bayt\\.build\\.json' --stamp-file \\.task/bayt/build\\.hash --outs-only; \\[ \\$\\? -ne 10 \\]$"
 _t11_tf: files: setup: tasks: default: {[=~"^if$"]: _|_}
 _t1_tf: files: build: tasks: default:  {[=~"^if$"]: _|_}
+
+// --- T11b: a cache.full target with a consumer checks without --outs-only,
+// restoring on a hit but never skipping, so its deps still rebuild their
+// state (vendor/, node_modules/) for a consumer that misses; only a leaf
+// gets --outs-only and skips its subgraph. A public target counts as
+// consumed: another project may depend on it.
+_t11b: #project & {
+	name: "t11b"
+	dir:  "t11b"
+	targets: {
+		"setup": {taskfile: {}, cmd: "builtin": do: "true"}
+		"build": {
+			taskfile: {}
+			cache: full: true
+			deps: [":setup"]
+			cmd: "builtin": do: "./gradlew assemble"
+		}
+		"integrate": {
+			taskfile: {}
+			cache: full: true
+			deps: [":build"]
+			cmd: "builtin": do: "./gradlew integrationTest"
+		}
+		"lib": {
+			taskfile: {}
+			cache: full: true
+			visibility: "public"
+			cmd: "builtin": do: "./gradlew jar"
+		}
+	}
+}
+_t11b_tf: (#taskfileGen & {project: _t11b, depManifests: {}})
+_t11b_tf: files: build: tasks: default: if:     =~"--stamp-file \\.task/bayt/build\\.hash; \\[ \\$\\? -ne 10 \\]$"
+_t11b_tf: files: integrate: tasks: default: if: =~"--stamp-file \\.task/bayt/integrate\\.hash --outs-only; \\[ \\$\\? -ne 10 \\]$"
+_t11b_tf: files: lib: tasks: default: if:       =~"--stamp-file \\.task/bayt/lib\\.hash; \\[ \\$\\? -ne 10 \\]$"
 
 // Public aggregator forces evaluation of the hidden _t* bindings.
 Tests: taskfile: {
 	t1:  _t1_tf
+	t11b: _t11b_tf
 	t2:  _t2_tf
 	t3:  _t3_tf
 	t4:  _t4_tf

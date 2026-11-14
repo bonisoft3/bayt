@@ -854,12 +854,32 @@ export def --wrapped "main run" [
 # The key is walked from manifests, trusting only the stamp of a dep with no
 # manifest on disk: the deps have not run yet, so a stamp may predate an edit,
 # and a dep with no manifest cannot run.
+#
+# By default the check never skips (it never exits 10): a consumer that
+# misses needs the deps' state (vendor/, node_modules/), which no restore
+# brings back, and rebuilding state is always correct. It first drops the
+# stamp of every dep whose state is missing, while that can still be seen (a
+# restore may write inside a state dir and fake its presence), then restores
+# the outs, so the deps recompute their state over outs already in place.
+# --outs-only is the optimization for a target nothing else depends on: only
+# its outs matter, so a hit skips the whole subgraph.
 export def "main check" [
 	--manifest: string                        # path to .bayt/bayt.<verb>.json
 	--stamp-file: string                      # the target's L0 stamp, cwd-relative
+	--outs-only                               # a hit skips the deps (exit 10)
 ] {
 	if ($manifest | is-empty) or ($stamp_file | is-empty) {
 		error make { msg: "cache.nu check: --manifest and --stamp-file required" }
+	}
+	let satisfied = (if $outs_only { 10 } else { 0 })
+	# Any dep that then runs may rewrite a restored out it shares a path
+	# with. So without --outs-only the check never stamps: it restores the
+	# outs now, for the deps to find in place, and the target's own `cache run
+	# --full` restores them again after the deps, skips its cmd and stamps it.
+	# A stamp from an earlier run would skip that second restore, so it goes
+	# too whenever some dep is going to run.
+	if not $outs_only {
+		if (prepare-deps $manifest) { rm -f $stamp_file }
 	}
 	let resolved = (resolve-manifest $manifest)
 	let key = (manifest-fingerprint $resolved false false true).hash
@@ -867,7 +887,7 @@ export def "main check" [
 	# only, so a target whose state is missing has to run to rebuild it.
 	let present = { outs-present $resolved.outs }
 	if ($stamp_file | path exists) and ((open $stamp_file | str trim) == $key) and (do $present) {
-		exit 10
+		exit $satisfied
 	}
 	if not (cache-enabled) { exit 0 }
 
@@ -879,10 +899,87 @@ export def "main check" [
 		false
 	}
 	if not ($hit and (do $present)) { exit 0 }
-	# A task skipped by `if:` never reaches the defer that stamps it.
-	write-stamp $stamp_file $key
+	# A task skipped by `if:` never reaches the defer that stamps it. Without
+	# --outs-only the task is not skipped and its own run stamps it (above).
+	if $outs_only { write-stamp $stamp_file $key }
 	print -e $"BAYT_CACHE HIT check ($key)"
-	exit 10
+	exit $satisfied
+}
+
+# Whether go-task will run a dep's task: its `status:` check, evaluated the
+# same way here (the dep's fingerprint, trusting its own deps' stamps, against
+# its stamp, plus every out and state path present), from the dep's dir. A
+# multi-cmd dep runs its per-cmd tasks, each gated by `<name>.<cmd>.hash`; a
+# dep that is not incremental always runs.
+def dep-runs [dep: string, base: string, name: string, dm: record]: nothing -> bool {
+	if ($dm.taskfile?.incremental? | default true) == false { return true }
+	let runnable = ($dm.cmds? | default [] | where { |c| ($c.do? | default null) != null })
+	let gates = (if ($runnable | length) > 1 {
+		$runnable | each { |c| {cmd: $c.name, stamp: $"($name).($c.name)"} }
+	} else {
+		[{cmd: "", stamp: $name}]
+	})
+	do {
+		cd $base
+		$gates | any { |g|
+			let stamp = (".task" | path join "bayt" $"($g.stamp).hash")
+			let r = (resolve-manifest $dep $g.cmd)
+			not (($stamp | path exists)
+				and (outs-present $r.outs)
+				and ((open $stamp | str trim) == (manifest-fingerprint $r false false false).hash))
+		}
+	}
+}
+
+# Walks the deps (transitively, from the manifests on disk) before any
+# restore and answers whether any of them is going to run (dep-runs). A dep
+# whose declared state is not all present also has its stamps deleted, so
+# go-task reruns it: state is a presence check, and restored outs inside a
+# state dir would otherwise pass it. `_srcs` and `_bayt` edges are static
+# views with no runnable task behind them, so they are not followed; `_outs`
+# is, since its go-task edge runs the producer.
+def prepare-deps [manifest: string]: nothing -> bool {
+	let root = (manifest-root $manifest (open $manifest).dir)
+	mut queue = [($manifest | path expand)]
+	mut seen = []
+	mut runs = false
+	while ($queue | is-not-empty) {
+		let current = ($queue | first)
+		$queue = ($queue | skip 1)
+		if ($current in $seen) or (not ($current | path exists)) { continue }
+		$seen = ($seen | append $current)
+		let m = (open $current)
+		for d in ($m.chainedDeps? | default [] | where { |d| not ($d.name =~ '_(srcs|bayt)$') }) {
+			let base = (if ($d.dir | is-empty) { $root } else { $root | path join $d.dir })
+			let name = ($d.name | str replace -r '_outs$' '')
+			let dep = ($base | path join ".bayt" $"bayt.($name).json")
+			if not ($dep | path exists) { continue }
+			# A cross-project dep runs through its `cross_*` runner, which skips
+			# the whole subtree when the dep's project has no Taskfile.yml (a
+			# docker stage carries its .bayt but not that file).
+			if ($d.dir != ($m.dir? | default "")) and (not ($base | path join "Taskfile.yml" | path exists)) { continue }
+			let dm = (open $dep)
+			# outs-present is the stamp check's own presence rule (files only
+			# for a wildcard, an optional bracket pattern always present). It
+			# probes from the dep's dir, as the stamp check does: a rooted
+			# pattern would carry the checkout path's own `[` into the match.
+			let state = ($dm.state?.globs? | default [])
+			if ($state | is-not-empty) and (not (do { cd $base; outs-present $state })) {
+				# Exactly the dep's own stamps: the target's, plus one per cmd
+				# with a `do` when there are several (the generator's per-cmd
+				# tasks). A `<name>.*` glob would also take a dotted sibling's.
+				let runnable = ($dm.cmds? | default [] | where { |c| ($c.do? | default null) != null })
+				let per_cmd = (if ($runnable | length) > 1 { $runnable | each { |c| $"($name).($c.name)" } } else { [] })
+				for st in ([$name] ++ $per_cmd) { rm -f ($base | path join ".task" "bayt" $"($st).hash") }
+				print -e $"BAYT_CACHE state missing in ($name): its stamps dropped, it reruns"
+				$runs = true
+			} else if (dep-runs $dep $base $name $dm) {
+				$runs = true
+			}
+			$queue = ($queue | append $dep)
+		}
+	}
+	$runs
 }
 
 # `cache.nu gc` — local-FS only. Walks entries, sums apparent sizes,

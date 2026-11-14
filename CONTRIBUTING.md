@@ -33,6 +33,34 @@ build` that misses installs nothing, so marking state producers `full` is right
 for gradle and wrong for pnpm. What matters is that nothing needing the state
 runs, and that is decided without knowing anything about the state.
 
+**Only a leaf skips its subgraph.** That argument holds while nothing
+downstream runs. A `cache.full` target with a consumer, such as a composer
+`build` under an `integrate`, can hit while its consumer misses, and the
+consumer then needs the deps' state, which no restore brings back. Rebuilding
+state is always correct, just slower, so that is the check's default: it
+restores on a hit but never skips, and the deps run. Skipping is
+the opt-in, `--outs-only` ("only the outs matter here"), which the generator
+emits for a leaf. Restore comes first and recomputation second, so a tool that
+would regenerate an out finds it in place, but whether a dep's state is
+missing is decided before the restore: `build`'s outs (`vendor/autoload.php`)
+live inside `setup`'s `vendor` state, and a restore that recreates the dir
+would pass the dep's presence check without an install. The check drops those
+deps' stamps first, probing each dep's state from the dep's own dir as the
+stamp check does. Any dep that then runs, whether its state was missing, its
+stamp stale or it always runs, may rewrite a restored out at a path they
+share, so the check never stamps: the target's own `cache run --full`
+restores the outs a second time, after the deps, before skipping the command
+and stamping. A target stamp from an earlier run would skip that second
+restore, so the check also drops it whenever a dep is going to run, which it
+decides as the dep's own `status:` will: the dep's fingerprint against its
+stamp (per cmd for a multi-cmd dep) with its outs and state present, or always
+for a dep that is not incremental. A cheaper presence test is not enough: a
+stamp written by a run on other inputs is present but stale. The walk
+follows `_outs` edges (their go-task edge runs the
+producer) but not `_srcs` or `_bayt`, which no task would rebuild, and drops
+only the dep's own stamps: per-cmd ones exist only when several cmds have a
+`do`.
+
 **Exit 10, not 1.** go-task reads any non-zero `if:` as "skip", so a bare check
 that crashed would skip the build in silence. The condition tests for 10 alone,
 so a crash runs the task as if the check were absent. go-task runs `if:`

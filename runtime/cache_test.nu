@@ -32,6 +32,13 @@ def main [] {
 	test_check_miss_runs
 	test_check_failure_runs
 	test_check_missing_state_runs
+	test_check_invalidates_missing_dep_state
+	test_check_ignores_static_view_deps
+	test_check_drops_target_stamp_when_a_dep_runs
+	test_check_sees_a_missing_per_cmd_stamp
+	test_check_skips_cross_deps_without_a_taskfile
+	test_check_drops_only_the_deps_own_stamps
+	test_check_state_probe_ignores_checkout_brackets
 	test_check_walks_past_stale_dep_stamp
 	test_check_trusts_stamp_of_dep_without_bayt
 	test_corrupt_entry_degrades_to_miss
@@ -343,10 +350,11 @@ def test_cross_dep_ignores_internal_task_stamps [] {
 }
 
 # `cache.nu check` against the fixture, as a cache.full target's `if:` runs it.
-def run-check [fix: record, --manifest: string = ""]: nothing -> record {
+def run-check [fix: record, --manifest: string = "", --outs-only]: nothing -> record {
 	let m = (if ($manifest | is-empty) { $fix.manifest } else { $manifest })
+	let only = (if $outs_only { ["--outs-only"] } else { [] })
 	let result = with-env { BAYT_CACHE_DIR: $fix.cache } {
-		do { cd $fix.project; ^nu $cache_nu check --manifest $m --stamp-file .task/bayt/test.hash } | complete
+		do { cd $fix.project; ^nu $cache_nu check --manifest $m --stamp-file .task/bayt/test.hash ...$only } | complete
 	}
 	{exit: $result.exit_code, stderr: $result.stderr}
 }
@@ -360,14 +368,14 @@ def test_check_hit_restores_and_stamps [] {
 	run-cache $fix [sh -c "echo from-cache > output.txt"] --full
 	rm $fix.output
 
-	let r = (run-check $fix)
+	let r = (run-check $fix --outs-only)
 	assert ($r.exit == 10) $"a hit should answer 10: ($r.exit) ($r.stderr)"
 	assert ((open $fix.output | str trim) == "from-cache") "the hit should restore the outs"
 	let stamp = ($fix.project | path join ".task" "bayt" "test.hash")
 	assert ($stamp | path exists) "the hit should write the stamp"
 
 	rm -rf $fix.cache
-	let again = (run-check $fix)
+	let again = (run-check $fix --outs-only)
 	assert ($again.exit == 10) $"a matching stamp should answer 10 without the cache: ($again.exit)"
 	print "  ok\n"
 }
@@ -375,7 +383,7 @@ def test_check_hit_restores_and_stamps [] {
 def test_check_miss_runs [] {
 	print "test check miss runs..."
 	let fix = (make-fixture)
-	let r = (run-check $fix)
+	let r = (run-check $fix --outs-only)
 	assert ($r.exit == 0) $"a miss should answer 0: ($r.exit) ($r.stderr)"
 	assert (not ($fix.output | path exists)) "a miss should restore nothing"
 	print "  ok\n"
@@ -385,7 +393,7 @@ def test_check_miss_runs [] {
 def test_check_failure_runs [] {
 	print "test check failure runs..."
 	let fix = (make-fixture)
-	let r = (run-check $fix --manifest ($fix.project | path join "missing.json"))
+	let r = (run-check $fix --outs-only --manifest ($fix.project | path join "missing.json"))
 	assert ($r.exit != 10) "a failing check must not answer 10"
 	print "  ok\n"
 }
@@ -408,8 +416,327 @@ def test_check_missing_state_runs [] {
 	run-cache $fix [sh -c "echo from-cache > output.txt"] --full
 	rm $fix.output
 
-	let r = (run-check $fix)
+	let r = (run-check $fix --outs-only)
 	assert ($r.exit == 0) $"with state missing the target should run: ($r.exit) ($r.stderr)"
+	print "  ok\n"
+}
+
+# Without --outs-only the check never skips: a target with a consumer needs
+# its deps to rebuild their state for a consumer that misses. Its outs live
+# inside the dep's state dir (composer's vendor/autoload.php inside setup's
+# vendor/), so the check drops the dep's stamps while the state is visibly
+# missing, before the restore recreates the dir and would fake it, and still
+# restores the outs. Any dep that runs may rewrite those outs, so the check
+# never stamps: the target's own `cache run --full` restores them again after
+# the deps and stamps it.
+def test_check_invalidates_missing_dep_state [] {
+	print "test check invalidates a dep whose state is missing..."
+	let fix = (make-fixture)
+	mkdir ($fix.project | path join ".bayt")
+	let setup = {
+		name: "setup"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: [], exclude: []}
+		# An optional (bracket-only) pattern with no match counts as present, as
+		# in the stamp check's own outs-present; only vendor decides.
+		state: {globs: ["vendor", "[o]ptional.lock"]}
+		chainedDeps: []
+		cmds: [{name: "composer", do: "composer install", srcs: {globs: [], exclude: []}}, {name: "npm", do: "npm ci", srcs: {globs: [], exclude: []}}]
+	}
+	$setup | to json | save -f ($fix.project | path join ".bayt" "bayt.setup.json")
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["vendor/autoload.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "setup", project: "test_proj", dir: ""}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+	mkdir ($fix.project | path join "vendor")
+	run-cache $fix [sh -c "echo from-cache > vendor/autoload.txt"] --full
+	let stamps = ($fix.project | path join ".task" "bayt")
+	mkdir $stamps
+	for st in ["setup" "setup.composer" "setup.npm" "setup.docs"] { "stale\n" | save -f ($stamps | path join $"($st).hash") }
+	# A fresh checkout: the stamps came back from a CI cache, vendor/ did not.
+	rm -rf ($fix.project | path join "vendor")
+
+	let r = (run-check $fix)
+	assert ($r.exit == 0) $"without --outs-only the check must never answer 10: ($r.exit) ($r.stderr)"
+	assert ((open ($fix.project | path join "vendor" "autoload.txt") | str trim) == "from-cache") "the hit should still restore the outs first"
+	for st in ["setup" "setup.composer" "setup.npm"] {
+		assert (not ($stamps | path join $"($st).hash" | path exists)) $"the dep's stamp ($st) should be dropped"
+	}
+	assert ($stamps | path join "setup.docs.hash" | path exists) "a dotted sibling target's stamp is not the dep's"
+	assert (not ($stamps | path join "test.hash" | path exists)) "without --outs-only the check never stamps"
+
+	# go-task now runs the dep, which rewrites the out they share; the
+	# target's own `cache run --full` then restores it again and skips.
+	"from-setup\n" | save -f ($fix.project | path join "vendor" "autoload.txt")
+	let run = (run-cache $fix [sh -c "echo SHOULD_NOT_RUN; echo rebuilt > vendor/autoload.txt"] --full)
+	assert ($run.exit == 0) $"the target's cache run should hit: ($run.exit)"
+	assert (not ($run.stdout | str contains "SHOULD_NOT_RUN")) "an exact hit skips the cmd"
+	assert ((open ($fix.project | path join "vendor" "autoload.txt") | str trim) == "from-cache") "the run restores the out over what the dep wrote"
+
+	# With the state present nothing is dropped, and still nothing is stamped.
+	"fresh\n" | save -f ($stamps | path join "setup.hash")
+	let again = (run-check $fix)
+	assert ($again.exit == 0) $"without --outs-only the check must never answer 10: ($again.exit)"
+	assert ($stamps | path join "setup.hash" | path exists) "a dep whose state is present keeps its stamp"
+	assert (not ($stamps | path join "test.hash" | path exists)) "without --outs-only the check never stamps"
+	print "  ok\n"
+}
+
+# A single-cmd dep has only `<name>.hash`: the generator makes per-cmd tasks
+# (and stamps) only for several cmds with a `do`. `setup.builtin.hash` would
+# be a sibling target named `setup.builtin`, so it stays.
+def test_check_drops_only_the_deps_own_stamps [] {
+	print "test check drops only the dep's own stamps..."
+	let fix = (make-fixture)
+	mkdir ($fix.project | path join ".bayt")
+	{
+		name: "setup", project: "test_proj", dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: [], exclude: []}
+		state: {globs: ["vendor"]}
+		chainedDeps: []
+		cmds: [{name: "builtin", do: "true", srcs: {globs: [], exclude: []}}]
+	} | to json | save -f ($fix.project | path join ".bayt" "bayt.setup.json")
+	{
+		name: "test", project: "test_proj", dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "setup", project: "test_proj", dir: ""}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+	let stamps = ($fix.project | path join ".task" "bayt")
+	mkdir $stamps
+	for st in ["setup" "setup.builtin"] { "stale\n" | save -f ($stamps | path join $"($st).hash") }
+	let r = (run-check $fix)
+	assert ($r.exit == 0) $"without --outs-only the check must never answer 10: ($r.exit) ($r.stderr)"
+	assert (not ($stamps | path join "setup.hash" | path exists)) "the dep's own stamp should be dropped"
+	assert ($stamps | path join "setup.builtin.hash" | path exists) "a single-cmd dep has no per-cmd stamp to drop"
+	print "  ok\n"
+}
+
+# The state probe runs from the dep's dir: rooted under a checkout path with
+# a `[`, `vendor` would read as an optional bracket pattern and pass.
+def test_check_state_probe_ignores_checkout_brackets [] {
+	print "test check state probe ignores brackets in the checkout path..."
+	let outer = (mktemp -d)
+	let proj = ($outer | path join "proj[1]")
+	mkdir ($proj | path join ".bayt")
+	"hello\n" | save -f ($proj | path join "input.txt")
+	let fix = {
+		manifest: ($proj | path join "manifest.json")
+		input:    ($proj | path join "input.txt")
+		output:   ($proj | path join "output.txt")
+		project:  $proj
+		cache:    (mktemp -d)
+	}
+	{
+		name: "setup", project: "test_proj", dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: [], exclude: []}
+		state: {globs: ["vendor"]}
+		chainedDeps: []
+		cmds: []
+	} | to json | save -f ($proj | path join ".bayt" "bayt.setup.json")
+	{
+		name: "test", project: "test_proj", dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "setup", project: "test_proj", dir: ""}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+	let stamps = ($proj | path join ".task" "bayt")
+	mkdir $stamps
+	"stale\n" | save -f ($stamps | path join "setup.hash")
+	let r = (run-check $fix)
+	assert ($r.exit == 0) $"without --outs-only the check must never answer 10: ($r.exit) ($r.stderr)"
+	assert (not ($stamps | path join "setup.hash" | path exists)) "missing state under a bracketed checkout path must still drop the stamp"
+	print "  ok\n"
+}
+
+# A target stamp from an earlier run survives only while no dep is going to
+# run: a dep that reruns (here, its stamp lost while its state is present)
+# may rewrite a shared out, and `status:` passing on the old stamp would skip
+# the target's second restore.
+def test_check_drops_target_stamp_when_a_dep_runs [] {
+	print "test check drops the target stamp when a dep is going to run..."
+	let fix = (make-fixture)
+	mkdir ($fix.project | path join ".bayt")
+	{
+		name: "setup", project: "test_proj", dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: [], exclude: []}
+		state: {globs: ["vendor"]}
+		chainedDeps: []
+		cmds: []
+		taskfile: {incremental: true}
+	} | to json | save -f ($fix.project | path join ".bayt" "bayt.setup.json")
+	{
+		name: "test", project: "test_proj", dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "setup", project: "test_proj", dir: ""}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+	mkdir ($fix.project | path join "vendor")
+	"built\n" | save -f $fix.output
+	let stamps = ($fix.project | path join ".task" "bayt")
+	# Both built and stamped, as a finished `task` run leaves them.
+	do { cd $fix.project; ^nu $fingerprint_nu --manifest ($fix.project | path join ".bayt" "bayt.setup.json") --stamp-file .task/bayt/setup.hash --update-stamp }
+	do { cd $fix.project; ^nu $fingerprint_nu --manifest $fix.manifest --stamp-file .task/bayt/test.hash --update-stamp }
+
+	let kept = (run-check $fix)
+	assert ($kept.exit == 0) $"without --outs-only the check must never answer 10: ($kept.exit) ($kept.stderr)"
+	assert ($stamps | path join "test.hash" | path exists) "with no dep going to run, the target keeps its stamp"
+
+	# A stamp written by a run on other inputs: present, but its status: misses.
+	"0123stale\n" | save -f ($stamps | path join "setup.hash")
+	let stale = (run-check $fix)
+	assert ($stale.exit == 0) $"without --outs-only the check must never answer 10: ($stale.exit) ($stale.stderr)"
+	assert (not ($stamps | path join "test.hash" | path exists)) "a dep with a stale stamp is going to run, so the target's stamp goes"
+
+	do { cd $fix.project; ^nu $fingerprint_nu --manifest ($fix.project | path join ".bayt" "bayt.setup.json") --stamp-file .task/bayt/setup.hash --update-stamp }
+	do { cd $fix.project; ^nu $fingerprint_nu --manifest $fix.manifest --stamp-file .task/bayt/test.hash --update-stamp }
+	rm ($stamps | path join "setup.hash")
+	let r = (run-check $fix)
+	assert ($r.exit == 0) $"without --outs-only the check must never answer 10: ($r.exit) ($r.stderr)"
+	assert (not ($stamps | path join "test.hash" | path exists)) "a dep with no stamp is going to run, so the target's stamp goes"
+	print "  ok\n"
+}
+
+# A multi-cmd dep runs per-cmd tasks gated by `<name>.<cmd>.hash`: one of
+# them missing means that cmd reruns, even with the aggregate stamp in place.
+def test_check_sees_a_missing_per_cmd_stamp [] {
+	print "test check sees a multi-cmd dep's missing per-cmd stamp..."
+	let fix = (make-fixture)
+	mkdir ($fix.project | path join ".bayt")
+	let setup_manifest = ($fix.project | path join ".bayt" "bayt.setup.json")
+	{
+		name: "setup", project: "test_proj", dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: [], exclude: []}
+		state: {globs: []}
+		chainedDeps: []
+		cmds: [{name: "composer", do: "composer install", srcs: {globs: ["input.txt"], exclude: []}}, {name: "npm", do: "npm ci", srcs: {globs: ["input.txt"], exclude: []}}]
+		taskfile: {incremental: true}
+	} | to json | save -f $setup_manifest
+	{
+		name: "test", project: "test_proj", dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "setup", project: "test_proj", dir: ""}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+	"built\n" | save -f $fix.output
+	let stamps = ($fix.project | path join ".task" "bayt")
+	do {
+		cd $fix.project
+		^nu $fingerprint_nu --manifest $setup_manifest --cmd composer --stamp-file .task/bayt/setup.composer.hash --update-stamp
+		^nu $fingerprint_nu --manifest $setup_manifest --cmd npm --stamp-file .task/bayt/setup.npm.hash --update-stamp
+		^nu $fingerprint_nu --manifest $setup_manifest --stamp-file .task/bayt/setup.hash --update-stamp
+		^nu $fingerprint_nu --manifest $fix.manifest --stamp-file .task/bayt/test.hash --update-stamp
+	}
+	let kept = (run-check $fix)
+	assert ($stamps | path join "test.hash" | path exists) $"with every per-cmd stamp current the target keeps its stamp: ($kept.stderr)"
+
+	rm ($stamps | path join "setup.npm.hash")
+	let r = (run-check $fix)
+	assert ($r.exit == 0) $"without --outs-only the check must never answer 10: ($r.exit) ($r.stderr)"
+	assert (not ($stamps | path join "test.hash" | path exists)) "a missing per-cmd stamp means that cmd reruns, so the target's stamp goes"
+	print "  ok\n"
+}
+
+# A cross-project dep runs through a runner that skips it when the dep's
+# project has no Taskfile.yml, so there it cannot rewrite anything and the
+# target keeps its stamp; with the file present it runs (here, always).
+def test_check_skips_cross_deps_without_a_taskfile [] {
+	print "test check skips cross-project deps whose runner would skip..."
+	let fix = (make-fixture)
+	let dep = ($fix.project | path join "libs" "dep")
+	mkdir ($dep | path join ".bayt")
+	{
+		name: "build", project: "libs_dep", dir: "libs/dep"
+		srcs: {globs: [], exclude: []}
+		outs: {globs: [], exclude: []}
+		state: {globs: []}
+		chainedDeps: []
+		cmds: []
+		taskfile: {incremental: false}
+	} | to json | save -f ($dep | path join ".bayt" "bayt.build.json")
+	{
+		name: "test", project: "test_proj", dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "build", project: "libs_dep", dir: "libs/dep"}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+	"built\n" | save -f $fix.output
+	let stamps = ($fix.project | path join ".task" "bayt")
+	do { cd $fix.project; ^nu $fingerprint_nu --manifest $fix.manifest --stamp-file .task/bayt/test.hash --update-stamp }
+
+	let kept = (run-check $fix)
+	assert ($kept.exit == 0) $"without --outs-only the check must never answer 10: ($kept.exit) ($kept.stderr)"
+	assert ($stamps | path join "test.hash" | path exists) "a cross dep whose runner skips keeps the target's stamp"
+
+	"version: '3'\n" | save -f ($dep | path join "Taskfile.yml")
+	let r = (run-check $fix)
+	assert (not ($stamps | path join "test.hash" | path exists)) "with its Taskfile.yml the non-incremental cross dep runs, so the target's stamp goes"
+	print "  ok\n"
+}
+
+# A `_srcs` (or `_bayt`) edge is a static view with no runnable task behind
+# it: nothing would rebuild the producer's state or restamp it, so the walk
+# does not follow it.
+def test_check_ignores_static_view_deps [] {
+	print "test check ignores static view deps..."
+	let fix = (make-fixture)
+	mkdir ($fix.project | path join ".bayt")
+	{
+		name: "setup"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: [], exclude: []}
+		state: {globs: ["vendor"]}
+		chainedDeps: []
+		cmds: []
+		synthetics: {srcs: {
+			name: "setup_srcs", project: "test_proj", dir: "", activate: ""
+			srcs: {globs: [], exclude: []}
+			outs: {globs: ["input.txt"], exclude: []}
+			state: {globs: []}
+			chainedDeps: []
+			cmds: []
+		}}
+	} | to json | save -f ($fix.project | path join ".bayt" "bayt.setup.json")
+	{
+		name: "test"
+		project: "test_proj"
+		dir: ""
+		srcs: {globs: ["input.txt"], exclude: []}
+		outs: {globs: ["output.txt"], exclude: []}
+		state: {globs: []}
+		chainedDeps: [{name: "setup_srcs", project: "test_proj", dir: ""}]
+		cmds: []
+	} | to json | save -f $fix.manifest
+	let stamps = ($fix.project | path join ".task" "bayt")
+	mkdir $stamps
+	"kept\n" | save -f ($stamps | path join "setup.hash")
+	let r = (run-check $fix)
+	assert ($r.exit == 0) $"without --outs-only the check must never answer 10: ($r.exit) ($r.stderr)"
+	assert ($stamps | path join "setup.hash" | path exists) "a _srcs edge must not drop the producer's stamps"
 	print "  ok\n"
 }
 
@@ -446,11 +773,11 @@ def test_check_walks_past_stale_dep_stamp [] {
 	do { cd $dep; ^nu $fingerprint_nu --manifest ($dep | path join ".bayt" "bayt.build.json") --stamp-file .task/bayt/build.hash --update-stamp }
 	"built\n" | save -f $fix.output
 	do { cd $fix.project; ^nu $fingerprint_nu --manifest $fix.manifest --stamp-file .task/bayt/test.hash --update-stamp }
-	assert ((run-check $fix).exit == 10) "a built, unedited tree should answer 10"
+	assert ((run-check $fix --outs-only).exit == 10) "a built, unedited tree should answer 10"
 
 	# Edit the dep; its stamp is not refreshed until it runs.
 	"v2\n" | save -f ($dep | path join "a.txt")
-	let r = (run-check $fix)
+	let r = (run-check $fix --outs-only)
 	assert ($r.exit == 0) $"an edited dep should make the consumer run: ($r.exit)"
 	print "  ok\n"
 }
@@ -476,7 +803,7 @@ def test_check_trusts_stamp_of_dep_without_bayt [] {
 	"built\n" | save -f $fix.output
 	do { cd $fix.project; ^nu $fingerprint_nu --manifest $fix.manifest --stamp-file .task/bayt/test.hash --update-stamp }
 
-	let r = (run-check $fix)
+	let r = (run-check $fix --outs-only)
 	assert ($r.exit == 10) $"a stamped consumer of a .bayt-less dep should answer 10: ($r.exit) ($r.stderr)"
 	print "  ok\n"
 }

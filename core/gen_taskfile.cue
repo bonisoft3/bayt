@@ -32,6 +32,14 @@ import (
 	// Only targets that declared a taskfile block on their #target.
 	_emit: {for n, t in _m.files if t.taskfile != _|_ {(n): t}}
 
+	// Targets another same-project target depends on (directly, or through
+	// its `_outs` view). A cache.full hit may skip its subgraph only when
+	// nothing downstream can still run and need the subgraph's state.
+	_consumed: {
+		for _, t in _m.files if t.sameProjectDeps != _|_
+		for d in t.sameProjectDeps {(strings.TrimSuffix(d, "_outs")): true}
+	}
+
 	// bayt/sayt invocation tokens. Consumer mode (runtime == ""): bare
 	// names resolved via PATH (`mise install github:bonisoft3/bayt`).
 	// Monorepo mode (`bayt generate --runtime plugins/bayt`): depth-
@@ -262,11 +270,19 @@ import (
 							status: [(_fingerprint & {"t": t, mode: "check"}).out]
 						}
 
-						// go-task evaluates `if:` before the deps, so a hit
-						// skips them too. Exit contract at cache.nu's
-						// `main check`.
+						// go-task evaluates `if:` before the deps. The check
+						// (cache.nu's `main check`) drops the stamps of deps
+						// whose state is missing, restores the outs on an
+						// exact hit and never skips, so the deps rebuild
+						// their state over outs already in place; the
+						// target's own `cache run --full` then restores again
+						// and stamps it. A leaf (no same-project consumer,
+						// not public) adds --outs-only: nothing downstream
+						// needs the deps' state, so a hit (exit 10) skips its
+						// whole subgraph.
 						if t.taskfile.incremental && t.cache.full && len(_taskCmds) == 1 {
-							if: "\(_baytPath) cache check --manifest '{{.TASKFILE_DIR}}/bayt.\(t.name).json' --stamp-file .task/bayt/\(t.name).hash; [ $? -ne 10 ]"
+							let _outsOnly = [if _consumed[n] == _|_ && t.visibility != "public" {" --outs-only"}, ""][0]
+							if: "\(_baytPath) cache check --manifest '{{.TASKFILE_DIR}}/bayt.\(t.name).json' --stamp-file .task/bayt/\(t.name).hash\(_outsOnly); [ $? -ne 10 ]"
 						}
 
 						if len(_taskCmds) == 0 if t.taskfile.incremental {
