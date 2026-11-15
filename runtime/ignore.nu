@@ -223,7 +223,7 @@ def git-enumerate [root: string, subs: list<string>]: nothing -> any {
   # A record, not a list: `in` over a list is linear, and at repo scope that
   # turns the subtraction into |tracked| x |ignored| comparisons.
   let drop = (($ign.stdout + $deleted.stdout) | split row (char nul) | where { |p| not ($p | is-empty) }
-    | reduce --fold {} { |p, acc| $acc | insert $p true })
+    | each { |p| {$p: true} } | into record)
   # `.git` and `.task` are tool boundaries the walk never descends into. git
   # knows only ignore files, so in a repo whose .gitignore does not name
   # `.task/` the two paths would otherwise disagree — the fast path handing
