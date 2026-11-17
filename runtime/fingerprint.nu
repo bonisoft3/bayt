@@ -160,8 +160,12 @@ export def load-index [root: string]: nothing -> record {
 }
 
 # Atomically update .task/bayt/index with new or modified file entries.
+#
+# Each call reads, merges and rewrites the whole index, so a caller that hashes
+# many closures in one process turns it off with BAYT_INDEX_WRITE=off (see
+# depot-plan).
 def update-index [root: string, entries: record]: nothing -> nothing {
-  if ($entries | is-empty) { return }
+  if ($entries | is-empty) or ($env.BAYT_INDEX_WRITE? == "off") { return }
   let dir = ($root | path expand | path join ".task/bayt")
   mkdir $dir
   let f = ($dir | path join "index")
@@ -360,12 +364,18 @@ const synthetic_views = ["srcs" "outs" "bayt"]
 # par-each hands each branch a copy of what it closes over, so a memo filled
 # inside the fan-out would be filled once per branch; this is filled before it.
 def plan-scopes [r: record]: nothing -> record {
+  enumerate-scopes $r.root (scope-list $r)
+}
+
+# The scopes plan-scopes enumerates, for a caller that plans several closures
+# at once (depot-plan).
+export def scope-list [r: record]: nothing -> list<string> {
   let rel = { |d| if ($d | path expand) == $r.root { "" } else {
     $d | path expand | str substring (($r.root | str length) + 1).. } }
   let own = [(do $rel $r.project)]
   let ctxs = (($r.contexts? | default []) | each { |d| do $rel ($r.root | path join $d) })
   let deps = (($r.deps? | default []) | each { |d| $d.dir })
-  enumerate-scopes $r.root (($own ++ $ctxs ++ $deps) | uniq)
+  ($own ++ $ctxs ++ $deps) | uniq
 }
 
 # A target's fingerprint folds its deps' — see dep-hashes for where those come

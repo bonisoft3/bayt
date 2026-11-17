@@ -74,12 +74,23 @@ def "main depot-plan" [
 	--out: string = ""           # write here instead of stdout
 ] {
 	use core/depot.nu [depot-targets]
-	use runtime/fingerprint.nu [closure-hash, load-index]
+	use runtime/fingerprint.nu [closure-hash, load-index, resolve-manifest, scope-list]
+	use runtime/ignore.nu [enumerate-scopes]
 	let evaluated = (open $plan)
 	let targets = (depot-targets $evaluated)
 	# All targets in one plan share the repo root; load the stat index once.
 	let root = ("." | path expand)
 	let index = (load-index $root)
+	# Without trees, each leaf enumerates its scopes again, and the leaves of
+	# one group name mostly the same directories. A leaf whose manifest does
+	# not resolve plans nothing here and fails open below as before.
+	let trees = (enumerate-scopes $root ($targets | each { |t|
+		try { scope-list (resolve-manifest $t.manifest "" "" true) } catch { [] }
+	} | flatten | uniq))
+	# A plan that starts cold (a CI checkout) rewrites the whole index once per
+	# hashed closure, which costs more than hashing every file again: on a
+	# 76-leaf group, 50s with the writes against 15s without them.
+	$env.BAYT_INDEX_WRITE = "off"
 
 	# Arguments for closure-hash:
 	# cmd="", docker=false, view="", all_cmds=true (image scope), walk=false (trust stamps)
@@ -88,7 +99,7 @@ def "main depot-plan" [
 	for t in $targets {
 		let cur_memo = $memo
 		let res = (try {
-			closure-hash $t.manifest "" false $cur_memo "" true false $index
+			closure-hash $t.manifest "" false $cur_memo "" true false $index $trees
 		} catch { |err|
 			# Fail open: a per-leaf failure must stay a per-leaf empty hash so sayt/plan
 			# builds it, rather than aborting the walk for the whole group.
