@@ -137,14 +137,39 @@ import (
 			if _h.template == "http" {_http.url},
 			"",
 		][0]
+		// A probe process-compose makes itself forks nothing: an exec probe runs
+		// a toolchain each second (~0.16 CPU-s), so an HTTP check with a port is
+		// native http_get. A url-only check, or one that repeats a header name
+		// (a map cannot carry it), keeps the exec form.
+		let _hdrNames = [for h in _allHeaders {strings.ToLower(strings.TrimSpace(strings.Split(h, ":")[0]))}]
+		let _hdrUniq = {for n in _hdrNames {(n): true}}
+		let _native = [
+			if _h.template == "http" if _http.port != _|_ if len(_hdrUniq) == len(_hdrNames) {true},
+			false,
+		][0]
 		out: {
-			exec: command: [
-				if _h.template == "http" {"\(_microcheckHost) httpcheck \(_httpArgs)\(_httpURL)"},
-				if _h.template == "tcp" {"\(_microcheckHost) portcheck --port \((_own & {port: "\(_h.port)"}).out)"},
-				if _h.template == "postgres" {"pg_isready -h \(_h.host) -p \((_own & {port: "\(_h.port)"}).out) -d \(_h.db) -U \(_h.user)"},
-				if _h.template == "redis" {"redis-cli -p \((_own & {port: "6379"}).out) ping | grep PONG"},
-				"env OLLAMA_HOST=127.0.0.1:\((_own & {port: "11434"}).out) ollama list | grep -q \(_h.model)",
-			][0]
+			if _native {
+				http_get: {
+					scheme: _http.scheme
+					host:   _http.host
+					port:   (_own & {port: "\(_http.port)"}).out
+					path:   _http.path
+					if len(_allHeaders) > 0 {
+						headers: {for h in _allHeaders {
+							(strings.TrimSpace(strings.Split(h, ":")[0])): strings.TrimSpace(strings.Join(list.Drop(strings.Split(h, ":"), 1), ":"))
+						}}
+					}
+				}
+			}
+			if !_native {
+				exec: command: [
+					if _h.template == "http" {"\(_microcheckHost) httpcheck \(_httpArgs)\(_httpURL)"},
+					if _h.template == "tcp" {"\(_microcheckHost) portcheck --port \((_own & {port: "\(_h.port)"}).out)"},
+					if _h.template == "postgres" {"pg_isready -h \(_h.host) -p \((_own & {port: "\(_h.port)"}).out) -d \(_h.db) -U \(_h.user)"},
+					if _h.template == "redis" {"redis-cli -p \((_own & {port: "6379"}).out) ping | grep PONG"},
+					"env OLLAMA_HOST=127.0.0.1:\((_own & {port: "11434"}).out) ollama list | grep -q \(_h.model)",
+				][0]
+			}
 			(_probeTiming & {healthcheck: _h}).out
 		}
 	}
@@ -186,16 +211,11 @@ import (
 			][0]
 			(n): [
 				if _base != null && _pc.readiness_probe != _|_ {
-					for k, v in _base if _pc.readiness_probe[k] == _|_ {(k): v}
-					for k, v in _pc.readiness_probe if k != "exec" {(k): v}
-					if _pc.readiness_probe.exec != _|_ {
-						exec: {
-							if _base.exec != _|_ {
-								for k, v in _base.exec if _pc.readiness_probe.exec[k] == _|_ {(k): v}
-							}
-							for k, v in _pc.readiness_probe.exec {(k): v}
-						}
-					}
+					// An override that carries one probe kind replaces the other's.
+					for k, v in _base if _pc.readiness_probe[k] == _|_ if !(k == "http_get" && _pc.readiness_probe.exec != _|_) if !(k == "exec" && _pc.readiness_probe.http_get != _|_) {(k): v}
+					for k, v in _pc.readiness_probe if k != "exec" && k != "http_get" {(k): v}
+					if _pc.readiness_probe.exec != _|_ {exec: _pc.readiness_probe.exec}
+					if _pc.readiness_probe.http_get != _|_ {http_get: _pc.readiness_probe.http_get}
 				},
 				if _base != null {_base},
 				if _pc.readiness_probe != _|_ {_pc.readiness_probe},

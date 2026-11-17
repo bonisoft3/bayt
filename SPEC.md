@@ -233,9 +233,18 @@ check as its readiness probe, on the host's spelling of each own port (for HTTP,
 `healthcheck: {port, path, host?, scheme?}`). A target
 with no image takes the check alone, `healthcheck: bayt.healthcheck.#<kind> &
 {…}`, since the template also writes the Dockerfile and compose checks.
-microcheck's run through `bayt microcheck`, from checksum-pinned stubs that a
-`bayt:<checker>` one-shot installs before the process probing with them starts,
-and need a Linux or macOS host, microcheck publishing no Windows build. process-compose
+An HTTP check with a `port` is process-compose's native `http_get` (`headers`
+as a map), never a command: process-compose probes every second for the
+process's whole life, and a probe that starts a toolchain each time costs
+0.075 CPU-s (bayt 0.72.4 on process-compose 1.122, 2026-11-17: five servers
+probed every second used 22.4 CPU-s a minute as commands, 1.0 as `http_get`,
+servers included), where `http_get` forks nothing. A check given only a `url`, or repeating a header
+name, which a map cannot hold, keeps the command form, as do the other templates.
+A `process-compose.readiness_probe` that carries `exec` or `http_get` replaces the
+other kind. The rest are microcheck's, run through `bayt microcheck`, from
+checksum-pinned stubs that a `bayt:<checker>` one-shot installs before the
+process probing with them starts, and need a Linux or macOS host, microcheck
+publishing no Windows build. process-compose
 terminates a process that misses `failure_threshold` and skips what waits on it,
 so the threshold covers `start_period` as well as the retries; a duration compose
 would refuse fails generation. It waits forever for health a process has no probe

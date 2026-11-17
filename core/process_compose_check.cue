@@ -152,14 +152,19 @@ _proc: crud: {
 		"PG_IMAGE=database:5432-alpine",
 		"SELF=http://localhost:\(_proc_ref.http)/rpc",
 	]
+	// Its probe is process-compose's own http_get, so no microcheck one-shot.
 	depends_on: close({
-		database: condition:         "process_healthy"
-		"crud:build": condition:     "process_completed_successfully"
-		"bayt:httpcheck": condition: "process_completed_successfully"
+		database: condition:     "process_healthy"
+		"crud:build": condition: "process_completed_successfully"
 	})
 	availability: exit_on_skipped: true
 	readiness_probe: {
-		exec: command: "\(_microcheckHost) httpcheck http://127.0.0.1:\(_proc_ref.admin)/ready"
+		http_get: {
+			scheme: "http"
+			host:   "127.0.0.1"
+			port:   _proc_ref.admin
+			path:   "/ready"
+		}
 		period_seconds: 1
 		// 30 retries plus the 30s start window at 1s.
 		failure_threshold: 60
@@ -179,15 +184,16 @@ _proc: integrate: {
 }
 
 // The build stays the `default` task dependents reach, and no other task
-// exists: the stack runs it as a one-shot its process waits on, beside the
-// microcheck install its probe needs.
+// exists: the stack runs it as a one-shot its process waits on.
 _proc_tf: (#taskfileGen & {project: _proc_project, depManifests: {}}).files.integrate.tasks
 _proc_tf: default: deps: ["::bayt:crud", "::bayt:worker"]
 _proc_tf:   {[!~"^default$"]: _|_}
 _proc_file: _proc_gen.file
 _proc_file: {ordered_shutdown: true}
 _proc: "integrate:build": entrypoint: ["task", "-t", ".bayt/Taskfile.yml", "bayt:integrate"]
-_proc: "bayt:httpcheck": entrypoint:  ["bayt", "microcheck", "httpcheck", "--help"]
+// No process runs an exec microcheck here, so no install one-shot exists.
+_proc_noshot: [for n, _ in _proc if n == "bayt:httpcheck" {n}]
+_proc_noshot: []
 _proc: integrate: depends_on: close({
 	crud: condition:              "process_healthy"
 	"integrate:build": condition: "process_completed_successfully"
@@ -301,6 +307,67 @@ _proc_embedded_project: #project & {
 _proc_embedded: (#processComposeGen & {project: _proc_embedded_project, depManifests: {}}).file.processes.srv
 _proc_embedded: readiness_probe: exec: command: "\(_microcheckHost) httpcheck http://localhost:3000/health"
 
+// A check with a port is process-compose's own http_get, headers as a map; a
+// repeated header name, which a map cannot hold, keeps the exec probe.
+_proc_native_project: #project & {
+	name:     "nat"
+	dir:      "apps/nat"
+	activate: ""
+	targets: {
+		srv: {
+			healthcheck: {template: "http", port: 3000, path: "/health", authorization: "Bearer secret", headers: ["X-Custom: 123", "X-Url: http://a:b"], start_interval: "200ms", interval: "1s", timeout: "5s", retries: 30, start_period: "30s"}
+			expose: api: {port: 3000, env: "SRV_PORT", host: 3400}
+			entrypoint: do: "server"
+			compose: {}
+		}
+		dup: {
+			healthcheck: {template: "http", port: 3001, headers: ["X-A: 1", "x-a: 2"], start_interval: "200ms", interval: "1s", timeout: "5s", retries: 30, start_period: "30s"}
+			expose: api: port: 3001
+			entrypoint: do: "server"
+			compose: {}
+		}
+		// An override that carries exec drops the base's http_get, and one that
+		// carries http_get drops the base's exec.
+		over: {
+			healthcheck: {template: "http", port: 3002, start_interval: "200ms", interval: "1s", timeout: "5s", retries: 30, start_period: "30s"}
+			expose: api: port: 3002
+			entrypoint: do: "server"
+			compose: {}
+			"process-compose": readiness_probe: exec: command: "curl -sf http://127.0.0.1:3002/up"
+		}
+		overhttp: {
+			healthcheck: {template: "http", url: "http://localhost:3003/health", start_interval: "200ms", interval: "1s", timeout: "5s", retries: 30, start_period: "30s"}
+			expose: api: port: 3003
+			entrypoint: do: "server"
+			compose: {}
+			"process-compose": readiness_probe: http_get: {host: "127.0.0.1", port: "3003", path: "/up"}
+		}
+	}
+}
+_proc_native: (#processComposeGen & {project: _proc_native_project, depManifests: {}}).file.processes
+_proc_native: srv: readiness_probe: {
+	http_get: {
+		scheme: "http"
+		host:   "127.0.0.1"
+		port:   "${SRV_API_PORT:-3400}"
+		path:   "/health"
+		headers: {
+			Authorization: "Bearer secret"
+			"X-Custom":    "123"
+			"X-Url":       "http://a:b"
+		}
+	}
+	period_seconds:    1
+	timeout_seconds:   5
+	failure_threshold: 60
+}
+_proc_native: dup: readiness_probe: exec: command: "\(_microcheckHost) httpcheck -H \"X-A: 1\" -H \"x-a: 2\" http://127.0.0.1:3001/"
+_proc_native: over: readiness_probe: exec: command: "curl -sf http://127.0.0.1:3002/up"
+_proc_native: overhttp: readiness_probe: http_get: {host: "127.0.0.1", port: "3003", path: "/up"}
+// Which probe kinds each carries: the base's other kind is dropped.
+_proc_native_kinds: {for n, p in _proc_native if n != "bayt:httpcheck" {(n): [for k, _ in p.readiness_probe if k == "exec" || k == "http_get" {k}]}}
+_proc_native_kinds: {srv: ["http_get"], dup: ["exec"], over: ["exec"], overhttp: ["http_get"]}
+
 // More-specific projections (dockerfile, compose, process-compose) override
 // the base entrypoint, expose, and healthcheck per field or key.
 _proc_host_only_project: #project & {
@@ -356,7 +423,8 @@ _proc_host_only_svc: {
 Tests: process_compose: {
 	host:       _proc
 	task:       _proc_tf
-	file:       _proc_file
+	file:       [_proc_file, _proc_noshot]
+	native:     [_proc_native, _proc_native_kinds]
 	runtime:    _proc_rt
 	seconds:    _proc_seconds
 	argv:       _proc_argv
