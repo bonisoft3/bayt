@@ -240,8 +240,14 @@ process's whole life, and a probe that starts a toolchain each time costs
 probed every second used 22.4 CPU-s a minute as commands, 1.0 as `http_get`,
 servers included), where `http_get` forks nothing. A check given only a `url`, or repeating a header
 name, which a map cannot hold, keeps the command form, as do the other templates.
-A `process-compose.readiness_probe` that carries `exec` or `http_get` replaces the
-other kind. The rest are microcheck's, run through `bayt microcheck`, from
+`http_get` needs exactly `status` (default 200, always emitted as `status_code`),
+where the container check and `httpcheck` accept any 2xx; it follows redirects,
+which `httpcheck` does not, verifies https with the system trust (no skip-verify),
+and probes port 80 when a port value is not numeric.
+A `process-compose.readiness_probe` that carries `exec` replaces `http_get`, and
+one that carries `http_get` replaces `exec`; an `http_get` over a native one merges
+per field (a `status_code: 204` keeps the port, host and path). A
+`liveness_probe` running `bayt microcheck <c>` also gets the `bayt:<c>` one-shot. The rest are microcheck's, run through `bayt microcheck`, from
 checksum-pinned stubs that a `bayt:<checker>` one-shot installs before the
 process probing with them starts, and need a Linux or macOS host, microcheck
 publishing no Windows build. process-compose

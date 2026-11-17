@@ -235,7 +235,7 @@ one declaration. Five templates ship today:
 
 | Fragment | Probe | Tool source |
 |----------|-------|-------------|
-| `bayt.healthcheck.http`     | HTTP GET 2xx           | `httpcheck` from microcheck (auto COPY) |
+| `bayt.healthcheck.http`     | HTTP GET 2xx (`status`, default 200, on process-compose) | `httpcheck` from microcheck (auto COPY) |
 | `bayt.healthcheck.tcp`      | TCP listener up        | `portcheck` from microcheck (auto COPY) |
 | `bayt.healthcheck.postgres` | `pg_isready`           | bundled in postgres image |
 | `bayt.healthcheck.redis`    | `redis-cli ping` PONG  | bundled in redis image |

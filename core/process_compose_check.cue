@@ -276,6 +276,7 @@ _proc_auth_project: #project & {
 	dir:      "apps/auth_test"
 	activate: ""
 	targets: srv: healthcheck.http & {
+		dockerfile: from: name: "alpine:3"
 		expose: api: port: 3000
 		healthcheck: {
 			url:           "http://localhost:3000/health"
@@ -342,6 +343,27 @@ _proc_native_project: #project & {
 			compose: {}
 			"process-compose": readiness_probe: http_get: {host: "127.0.0.1", port: "3003", path: "/up"}
 		}
+		// An explicit status is emitted as status_code.
+		stat: {
+			healthcheck: {template: "http", port: 3006, status: 204, start_interval: "200ms", interval: "1s", timeout: "5s", retries: 30, start_period: "30s"}
+			expose: api: port: 3006
+			entrypoint: do: "server"
+			compose: {}
+		}
+		part: {
+			healthcheck: {template: "http", port: 3004, start_interval: "200ms", interval: "1s", timeout: "5s", retries: 30, start_period: "30s"}
+			expose: api: port: 3004
+			entrypoint: do: "server"
+			compose: {}
+			"process-compose": readiness_probe: http_get: {path: "/up", status_code: 204}
+		}
+		live: {
+			healthcheck: {template: "http", port: 3005, start_interval: "200ms", interval: "1s", timeout: "5s", retries: 30, start_period: "30s"}
+			expose: api: port: 3005
+			entrypoint: do: "server"
+			compose: {}
+			"process-compose": liveness_probe: exec: command: "\(_microcheckHost) portcheck --port 3005"
+		}
 	}
 }
 _proc_native: (#processComposeGen & {project: _proc_native_project, depManifests: {}}).file.processes
@@ -363,10 +385,19 @@ _proc_native: srv: readiness_probe: {
 }
 _proc_native: dup: readiness_probe: exec: command: "\(_microcheckHost) httpcheck -H \"X-A: 1\" -H \"x-a: 2\" http://127.0.0.1:3001/"
 _proc_native: over: readiness_probe: exec: command: "curl -sf http://127.0.0.1:3002/up"
-_proc_native: overhttp: readiness_probe: http_get: {host: "127.0.0.1", port: "3003", path: "/up"}
+_proc_native: overhttp: readiness_probe: close({http_get: close({host: "127.0.0.1", port: "3003", path: "/up"}), period_seconds: 1, timeout_seconds: 5, failure_threshold: 60})
+// A partial http_get override merges per field over the native base.
+_proc_native: part: readiness_probe: close({http_get: close({scheme: "http", host: "127.0.0.1", port: "3004", path: "/up", status_code: 204}), period_seconds: 1, timeout_seconds: 5, failure_threshold: 60})
+// A liveness probe that runs a microcheck gets its one-shot and the wait.
+_proc_native: "bayt:portcheck": entrypoint: _
+_proc_native: live: depends_on: close({"bayt:portcheck": condition: "process_completed_successfully"})
 // Which probe kinds each carries: the base's other kind is dropped.
 _proc_native_kinds: {for n, p in _proc_native if n != "bayt:httpcheck" {(n): [for k, _ in p.readiness_probe if k == "exec" || k == "http_get" {k}]}}
-_proc_native_kinds: {srv: ["http_get"], dup: ["exec"], over: ["exec"], overhttp: ["http_get"]}
+// Compared, not unified: an expectation would override the default 200.
+_proc_native_status: [for n in ["srv", "stat"] {_proc_native[n].readiness_probe.http_get.status_code}]
+_proc_native_status: [200, 204]
+_proc_native_status_ok: [if _proc_native_status[0] == 200 && _proc_native_status[1] == 204 {true}, false][0] & true
+_proc_native_kinds: {srv: ["http_get"], dup: ["exec"], over: ["exec"], stat: ["http_get"], overhttp: ["http_get"], part: ["http_get"], live: ["http_get"]}
 
 // More-specific projections (dockerfile, compose, process-compose) override
 // the base entrypoint, expose, and healthcheck per field or key.

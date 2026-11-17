@@ -50,6 +50,9 @@ healthcheck: {
 		host:     *"127.0.0.1" | string
 		port?:    int & >0 & <65536
 		path:     *"/" | string
+		// The status process-compose's http_get requires; the container check
+		// and httpcheck accept any 2xx.
+		status: *200 | (int & >=100 & <600)
 		if port != _|_ {
 			url: *"\(scheme)://\(host):\(port)\(path)" | string
 		}

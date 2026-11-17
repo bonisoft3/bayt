@@ -138,8 +138,8 @@ import (
 			"",
 		][0]
 		// A probe process-compose makes itself forks nothing: an exec probe runs
-		// a toolchain each second (~0.16 CPU-s), so an HTTP check with a port is
-		// native http_get. A url-only check, or one that repeats a header name
+		// a toolchain each second, so an HTTP check with a port is native
+		// http_get. A url-only check, or one that repeats a header name
 		// (a map cannot carry it), keeps the exec form.
 		let _hdrNames = [for h in _allHeaders {strings.ToLower(strings.TrimSpace(strings.Split(h, ":")[0]))}]
 		let _hdrUniq = {for n in _hdrNames {(n): true}}
@@ -154,6 +154,7 @@ import (
 					host:   _http.host
 					port:   (_own & {port: "\(_http.port)"}).out
 					path:   _http.path
+					status_code: _http.status
 					if len(_allHeaders) > 0 {
 						headers: {for h in _allHeaders {
 							(strings.TrimSpace(strings.Split(h, ":")[0])): strings.TrimSpace(strings.Join(list.Drop(strings.Split(h, ":"), 1), ":"))
@@ -211,11 +212,18 @@ import (
 			][0]
 			(n): [
 				if _base != null && _pc.readiness_probe != _|_ {
-					// An override that carries one probe kind replaces the other's.
-					for k, v in _base if _pc.readiness_probe[k] == _|_ if !(k == "http_get" && _pc.readiness_probe.exec != _|_) if !(k == "exec" && _pc.readiness_probe.http_get != _|_) {(k): v}
-					for k, v in _pc.readiness_probe if k != "exec" && k != "http_get" {(k): v}
-					if _pc.readiness_probe.exec != _|_ {exec: _pc.readiness_probe.exec}
-					if _pc.readiness_probe.http_get != _|_ {http_get: _pc.readiness_probe.http_get}
+					// An override of one probe kind replaces the other's; its http_get
+					// merges per field over the base's, an exec replaces whole.
+					for k, v in _base if k != "http_get" if _pc.readiness_probe[k] == _|_ if !(k == "exec" && _pc.readiness_probe.http_get != _|_) {(k): v}
+					for k, v in _pc.readiness_probe if k != "http_get" {(k): v}
+					if _pc.readiness_probe.http_get != _|_ {
+						http_get: {
+							if _base.http_get != _|_ if _pc.readiness_probe.exec == _|_ {
+								for k, v in _base.http_get if _pc.readiness_probe.http_get[k] == _|_ {(k): v}
+							}
+							for k, v in _pc.readiness_probe.http_get {(k): v}
+						}
+					}
 				},
 				if _base != null {_base},
 				if _pc.readiness_probe != _|_ {_pc.readiness_probe},
@@ -224,16 +232,17 @@ import (
 		}
 	}
 
-	// The microcheck a process's probe runs, or "": installed by a one-shot the
-	// process waits on, not by its first probe inside a one-second window.
+	// The microchecks a process's probes run, sorted: installed by one-shots
+	// the process waits on, not by its first probe inside a one-second window.
 	_checker: {
 		for n, p in _probes {
-			(n): [
-				if p != null if p.exec != _|_ if strings.HasPrefix(p.exec.command, "\(_microcheckHost) ") {
-					strings.Split(strings.TrimPrefix(p.exec.command, "\(_microcheckHost) "), " ")[0]
-				},
-				"",
-			][0]
+			let _pc = [if _procs[n]["process-compose"] != _|_ {_procs[n]["process-compose"]}, {}][0]
+			let _cmds = [
+				if p != null if p.exec != _|_ {p.exec.command},
+				if _pc.liveness_probe != _|_ if _pc.liveness_probe.exec != _|_ {_pc.liveness_probe.exec.command},
+			]
+			let _names = {for c in _cmds if strings.HasPrefix(c, "\(_microcheckHost) ") {(strings.Split(strings.TrimPrefix(c, "\(_microcheckHost) "), " ")[0]): true}}
+			(n): list.SortStrings([for c, _ in _names {c}])
 		}
 	}
 
@@ -249,7 +258,7 @@ import (
 			for n, t in _procs if t.taskfile != _|_ {
 				"\(n):build": entrypoint: ["task", "-t", ".bayt/Taskfile.yml", "bayt:\(n)"]
 			}
-			for c in list.SortStrings([for n, c in _checker if c != "" {c}]) {
+			for c in list.SortStrings(list.Concat([for n, cs in _checker {cs}])) {
 				"bayt:\(c)": entrypoint: list.Concat([(_baytAt & {}).out, ["microcheck", c, "--help"]])
 			}
 
@@ -283,7 +292,7 @@ import (
 					let _waits = {
 						for k, c in _e.after {(k): condition: _processCondition[c]}
 						if t.taskfile != _|_ {"\(n):build": condition: "process_completed_successfully"}
-						if _checker[n] != "" {"bayt:\(_checker[n])": condition: "process_completed_successfully"}
+						for c in _checker[n] {"bayt:\(c)": condition: "process_completed_successfully"}
 					}
 					if len(_waits) > 0 {depends_on: _waits}
 
