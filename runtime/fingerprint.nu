@@ -272,16 +272,16 @@ export def compute-fingerprint [
 
   let dirty = ($assessed | where dirty)
   if not ($dirty | is-empty) {
-    let updates = ($dirty | reduce --fold {} { |it, acc|
-      $acc | upsert $it.key {mtime: $it.mtime, size: $it.size, hash: $it.hash}
-    })
+    # `into record` builds in one pass; `reduce --fold` + `insert` keeps two
+    # live Arc refs to the accumulator and clones it on every file.
+    let updates = ($dirty | each { |it| {$it.key: {mtime: $it.mtime, size: $it.size, hash: $it.hash}} } | into record)
     update-index $root $updates
   }
 
   let unique = ($assessed | select path hash | uniq-by path | sort-by path)
 
   if not $docker {
-    let inputs = ($unique | reduce --fold {} { |it, acc| $acc | insert $it.path $it.hash })
+    let inputs = ($unique | each { |it| {$it.path: $it.hash} } | into record)
     let file_list = ($unique | get hash | str join "\n")
     let dep_list = ($dep_hashes | sort | str join "\n")
   let hash = ($"(platform-key)\n($dep_list)\n($file_list)" | hash sha256)
@@ -318,9 +318,7 @@ export def compute-fingerprint [
   } | str join "\n")
   let dep_list = ($dep_hashes | sort | str join "\n")
   let hash = ($"(platform-key)\n($dep_list)\n($file_list)" | hash sha256)
-  let inputs = ($enriched | reduce --fold {} { |it, acc|
-    $acc | insert $it.path ($it | reject path)
-  })
+  let inputs = ($enriched | each { |it| {$it.path: ($it | reject path)} } | into record)
   {hash: $hash, inputs: $inputs}
 }
 

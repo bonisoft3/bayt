@@ -354,11 +354,14 @@ def test_docker_flavor_does_not_nest [] {
 }
 
 
+# A tracked file later matched by .gitignore and deleted on disk appears in
+# both `ls-files -ci` and `ls-files --deleted`; `drop` deduplicates it.
 def test_deleted_tracked_paths_agree_between_backends [] {
-    let fx = (fixture {".gitignore": "", "a/present.rs": "x", "a/deleted.rs": "y"})
+    let fx = (fixture {".gitignore": "", "a/present.rs": "x", "a/deleted.rs": "y", "a/ignored_deleted.log": "z"})
     ^git -C $fx init -q
     ^git -C $fx add .
-    rm ($fx | path join "a/deleted.rs")
+    "*.log\n" | save -f ($fx | path join ".gitignore")
+    rm ($fx | path join "a/deleted.rs") ($fx | path join "a/ignored_deleted.log")
     let root = (^git -C $fx rev-parse --show-toplevel | str trim)
     for scope in ["" "a"] {
         let fast = (walk-scope $root $scope "git" | sort)

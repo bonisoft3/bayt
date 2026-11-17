@@ -321,7 +321,7 @@ def local-similar [current: record]: nothing -> any {
 			let srcs_path = ($entry | path join "srcs.manifest.json")
 			if not ($srcs_path | path exists) { return null }
 			let entry_inputs = (try {
-				open $srcs_path | reduce --fold {} { |r, acc| $acc | insert $r.path $r.hash }
+				open $srcs_path | each { |r| {$r.path: $r.hash} } | into record
 			} catch { return null })
 			{ entry: $entry, meta: $meta, score: (similarity-score $current $meta $entry_inputs) }
 		}
