@@ -410,3 +410,35 @@ container when Compose executes it.
 `workdir` and an optional source prefix (default `../`). Host watch projection
 is deferred; Process Compose output does not acquire file watchers or reload
 helpers. See [[../pronto/docs/pronto-hmr|Pronto HMR]] for the lifecycle choices.
+
+### HTTP 200 probes
+
+`healthcheck.http200` describes a GET whose final response status is exactly 200.
+It does not consume the response body. Set `port`, with optional `scheme` (`http`
+or `https`), `host` (default `127.0.0.1`) and `path` (default `/`). The URL is
+constructed from these fields. Existing `healthcheck.http` retains its 2xx contract.
+
+Both backends follow at most nine HTTP/HTTPS redirects. `timeout` covers the
+request including redirects and waiting for response headers; it must be a positive
+whole number of seconds (default `5s`). A 204, redirect loop, timeout or TLS error
+fails the probe. TLS verifies the server against the runtime's trusted roots:
+process-compose uses the host trust store; containers use the pinned CA bundle,
+with `SSL_CERT_FILE` available for a replacement bundle. These stores need not
+contain the same certificates.
+
+`headers` is a map with case-insensitively unique names and no CR/LF in values.
+Host/framing headers and credential/cookie headers are rejected because the
+backends differ in their treatment and forwarding across redirects. For checks
+requiring those semantics, use the existing HTTP template or an explicit probe.
+
+Process-compose emits native `http_get` with status 200, avoiding per-probe tool
+processes and microcheck setup. Timing-only readiness overrides preserve the native
+probe; an explicit `exec` or `http_get` replaces the other kind. Exec readiness
+and liveness probes still retain their checker prerequisites.
+
+Containers copy static curl and its CA bundle from the pinned Lazybox image and
+BusyBox from its pinned image. The shell compares curl's final status with 200;
+this works in scratch images but adds several megabytes and a shell, substantially
+more than microcheck. Existing microcheck cannot enforce exactly 200. The native
+host backend supports process-compose's macOS, Linux and Windows platforms;
+container artifacts support the architectures published by those pinned images.

@@ -235,6 +235,7 @@ one declaration. Five templates ship today:
 
 | Fragment | Probe | Tool source |
 |----------|-------|-------------|
+| `bayt.healthcheck.http200` | HTTP GET exactly 200 | native host probe; pinned curl + BusyBox in containers |
 | `bayt.healthcheck.http`     | HTTP GET 2xx           | `httpcheck` from microcheck (auto COPY) |
 | `bayt.healthcheck.tcp`      | TCP listener up        | `portcheck` from microcheck (auto COPY) |
 | `bayt.healthcheck.postgres` | `pg_isready`           | bundled in postgres image |
@@ -263,6 +264,10 @@ service-specific defaults where they are needed.
     ...
 }
 ```
+
+For an exact status contract, use `bayt.healthcheck.http200` with
+`healthcheck: {port: 8080, path: "/health"}`. See [[SPEC#HTTP 200 probes|HTTP 200 probes]]
+for redirects, TLS, header restrictions and container size tradeoffs.
 
 Beyond healthchecks, `compose` passes through `networks`, `env_file`,
 `pull_policy`, and `extra_hosts` for targets that need compose-level

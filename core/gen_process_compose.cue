@@ -138,13 +138,26 @@ import (
 			"",
 		][0]
 		out: {
-			exec: command: [
-				if _h.template == "http" {"\(_microcheckHost) httpcheck \(_httpArgs)\(_httpURL)"},
-				if _h.template == "tcp" {"\(_microcheckHost) portcheck --port \((_own & {port: "\(_h.port)"}).out)"},
-				if _h.template == "postgres" {"pg_isready -h \(_h.host) -p \((_own & {port: "\(_h.port)"}).out) -d \(_h.db) -U \(_h.user)"},
-				if _h.template == "redis" {"redis-cli -p \((_own & {port: "6379"}).out) ping | grep PONG"},
-				"env OLLAMA_HOST=127.0.0.1:\((_own & {port: "11434"}).out) ollama list | grep -q \(_h.model)",
-			][0]
+			if _h.template == "http200" {
+				let h = healthcheck.#http200 & _h
+				http_get: {
+					scheme:      h.scheme
+					host:        h.host
+					port:        (_own & {port: "\(h.port)"}).out
+					path:        h.path
+					status_code: 200
+					if len(h.headers) > 0 {headers: h.headers}
+				}
+			}
+			if _h.template != "http200" {
+				exec: command: [
+					if _h.template == "http" {"\(_microcheckHost) httpcheck \(_httpArgs)\(_httpURL)"},
+					if _h.template == "tcp" {"\(_microcheckHost) portcheck --port \((_own & {port: "\(_h.port)"}).out)"},
+					if _h.template == "postgres" {"pg_isready -h \(_h.host) -p \((_own & {port: "\(_h.port)"}).out) -d \(_h.db) -U \(_h.user)"},
+					if _h.template == "redis" {"redis-cli -p \((_own & {port: "6379"}).out) ping | grep PONG"},
+					"env OLLAMA_HOST=127.0.0.1:\((_own & {port: "11434"}).out) ollama list | grep -q \(_h.model)",
+				][0]
+			}
 			(_probeTiming & {healthcheck: _h}).out
 		}
 	}
@@ -186,15 +199,18 @@ import (
 			][0]
 			(n): [
 				if _base != null && _pc.readiness_probe != _|_ {
-					for k, v in _base if _pc.readiness_probe[k] == _|_ {(k): v}
-					for k, v in _pc.readiness_probe if k != "exec" {(k): v}
-					if _pc.readiness_probe.exec != _|_ {
-						exec: {
-							if _base.exec != _|_ {
-								for k, v in _base.exec if _pc.readiness_probe.exec[k] == _|_ {(k): v}
+					let over = _pc.readiness_probe
+					for k, v in _base if k != "exec" && k != "http_get" if over[k] == _|_ {(k): v}
+					for k, v in over if k != "exec" && k != "http_get" {(k): v}
+					if over.exec != _|_ && over.http_get != _|_ {_kind: error("a readiness probe chooses exec or http_get, not both")}
+					for kind in ["exec", "http_get"] {
+						if over[kind] != _|_ {
+							(kind): {
+								if _base[kind] != _|_ {for k, v in _base[kind] if over[kind][k] == _|_ {(k): v}}
+								for k, v in over[kind] {(k): v}
 							}
-							for k, v in _pc.readiness_probe.exec {(k): v}
 						}
+						if over.exec == _|_ && over.http_get == _|_ if _base[kind] != _|_ {(kind): _base[kind]}
 					}
 				},
 				if _base != null {_base},
@@ -204,16 +220,16 @@ import (
 		}
 	}
 
-	// The microcheck a process's probe runs, or "": installed by a one-shot the
-	// process waits on, not by its first probe inside a one-second window.
+	// Every exec probe, including liveness, waits for its checker to be installed.
 	_checker: {
 		for n, p in _probes {
-			(n): [
-				if p != null if p.exec != _|_ if strings.HasPrefix(p.exec.command, "\(_microcheckHost) ") {
-					strings.Split(strings.TrimPrefix(p.exec.command, "\(_microcheckHost) "), " ")[0]
-				},
-				"",
-			][0]
+			let pc = [if _procs[n]["process-compose"] != _|_ {_procs[n]["process-compose"]}, {}][0]
+			let commands = [
+				if p != null if p.exec != _|_ {p.exec.command},
+				if pc.liveness_probe != _|_ if pc.liveness_probe.exec != _|_ {pc.liveness_probe.exec.command},
+			]
+			let names = {for c in commands if strings.HasPrefix(c, "\(_microcheckHost) ") {(strings.Split(strings.TrimPrefix(c, "\(_microcheckHost) "), " ")[0]): true}}
+			(n): list.SortStrings([for c, _ in names {c}])
 		}
 	}
 
@@ -229,7 +245,7 @@ import (
 			for n, t in _procs if t.taskfile != _|_ {
 				"\(n):build": entrypoint: ["task", "-t", ".bayt/Taskfile.yml", "bayt:\(n)"]
 			}
-			for c in list.SortStrings([for n, c in _checker if c != "" {c}]) {
+			for c in list.SortStrings(list.Concat([for _, cs in _checker {cs}])) {
 				"bayt:\(c)": entrypoint: list.Concat([(_baytAt & {}).out, ["microcheck", c, "--help"]])
 			}
 
@@ -263,7 +279,7 @@ import (
 					let _waits = {
 						for k, c in _e.after {(k): condition: _processCondition[c]}
 						if t.taskfile != _|_ {"\(n):build": condition: "process_completed_successfully"}
-						if _checker[n] != "" {"bayt:\(_checker[n])": condition: "process_completed_successfully"}
+						for c in _checker[n] {"bayt:\(c)": condition: "process_completed_successfully"}
 					}
 					if len(_waits) > 0 {depends_on: _waits}
 

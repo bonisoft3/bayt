@@ -6,7 +6,7 @@
 //   - sets `compose.healthcheck` for the compose-spec override (carries
 //     start_interval, an extension that doesn't fit Dockerfile HEALTHCHECK)
 //
-// Tool selection avoids image introspection: HTTP and TCP needs always
+// Tool selection avoids image introspection: Legacy HTTP and TCP checks
 // COPY from microcheck (tiny static binaries). Service-specific
 // templates trust the upstream image's bundled tool. Defaults follow
 // "probe aggressively, fail leniently": fast steady interval (1s),
@@ -100,6 +100,57 @@ healthcheck: {
 			retries:        *_hc.retries | int
 			start_period:   *_hc.start_period | string
 			start_interval: *_hc.start_interval | string
+		}
+	}
+
+	// A GET whose final response headers carry exactly 200, without reading the body.
+	#http200: {
+		template: "http200"
+		scheme:   *"http" | "https"
+		host:     *"127.0.0.1" | string
+		port:     int & >0 & <65536
+		path:     *"/" | =~"^/"
+		url:      "\(scheme)://\(host):\(port)\(path)"
+		headers:  *{} | {[=~"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" & !~"(?i)^(host|content-length|transfer-encoding|trailer|authorization|proxy-authorization|www-authenticate|cookie|cookie2)$"]: string & !~"[\\r\\n]"}
+		let names = {for k, _ in headers {(strings.ToLower(k)): true}}
+		_uniqueHeaders: (len(names) == len(headers)) & true
+		start_interval: *"200ms" | string
+		interval:       *"1s" | string
+		// Native process-compose measures its deadline in whole seconds.
+		timeout:      *"5s" | =~"^[1-9][0-9]*s$"
+		retries:      *30 | int
+		start_period: *"30s" | string
+	}
+	http200: {
+		healthcheck: #http200
+		let hc = healthcheck
+		let prefix = "/usr/local/lib/bayt/http200"
+		let args = list.Concat([
+			["CMD", "\(prefix)/busybox", "sh", "-ec", #"export CURL_CA_BUNDLE="${SSL_CERT_FILE:-/usr/local/lib/bayt/http200/ca.pem}"; status=$("$@"); [ "$status" = 200 ] || { printf 'HTTP status %s, expected 200\n' "$status" >&2; exit 1; }"#, "http200", "\(prefix)/curl", "--disable", "--silent", "--show-error", "--head", "--request", "GET", "--location", "--max-redirs", "9", "--max-time", strings.TrimSuffix(hc.timeout, "s"), "--proto", "=http,https", "--proto-redir", "=http,https", "--output", "/dev/null", "--write-out", "%{http_code}"],
+			[for k, v in hc.headers for a in ["--header", "\(k): \(v)"] {a}],
+			[hc.url],
+		])
+		dockerfile: {
+			defaultCopy: {
+				"http200-curl":  {from: name: lock.images.lazybox, srcs: ["/lazybox/libexec/static-curl"], dst: "\(prefix)/curl", chmod: "755"}
+				"http200-ca":    {from: name: lock.images.lazybox, srcs: ["/lazybox/share/ca-certificates/ca-certificates.crt"], dst: "\(prefix)/ca.pem"}
+				"http200-shell": {from: name: lock.images.busybox, srcs: ["/bin/busybox"], dst: "\(prefix)/busybox", chmod: "755"}
+			}
+			healthcheck: {
+				test:         *args | [...string]
+				interval:     *hc.interval | string
+				timeout:      *hc.timeout | string
+				retries:      *hc.retries | int
+				start_period: *hc.start_period | string
+			}
+		}
+		compose: healthcheck: {
+			test:           *[for a in args {strings.Replace(a, "$", "$$", -1)}] | _
+			interval:       *hc.interval | string
+			timeout:        *hc.timeout | string
+			retries:        *hc.retries | int
+			start_period:   *hc.start_period | string
+			start_interval: *hc.start_interval | string
 		}
 	}
 
