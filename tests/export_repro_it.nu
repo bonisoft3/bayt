@@ -28,7 +28,7 @@ const BB = "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a78027
 # One clamp RUN, mirroring _clampFlatten's emission (kept in sync by hand — the
 # shape is what's under test, so drift here is a real signal, not noise).
 def clampline [wd: string, anc: string]: nothing -> string {
-  $'RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then find ($wd) -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && touch -hd @${SOURCE_DATE_EPOCH:-0} ($anc); fi'
+  $'RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then cd / && cp -a /monorepo /.bayt-clamp && rm -rf /monorepo && mv /.bayt-clamp /monorepo && find ($wd) -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && touch -hd @${SOURCE_DATE_EPOCH:-0} ($anc); fi'
 }
 
 # The leaf deliberately does NOT clamp: it inherits already-clamped mtimes

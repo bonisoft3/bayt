@@ -1108,9 +1108,16 @@ _copyParents: {
 		_ancestors: [for i, _ in _wdSegs if i >= 2 {strings.Join(list.Slice(_wdSegs, 0, i), "/")}]
 
 		_epoch: "@${SOURCE_DATE_EPOCH:-0}"
+		// /monorepo is first copied into the RUN's own layer. Touching a
+		// file of a lower layer copies it up, and overlayfs fsyncs each
+		// copy-up: on a network disk (Depot) that cost 25-38s for ~5.6k
+		// files, under a second once the files sit in the upper layer.
+		// `cp -a` keeps modes, owners, symlinks, hardlinks and the mtimes
+		// outside the walk, so the flattened stage is the same tree.
 		// A build-arg workdir has its depth only at build time, so its
 		// ancestors are walked there.
 		_clamp: strings.Join(list.Concat([
+			["cd / && cp -a /monorepo /.bayt-clamp && rm -rf /monorepo && mv /.bayt-clamp /monorepo"],
 			["find \(workdir) -exec touch -hd \(_epoch) {} +"],
 			[if _argDir {"{ d=$(dirname \(workdir)); while [ \"$d\" != / ]; do touch -hd \(_epoch) \"$d\" || exit; d=$(dirname \"$d\"); done; }"}],
 			[if !_argDir if len(_ancestors) > 0 {"touch -hd \(_epoch) \(strings.Join(_ancestors, " "))"}],

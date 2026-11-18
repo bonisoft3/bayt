@@ -41,7 +41,7 @@ WORKDIR /monorepo
 COPY --parents __PROJ__/app.txt ./
 ARG SOURCE_DATE_EPOCH
 ARG BAYT_CLAMP=1
-RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then find /monorepo -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} +; fi
+RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then cd / && cp -a /monorepo /.bayt-clamp && rm -rf /monorepo && mv /.bayt-clamp /monorepo && find /monorepo -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} +; fi
 FROM scratch AS __PROJ___srcs
 COPY --from=ctxs /monorepo /monorepo
 '##
