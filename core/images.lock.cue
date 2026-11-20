@@ -23,7 +23,7 @@ package bayt
 lock: images: {
 	// The runtime tree consumers COPY onto their PATH — built by
 	// plugins/bayt/Dockerfile.runtime, released on the `runtime/v*` stream.
-	bayt:    "bonitao/bayt-runtime:1.5.2@sha256:58f21a8e78a8270e5d7a95e65665ef3b8824a75e8229a579c6316d3b07c4e838"
+	bayt:    "bonitao/bayt-runtime:1.5.3@sha256:9560b4a6d6e40fe15a951ef14b5d10dcd613c3efa73ef1847072add962d60760"
 	lazybox: "bonitao/lazybox:0.8.6@sha256:0f30c48513fac757f844f02c864802991dec045f9c4189e3db2ae4ac297544df"
 	busybox: "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a780272629735893292223"
 	// Visual lint runs a real browser against a served app, so the
