@@ -1100,18 +1100,38 @@ _copyParents: {
 		stage:     string
 		workdir:   string
 		bodyLines: [...string]
-		out:       string
+		// Copy `workdir` into the RUN's own upper layer before clamping source
+		// and scaffolding trees (`_srcs` / `_bayt`), moving any xattr-bearing
+		// files into place directly so multiline/binary attributes survive
+		// byte-for-byte. Disabled on `_outs`, whose container-built artifacts
+		// may also carry non-`user.*` attributes such as `security.capability`.
+		copyUp: *true | bool
+		out:    string
 
-		// Strict ancestor dirs of workdir: "/monorepo/a/b" →
-		// ["/monorepo", "/monorepo/a"]; empty when workdir is /monorepo.
-		_wdSegs:    strings.Split(workdir, "/")
+		// Normalize static dot-root (`/monorepo/.`, `/monorepo/./`) to
+		// `/monorepo`: BusyBox `rm -rf` refuses a trailing `/.` segment.
+		_cleanWd: [if _argDir {workdir}, path.Clean(workdir, path.Unix)][0]
+
+		// Strict ancestor dirs of _cleanWd: "/monorepo/a/b" →
+		// ["/monorepo", "/monorepo/a"]; empty when _cleanWd is /monorepo.
+		_wdSegs:    strings.Split(_cleanWd, "/")
 		_ancestors: [for i, _ in _wdSegs if i >= 2 {strings.Join(list.Slice(_wdSegs, 0, i), "/")}]
 
 		_epoch: "@${SOURCE_DATE_EPOCH:-0}"
-		// A build-arg workdir has its depth only at build time, so its
-		// ancestors are walked there.
+		// Touching a lower-layer file in place triggers a per-file overlayfs
+		// copy-up + fsync (25-105s for ~5.6k files on network block storage vs
+		// <1s in the upper layer). Scoping the copy to `_cleanWd` leaves
+		// chained-dep subtrees outside `_cleanWd` untouched so symlinks they
+		// carry keep their already-clamped mtimes. If any entry in `workdir`
+		// carries `user.*` xattrs (`[ -s /.bayt-clamp/x ]`), skip `cp -a` so
+		// file and directory xattrs survive clamping in place byte-for-byte.
+		_copyUp: [
+			if _argDir {"{ w=$(pwd); mkdir -p /.bayt-clamp && find \"$w\" -exec getfattr -dh {} + > /.bayt-clamp/x && if [ ! -s /.bayt-clamp/x ]; then cd / && cp -a \"$w\" /.bayt-clamp/w && rm -rf \"$w\" && mv /.bayt-clamp/w \"$w\"; fi && rm -rf /.bayt-clamp; }"},
+			"mkdir -p /.bayt-clamp && find \(_cleanWd) -exec getfattr -dh {} + > /.bayt-clamp/x && if [ ! -s /.bayt-clamp/x ]; then cd / && cp -a \(_cleanWd) /.bayt-clamp/w && rm -rf \(_cleanWd) && mv /.bayt-clamp/w \(_cleanWd); fi && rm -rf /.bayt-clamp",
+		][0]
 		_clamp: strings.Join(list.Concat([
-			["find \(workdir) -exec touch -hd \(_epoch) {} +"],
+			[if copyUp {_copyUp}],
+			["find \(_cleanWd) -exec touch -hd \(_epoch) {} +"],
 			[if _argDir {"{ d=$(dirname \(workdir)); while [ \"$d\" != / ]; do touch -hd \(_epoch) \"$d\" || exit; d=$(dirname \"$d\"); done; }"}],
 			[if !_argDir if len(_ancestors) > 0 {"touch -hd \(_epoch) \(strings.Join(_ancestors, " "))"}],
 		]), " && ")
@@ -1193,6 +1213,7 @@ _copyParents: {
 			stage:     _stage
 			workdir:   _workdir
 			bodyLines: _copy
+			copyUp:    false
 		}).out
 	}
 

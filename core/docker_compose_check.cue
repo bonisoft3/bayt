@@ -288,6 +288,8 @@ _d9_dot: #project & {
 _d9_dot_body: (#dockerComposeGen & {project: _d9_dot, depManifests: {}}).dockerfiles.run
 _d9_dot_copy: strings.Contains(_d9_dot_body, "COPY --from=d9dot-db_srcs --parents /monorepo/migrations/*.sql /") & true
 _d9_dot_none: strings.Contains(_d9_dot_body, "/./") & false
+_d9_dot_clamp: strings.Contains(_d9_dot_body, "mkdir -p /.bayt-clamp && find /monorepo -exec getfattr -dh {} + > /.bayt-clamp/x && if [ ! -s /.bayt-clamp/x ]; then cd / && cp -a /monorepo /.bayt-clamp/w && rm -rf /monorepo && mv /.bayt-clamp/w /monorepo; fi && rm -rf /.bayt-clamp") & true
+_d9_dot_no_dot_rm: strings.Contains(_d9_dot_body, "rm -rf /monorepo/.") & false
 
 // --- D10: `:x:bayt` ref consumer. A target depending on a
 // scaffolding synth gets a bulk-COPY `--from=<proj>-<x>_bayt --link
@@ -1049,6 +1051,9 @@ _d28_arg:   strings.Contains(_d28_body, "AS build\nARG BAYT_DIR\nWORKDIR /monore
 _d28_dep:   strings.Contains(_d28_body, "COPY --from=d28-setup_srcs --parents /monorepo/${BAYT_DIR:+${BAYT_DIR}/}mise.toml /") & true
 _d28_outs:  strings.Contains(_d28_body, "--parents /monorepo/${BAYT_DIR:+${BAYT_DIR}/}out/d28 /") & true
 _d28_ctxs:  strings.Contains(_d28_body, "AS build_ctxs\nARG BAYT_DIR\nWORKDIR /monorepo/${BAYT_DIR}\n") & true
+_d28_ctxs_stage: strings.Split(strings.Split(_d28_body, "AS build_ctxs\n")[1], "FROM scratch AS build_srcs")[0]
+_d28_copyup: strings.Contains(_d28_ctxs_stage, "{ w=$(pwd); mkdir -p /.bayt-clamp && find \"$w\" -exec getfattr -dh {} + > /.bayt-clamp/x && if [ ! -s /.bayt-clamp/x ]; then cd / && cp -a \"$w\" /.bayt-clamp/w && rm -rf \"$w\" && mv /.bayt-clamp/w \"$w\"; fi && rm -rf /.bayt-clamp; } && find /monorepo/${BAYT_DIR} -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} +") & true
+_d28_outs_xattr: strings.Contains(_d28_body, "AS build_outs_ctxs\nARG BAYT_DIR\nWORKDIR /monorepo/${BAYT_DIR}\nCOPY --from=d28-build --parents /monorepo/${BAYT_DIR:+${BAYT_DIR}/}out/d28 /\nARG SOURCE_DATE_EPOCH\nARG BAYT_CLAMP=1\nRUN if [ \"${BAYT_CLAMP:-1}\" != 0 ]; then find /monorepo/${BAYT_DIR} -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} +") & true
 _d28_clamp: strings.Contains(_d28_body, "&& { d=$(dirname /monorepo/${BAYT_DIR}); while [ \"$d\" != / ]; do touch -hd @${SOURCE_DATE_EPOCH:-0} \"$d\" || exit; d=$(dirname \"$d\"); done; }") & true
 _d28_args:  [for s in ["d28-build", "d28-build_srcs", "d28-build_outs", "d28-build_bayt"] {_d28_dc.compose.files.build.services[s].build.args.BAYT_DIR}] & [for _ in [1, 2, 3, 4] {"${MODE:+apps/d28}"}]
 // A project without one spells its dir.

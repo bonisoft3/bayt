@@ -25,7 +25,8 @@ const BB = "busybox:musl@sha256:03db190ed4c1ceb1c55d179a0940e2d71d42130636a78027
 # One clamp RUN, mirroring _clampFlatten's emission (kept in sync by hand — the
 # shape is what's under test, so drift here is a real signal, not noise).
 def clampline [wd: string, anc: string]: nothing -> string {
-  $'RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then find ($wd) -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && touch -hd @${SOURCE_DATE_EPOCH:-0} ($anc); fi'
+  (r#'RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then mkdir -p /.bayt-clamp && find __WD__ -exec getfattr -dh {} + > /.bayt-clamp/x && if [ ! -s /.bayt-clamp/x ]; then cd / && cp -a __WD__ /.bayt-clamp/w && rm -rf __WD__ && mv /.bayt-clamp/w __WD__; fi && rm -rf /.bayt-clamp && find __WD__ -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && touch -hd @${SOURCE_DATE_EPOCH:-0} __ANC__; fi'#
+  | str replace --all "__WD__" $wd | str replace --all "__ANC__" $anc)
 }
 def dockerfile []: nothing -> string {
   let d1 = (clampline "/monorepo/x/dep1" "/monorepo /monorepo/x")
@@ -34,7 +35,7 @@ def dockerfile []: nothing -> string {
   $"# syntax=($FE)
 FROM ($BB) AS dep1_ctxs
 WORKDIR /monorepo/x/dep1
-COPY --parents d1.txt ./
+COPY --parents d1.txt d1-link ./
 ARG SOURCE_DATE_EPOCH
 ARG BAYT_CLAMP=1
 ($d1)
@@ -52,7 +53,7 @@ COPY --from=dep2_ctxs /monorepo /monorepo
 
 FROM ($BB) AS ab_ctxs
 WORKDIR /monorepo/a/b
-COPY --parents f.txt ./
+COPY --parents f.txt own-link ./
 COPY --from=dep1_srcs /monorepo /monorepo
 COPY --from=dep2_srcs /monorepo /monorepo
 ARG SOURCE_DATE_EPOCH
@@ -93,7 +94,8 @@ def build-digest [work: string, bld: string, out: string, clamp: string]: nothin
 # fresh checkout whose mtimes float). Returns [d1, d2].
 def two-builds [work: string, bld: string, clamp: string]: nothing -> list<string> {
   let d1 = (build-digest $work $bld $"($work)/oci-($clamp)-1" $clamp)
-  ^touch $"($work)/f.txt" $"($work)/d1.txt" $"($work)/d2.txt"
+  sleep 1sec
+  ^touch -h $"($work)/f.txt" $"($work)/d1.txt" $"($work)/d2.txt" $"($work)/d1-link" $"($work)/own-link"
   let d2 = (build-digest $work $bld $"($work)/oci-($clamp)-2" $clamp)
   [$d1, $d2]
 }
@@ -104,6 +106,8 @@ def main [] {
   "hello-a-b\n"    | save -f $"($work)/f.txt"
   "dep1-payload\n" | save -f $"($work)/d1.txt"
   "dep2-payload\n" | save -f $"($work)/d2.txt"
+  ^ln -s d1.txt $"($work)/d1-link"
+  ^ln -s f.txt $"($work)/own-link"
   (dockerfile) | save -f $"($work)/Dockerfile"
   let bld = $"scoped-clamp-($id)"
   fresh-builder $bld
@@ -121,6 +125,69 @@ def main [] {
   print $"clamp off: ($off.0) | ($off.1)"
   if $off.0 == $off.1 {
     fail $bld $work "FAIL scoped_clamp: clamp off yet digests match — test is vacuous (host mtimes not floating, or export normalised them)."
+  }
+
+  # (3) dot-root (`WORKDIR /monorepo/.` and `BAYT_DIR=./`) build cleanly under
+  #     normalized copy-up, and both `_srcs` (multiline file + directory `user.*`
+  #     xattrs) and `_outs` (`copyUp: false`) preserve extended attributes.
+  (r##'# syntax=__FE__
+FROM __BB__ AS dot_ctxs
+WORKDIR /monorepo/.
+COPY --parents f.txt ./
+ARG SOURCE_DATE_EPOCH
+ARG BAYT_CLAMP=1
+RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then mkdir -p /.bayt-clamp && find /monorepo -exec getfattr -dh {} + > /.bayt-clamp/x && if [ ! -s /.bayt-clamp/x ]; then cd / && cp -a /monorepo /.bayt-clamp/w && rm -rf /monorepo && mv /.bayt-clamp/w /monorepo; fi && rm -rf /.bayt-clamp && find /monorepo -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} +; fi
+FROM scratch AS dot_srcs
+COPY --from=dot_ctxs /monorepo /monorepo
+
+FROM __BB__ AS arg_ctxs
+ARG BAYT_DIR=./
+WORKDIR /monorepo/${BAYT_DIR}
+COPY --parents f.txt ./
+ARG SOURCE_DATE_EPOCH
+ARG BAYT_CLAMP=1
+RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then { w=$(pwd); mkdir -p /.bayt-clamp && find "$w" -exec getfattr -dh {} + > /.bayt-clamp/x && if [ ! -s /.bayt-clamp/x ]; then cd / && cp -a "$w" /.bayt-clamp/w && rm -rf "$w" && mv /.bayt-clamp/w "$w"; fi && rm -rf /.bayt-clamp; } && find /monorepo/${BAYT_DIR} -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && { d=$(dirname /monorepo/${BAYT_DIR}); while [ "$d" != / ]; do touch -hd @${SOURCE_DATE_EPOCH:-0} "$d" || exit; d=$(dirname "$d"); done; }; fi
+FROM scratch AS arg_srcs
+COPY --from=arg_ctxs /monorepo /monorepo
+
+FROM __BB__ AS src_seed
+WORKDIR /monorepo/a/b
+RUN mkdir -p sub && printf 'src\n' > sub/multi.txt && setfattr -n user.bayt -v "$(printf 'first\n# file: /bad')" sub/multi.txt && setfattr -n user.dir -v dir-ok sub
+
+FROM __BB__ AS src_ctxs
+WORKDIR /monorepo/a/b
+COPY --from=src_seed --parents /monorepo/a/b/sub /
+ARG SOURCE_DATE_EPOCH
+ARG BAYT_CLAMP=1
+RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then mkdir -p /.bayt-clamp && find /monorepo/a/b -exec getfattr -dh {} + > /.bayt-clamp/x && if [ ! -s /.bayt-clamp/x ]; then cd / && cp -a /monorepo/a/b /.bayt-clamp/w && rm -rf /monorepo/a/b && mv /.bayt-clamp/w /monorepo/a/b; fi && rm -rf /.bayt-clamp && find /monorepo/a/b -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && touch -hd @${SOURCE_DATE_EPOCH:-0} /monorepo /monorepo/a; fi
+FROM scratch AS src_flat
+COPY --from=src_ctxs /monorepo /monorepo
+
+FROM __BB__ AS prod
+WORKDIR /monorepo/a/b
+RUN mkdir -p out && echo bin > out/app && setfattr -n user.bayt -v preserved out/app
+
+FROM __BB__ AS outs_ctxs
+WORKDIR /monorepo/a/b
+COPY --from=prod --parents /monorepo/a/b/out/app /
+ARG SOURCE_DATE_EPOCH
+ARG BAYT_CLAMP=1
+RUN if [ "${BAYT_CLAMP:-1}" != 0 ]; then find /monorepo/a/b -exec touch -hd @${SOURCE_DATE_EPOCH:-0} {} + && touch -hd @${SOURCE_DATE_EPOCH:-0} /monorepo /monorepo/a; fi
+FROM scratch AS outs_flat
+COPY --from=outs_ctxs /monorepo /monorepo
+
+FROM __BB__ AS verify_xattr
+COPY --from=dot_srcs /monorepo/f.txt /tmp/dot.txt
+COPY --from=arg_srcs /monorepo/f.txt /tmp/arg.txt
+COPY --from=src_flat /monorepo /monorepo
+COPY --from=outs_flat /monorepo /monorepo
+RUN exp_multi=$(printf '# file: /monorepo/a/b/sub/multi.txt\nuser.bayt="first\n# file: /bad"') && [ "$(getfattr -dh /monorepo/a/b/sub/multi.txt)" = "$exp_multi" ] && getfattr -n user.dir /monorepo/a/b/sub | grep -q 'user.dir="dir-ok"' && getfattr -n user.bayt /monorepo/a/b/out/app | grep -q 'user.bayt="preserved"' && [ -z "$(getfattr -dh /tmp/dot.txt)" ]
+'## | str replace --all "__FE__" $FE | str replace --all "__BB__" $BB) | save -f $"($work)/Dockerfile.extra"
+  let extra = (with-env {SOURCE_DATE_EPOCH: "0"} {
+    do { ^docker buildx build --builder $bld --no-cache -f $"($work)/Dockerfile.extra" --target verify_xattr $"--output=type=cacheonly" $work } | complete
+  })
+  if $extra.exit_code != 0 {
+    fail $bld $work $"FAIL scoped_clamp: dot-root or _outs xattr preservation failed:\n($extra.stderr)"
   }
 
   cleanup $bld $work
