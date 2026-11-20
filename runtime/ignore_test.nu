@@ -3,7 +3,7 @@
 # Run with: nu ignore_test.nu (from plugins/bayt/runtime)
 
 use std/assert
-use ./ignore.nu [parse-file, ignored?, to-regex, compile-rules, walk-scope, enumerate-scopes]
+use ./ignore.nu [parse-file, ignored?, to-regex, compile-rules, walk-scope, enumerate-scopes, enumerate-scopes-isolated]
 
 def main [] {
 	print "Running bayt/ignore tests...\n"
@@ -43,6 +43,8 @@ def main [] {
 	test_enumerate_scopes_omits_the_root
 	test_non_ascii_paths_agree_between_backends
 	test_deleted_tracked_paths_agree_between_backends
+	test_git_pathspec_metachars_are_literal
+	test_isolated_enumeration_without_git_and_boundary_scopes
 		test_docker_flavor_does_not_nest
 	}
 
@@ -369,5 +371,44 @@ def test_deleted_tracked_paths_agree_between_backends [] {
         assert ($fast == $walked) $"deleted tracked file in ($scope): ($fast | to json --raw) vs ($walked | to json --raw)"
     }
     assert ((enumerate-scopes $root ["a"] "git" | get a | sort) == (walk-scope $root "a" "git" --no-git | sort))
+    rm -rf $fx
+}
+
+# A directory named `:!app` must not act as a git pathspec magic exclusion of
+# `app` when batched in `enumerate-scopes`.
+def test_git_pathspec_metachars_are_literal [] {
+    print "test git pathspec metachars in scope names stay literal..."
+    let fx = (fixture {".gitignore": "", "app/main.rs": "x", ":!app/other.rs": "y"})
+    ^git -C $fx init -q
+    ^git -C $fx add .
+    let root = (^git -C $fx rev-parse --show-toplevel | str trim)
+    let batched = (enumerate-scopes $root ["app" ":!app"] "git")
+    assert equal ($batched | get "app") ["app/main.rs"]
+    assert equal ($batched | get ([":!app"] | into cell-path)) [":!app/other.rs"]
+    rm -rf $fx
+}
+
+# `enumerate-scopes-isolated` works when `git` is absent from PATH and treats
+# explicit `.git` / `.task` scopes as empty tool boundaries on both backends.
+def test_isolated_enumeration_without_git_and_boundary_scopes [] {
+    print "test enumerate-scopes-isolated works without git and prunes .git/.task scopes..."
+    let fx = (fixture {".gitignore": "", "app/main.rs": "x", ".task/stamp": "y"})
+    ^git -C $fx init -q
+    ^git -C $fx add app/main.rs
+    let root = (^git -C $fx rev-parse --show-toplevel | str trim)
+    let with_git = (enumerate-scopes-isolated $root ["app" ".git" ".task"] "git")
+    assert equal $with_git.errors {}
+    assert equal ($with_git.trees | get "app") ["app/main.rs"]
+    assert equal ($with_git.trees | get ".git") []
+    assert equal ($with_git.trees | get ".task") []
+    let no_git = (with-env {PATH: ""} { enumerate-scopes-isolated $root ["app" ".git" ".task"] "git" })
+    assert equal $no_git.errors {}
+    assert equal ($no_git.trees | get "app") ["app/main.rs"]
+    assert equal ($no_git.trees | get ".git") []
+    assert equal ($no_git.trees | get ".task") []
+    assert equal (walk-scope $root "./app" "git") ["app/main.rs"]
+    assert equal (walk-scope $root "./app" "git" --no-git) ["app/main.rs"]
+    assert equal (walk-scope $root "app/../app" "git") ["app/main.rs"]
+    assert equal ((enumerate-scopes-isolated $root ["./app" "app/../app"] "git").trees | get "app/../app") ["app/main.rs"]
     rm -rf $fx
 }

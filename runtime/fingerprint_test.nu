@@ -8,7 +8,7 @@
 # the git-mode path (ls-files).
 
 use std/assert
-use ./fingerprint.nu [manifest-root]
+use ./fingerprint.nu [closure-hash, closure-hash-try, manifest-root, scope-list]
 
 const fp_nu = (path self | path dirname | path join "fingerprint.nu")
 
@@ -80,6 +80,12 @@ def main [] {
 
 	# file stat index
 	test_file_index_caching_and_invalidation
+	test_closure_hash_try_skips_writes_and_closure_hash_flushes_once
+	test_closure_hash_retains_cold_file_hashes_in_memory
+	test_scope_list_unions_own_contexts_and_deps
+	if $nu.os-info.name != "windows" {
+		test_stamped_transitive_dep_is_not_walked
+	}
 
 	print "\nAll fingerprint.nu tests passed!"
 }
@@ -954,4 +960,150 @@ def test_docker_directory_symlinks_hash_the_link [] {
     assert ($populated.exit == 0) $populated.stderr
     assert equal $first.stdout $populated.stdout
     rm -rf $tmp
+}
+
+# closure-hash-try evaluates closures in memory without rewriting
+# .task/bayt/index, while reading warm entries; closure-hash flushes dirty
+# entries across nested dependencies and external path-tool roots once.
+def test_closure_hash_try_skips_writes_and_closure_hash_flushes_once [] {
+	print "test closure-hash-try skips index writes while reading warm entries, and closure-hash flushes once..."
+	let tmp = (make-tmp)
+	let ws = ($tmp | path join "ws")
+	let app = ($ws | path join "app")
+	let dep = ($ws | path join "dep")
+	let tool_dir = ($tmp | path join "ext" "compiler")
+	mkdir ($app | path join ".bayt") ($dep | path join ".bayt") $tool_dir
+	"alpha\n" | save -f ($app | path join "a.txt")
+	"beta\n" | save -f ($app | path join "b.txt")
+	"dep\n" | save -f ($dep | path join "dep.txt")
+	"tool\n" | save -f ($tool_dir | path join "main.ts")
+	"[tools]\n\"github:x/compiler\" = \"path:../../ext/compiler\"\n" | save -f ($app | path join "mise.local.toml")
+	{name: "dep", dir: "dep", srcs: {globs: ["dep.txt"], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [], cmds: []}
+		| to json | save -f ($dep | path join ".bayt" "bayt.dep.json")
+	{name: "app", dir: "app", srcs: {globs: ["a.txt" "b.txt" "mise.local.toml"], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [{dir: "dep", name: "dep"}], cmds: []}
+		| to json | save -f ($app | path join ".bayt" "bayt.app.json")
+	let m = ($app | path join ".bayt" "bayt.app.json")
+	let ws_idx_file = ($ws | path join ".task" "bayt" "index")
+	let tool_idx_file = ($tool_dir | path join ".task" "bayt" "index")
+
+	let cold_try = (closure-hash-try $m "" false {} "" true false)
+	assert $cold_try.ok $cold_try.err
+	assert (not ($ws_idx_file | path exists)) "closure-hash-try must not create workspace .task/bayt/index"
+	assert (not ($tool_idx_file | path exists)) "closure-hash-try must not create path-tool .task/bayt/index"
+
+	# Seed app/a.txt into the workspace index with its real (mtime, size), then
+	# replace its stored digest with a sentinel to prove closure-hash-try serves
+	# warm entries without rewriting .task/bayt/index on disk.
+	let seed = (run-fp $ws ["-q" "app/a.txt"])
+	assert equal $seed.exit 0 $seed.stderr
+	let sentinel = ("0" | fill --character "0" --width 64)
+	(open $ws_idx_file | from json | upsert (["app/a.txt" "hash"] | into cell-path) $sentinel | to json) | save -f $ws_idx_file
+	let seeded_bytes = (open --raw $ws_idx_file)
+
+	let warm_try = (closure-hash-try $m "" false {} "" true false)
+	assert $warm_try.ok $warm_try.err
+	assert not equal $warm_try.hash $cold_try.hash "warm sentinel entry must affect closure-hash-try"
+	assert equal (open --raw $ws_idx_file) $seeded_bytes "closure-hash-try must not rewrite an existing index"
+	assert (not ($tool_idx_file | path exists)) "closure-hash-try must still not create path-tool .task/bayt/index"
+
+	let persisted = (closure-hash $m "" false {} "" true false)
+	assert equal $persisted.hash $warm_try.hash
+	let ws_idx = (open $ws_idx_file | from json)
+	assert ("app/b.txt" in $ws_idx) "top-level closure-hash must flush own newly hashed entries"
+	assert ("dep/dep.txt" in $ws_idx) "top-level closure-hash must flush dependency dirty entries"
+	assert ($tool_idx_file | path exists) "top-level closure-hash must flush external path-tool index"
+	assert ("main.ts" in (open $tool_idx_file | from json)) "top-level closure-hash must persist path-tool dirty entries"
+	rm -rf $tmp
+	print "  ok\n"
+}
+
+def test_closure_hash_retains_cold_file_hashes_in_memory [] {
+	print "test closure-hash-try threads newly computed file and path-tool hashes across cold closures..."
+	let tmp = (make-tmp)
+	let app1 = ($tmp | path join "app1")
+	let app2 = ($tmp | path join "app2")
+	let tool_root = ($tmp | path join "ext")
+	let tool_dir = ($tool_root | path join "compiler")
+	mkdir ($app1 | path join ".bayt") ($app2 | path join ".bayt") $tool_dir
+	"tool-code\n" | save -f ($tool_dir | path join "main.ts")
+	"[tools]\n\"github:x/compiler\" = \"path:../ext/compiler\"\n" | save -f ($app1 | path join "mise.local.toml")
+	"[tools]\n\"github:x/compiler\" = \"path:../ext/compiler\"\n" | save -f ($app2 | path join "mise.local.toml")
+	"two\n" | save -f ($app2 | path join "two.txt")
+	{name: "one", dir: ".", srcs: {globs: ["mise.local.toml"], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [], cmds: []}
+		| to json | save -f ($app1 | path join ".bayt" "bayt.one.json")
+	{name: "two", dir: ".", srcs: {globs: ["mise.local.toml" "two.txt"], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [], cmds: []}
+		| to json | save -f ($app2 | path join ".bayt" "bayt.two.json")
+
+	let m1 = ($app1 | path join ".bayt" "bayt.one.json")
+	let m2 = ($app2 | path join ".bayt" "bayt.two.json")
+	let r1 = (closure-hash-try $m1 "" false {} "" true false {} null null {})
+	assert $r1.ok $r1.err
+	assert (not ($app1 | path join ".task" "bayt" "index" | path exists))
+	assert (not ($tool_dir | path join ".task" "bayt" "index" | path exists))
+	let tool_dir_exp = ($tool_dir | path expand)
+	assert (($r1.indexes | get -o ([$tool_dir_exp "main.ts"] | into cell-path)) != null) "first closure must retain path-tool file hashes in indexes"
+
+	let baseline_r2 = (closure-hash-try $m2 "" false $r1.memo "" true false {} null null $r1.indexes)
+	let poisoned_indexes = ($r1.indexes | upsert ([$tool_dir_exp "main.ts" "hash"] | into cell-path) ("f" | fill --character "f" --width 64))
+	let poisoned_r2 = (closure-hash-try $m2 "" false $r1.memo "" true false {} null null $poisoned_indexes)
+	rm -rf $tmp
+	assert $baseline_r2.ok $baseline_r2.err
+	assert $poisoned_r2.ok $poisoned_r2.err
+	assert not equal $baseline_r2.hash $poisoned_r2.hash "second distinct closure must reuse the threaded path-tool index"
+	print "  ok\n"
+}
+
+def test_scope_list_unions_own_contexts_and_deps [] {
+	print "test scope-list unions own, contexts and deps and normalizes rooted '.'..."
+	let root = ("/w" | path expand)
+	let nested = {
+		root:     $root
+		project:  ($root | path join "apps" "web")
+		contexts: ["proto" (["apps" "web"] | path join)]
+		deps:     [{dir: "libs/core"} {dir: "proto"} {dir: ""}]
+	}
+	assert equal (scope-list $nested) [
+		(["apps" "web"] | path join)
+		"proto"
+		"libs/core"
+		""
+	]
+
+	let rooted = {
+		root:     $root
+		project:  $root
+		contexts: []
+		deps:     [{dir: "."}]
+	}
+	assert equal (scope-list $rooted) [""]
+	print "  ok\n"
+}
+
+# In an A -> B -> C chain where B has no stamp and C has a valid stamp,
+# fingerprinting A (content-only, trust stamps) must not walk C's directory.
+def test_stamped_transitive_dep_is_not_walked [] {
+	print "test stamped transitive dep is not walked..."
+	let tmp = (make-tmp)
+	mkdir ($tmp | path join "a" ".bayt") ($tmp | path join "b" ".bayt") ($tmp | path join "c" ".bayt") ($tmp | path join "c" ".task" "bayt")
+	"a\n" | save -f ($tmp | path join "a" "a.txt")
+	"b\n" | save -f ($tmp | path join "b" "b.txt")
+	"c\n" | save -f ($tmp | path join "c" "c.txt")
+	{name: "lib", dir: "c", srcs: {globs: ["**/*"], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [], cmds: []}
+		| to json | save -f ($tmp | path join "c" ".bayt" "bayt.lib.json")
+	{name: "mid", dir: "b", srcs: {globs: ["**/*"], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [{name: "lib", dir: "c"}], cmds: []}
+		| to json | save -f ($tmp | path join "b" ".bayt" "bayt.mid.json")
+	{name: "top", dir: "a", srcs: {globs: ["**/*"], exclude: []}, outs: {globs: [], exclude: []}, state: {globs: []}, chainedDeps: [{name: "mid", dir: "b"}], cmds: []}
+		| to json | save -f ($tmp | path join "a" ".bayt" "bayt.top.json")
+
+	let stamp_c = (run-fp ($tmp | path join "c") ["--manifest" ".bayt/bayt.lib.json" "--stamp-file" ".task/bayt/lib.hash" "--update-stamp"])
+	assert equal $stamp_c.exit 0 $stamp_c.stderr
+	let baseline = (run-fp ($tmp | path join "a") ["-q" "--manifest" ".bayt/bayt.top.json"])
+	assert equal $baseline.exit 0 $baseline.stderr
+
+	^ln -s ($tmp | path join "does-not-exist") ($tmp | path join "c" ".gitignore")
+	let with_stamp = (run-fp ($tmp | path join "a") ["-q" "--manifest" ".bayt/bayt.top.json"])
+	rm -rf $tmp
+	assert equal $with_stamp.exit 0 $"stamped C should not be walked: ($with_stamp.stderr)"
+	assert equal $with_stamp.stdout $baseline.stdout
+	print "  ok\n"
 }

@@ -74,34 +74,76 @@ def "main depot-plan" [
 	--out: string = ""           # write here instead of stdout
 ] {
 	use core/depot.nu [depot-targets]
-	use runtime/fingerprint.nu [closure-hash, load-index]
+	use runtime/fingerprint.nu [closure-hash-try, resolve-manifest, scope-list]
+	use runtime/ignore.nu [enumerate-scopes-isolated]
 	let evaluated = (open $plan)
 	let targets = (depot-targets $evaluated)
-	# All targets in one plan share the repo root; load the stat index once.
-	let root = ("." | path expand)
-	let index = (load-index $root)
+	let planned = ($targets | each { |t|
+		let entry = (try {
+			let r = (resolve-manifest $t.manifest "" "" true)
+			let existing = (scope-list $r false true false | where { |s|
+				not ($s | is-empty) and (($r.root | path join $s | path type) == "dir")
+			})
+			{resolved: $r, existing: $existing}
+		} catch { |err|
+			let rendered = ($err.rendered? | default $err.msg)
+			print -e $"bayt depot-plan: ($t.target) will not fingerprint: ($rendered)"
+			null
+		})
+		$t | insert plan $entry
+	})
+	# Enumerate scopes once per workspace root rather than once per leaf: the
+	# leaves of one group name mostly the same directories, and each scope's
+	# listing or walk error is retained so no scope is walked twice.
+	let trees_by_root = ($planned
+		| where { |t| $t.plan != null }
+		| group-by { |t| $t.plan.resolved.root }
+		| transpose root group
+		| each { |g|
+			let scopes = ($g.group | each { |t| $t.plan.existing } | flatten | uniq)
+			{$g.root: (enumerate-scopes-isolated $g.root $scopes)}
+		}
+		| into record)
 
 	# Arguments for closure-hash:
 	# cmd="", docker=false, view="", all_cmds=true (image scope), walk=false (trust stamps)
+	#
+	# closure-hash-try retains newly hashed file entries across workspace and
+	# path-tool roots in memory without rewriting .task/bayt/index per closure.
+	mut cur_tbr = $trees_by_root
+	mut cur_indexes = {}
 	mut memo = {}
 	mut results = []
-	for t in $targets {
-		let cur_memo = $memo
-		let res = (try {
-			closure-hash $t.manifest "" false $cur_memo "" true false $index
-		} catch { |err|
-			# Fail open: a per-leaf failure must stay a per-leaf empty hash so sayt/plan
-			# builds it, rather than aborting the walk for the whole group.
-			let rendered = ($err.rendered? | default $err.msg)
-			print -e $"bayt depot-plan: ($t.target) will not fingerprint: ($rendered)"
-			{hash: "", memo: $cur_memo}
-		})
-		$memo = $res.memo
-		$results ++= [{
-			target: $t.target
-			repo:   $t.repo
-			fingerprint: $res.hash
-		}]
+	for t in $planned {
+		if $t.plan == null {
+			$results ++= [{
+				target: $t.target
+				repo:   $t.repo
+				fingerprint: ""
+			}]
+		} else {
+			let cur_memo = $memo
+			let cur_idx = $cur_indexes
+			let cur_trees = $cur_tbr
+			let res = (try {
+				closure-hash-try $t.manifest "" false $cur_memo "" true false {} null $t.plan.resolved $cur_idx $cur_trees
+			} catch { |err|
+				{ok: false, err: ($err.rendered? | default $err.msg), hash: "", memo: $cur_memo, indexes: $cur_idx, trees_by_root: $cur_trees}
+			})
+			$memo = $res.memo
+			$cur_indexes = $res.indexes
+			$cur_tbr = $res.trees_by_root
+			if not $res.ok {
+				# Fail open: a per-leaf failure must stay a per-leaf empty hash so sayt/plan
+				# builds it, rather than aborting the walk for the whole group.
+				print -e $"bayt depot-plan: ($t.target) will not fingerprint: ($res.err)"
+			}
+			$results ++= [{
+				target: $t.target
+				repo:   $t.repo
+				fingerprint: (if $res.ok { $res.hash } else { "" })
+			}]
+		}
 	}
 	let out_json = ($results | to json --raw)
 	if ($out | is-empty) {

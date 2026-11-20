@@ -36,7 +36,7 @@ def is-glob [p: string]: nothing -> bool {
 }
 
 use ./tools.nu [libc-flavor]
-use ./ignore.nu [to-regex, walk-scope, enumerate-scopes]
+use ./ignore.nu [to-regex, walk-scope, enumerate-scopes, enumerate-scopes-isolated]
 
 # Platform identity folded into every hash. Stops an arm64-mac stamp
 # from being trusted on an amd64-linux host when a worktree is cross-
@@ -172,7 +172,32 @@ def update-index [root: string, entries: record]: nothing -> nothing {
   mv -f $tmp $f
 }
 
-export def compute-fingerprint [
+def merge-dirty [dirty: record, root_exp: string, updates: record]: nothing -> record {
+  if ($updates | is-empty) { return $dirty }
+  let cp = ([$root_exp] | into cell-path)
+  let prev = ($dirty | get -o $cp | default {})
+  $dirty | upsert $cp ($prev | merge $updates)
+}
+
+def flush-indexes [dirty: record]: nothing -> nothing {
+  for g in ($dirty | transpose root entries) {
+    update-index $g.root $g.entries
+  }
+}
+
+def get-root-index [indexes: record, root: string, fallback: record = {}]: nothing -> record {
+  let r = ($root | path expand)
+  let cp = ([$r] | into cell-path)
+  let hit = ($indexes | get -o $cp)
+  if $hit != null {
+    {index: $hit, indexes: $indexes}
+  } else {
+    let loaded = if not ($fallback | is-empty) { $fallback } else { load-index $r }
+    {index: $loaded, indexes: ($indexes | upsert $cp $loaded)}
+  }
+}
+
+def compute-fingerprint-pure [
   paths: list<string>
   excludes: list<string>
   docker: bool = false
@@ -182,6 +207,8 @@ export def compute-fingerprint [
   index: record = {}
   trees: record = {}            # scope -> enumeration, built once per invocation
   seen: list<string> = []       # path-tool trees already on the chain above
+  indexes: record = {}          # root -> stat index, shared across closures and path tools
+  dirty: record = {}            # root -> newly hashed stat entries awaiting top-level flush
 ]: nothing -> record {
   let gpaths = $paths
   let globs = ($gpaths | where { |p| is-glob $p })
@@ -215,7 +242,7 @@ export def compute-fingerprint [
     # Enumerated once per scope per invocation (see enumerate-scopes); a scope
     # the plan did not foresee is walked here. `default` would not do: its
     # argument is evaluated eagerly, so it would walk every scope regardless.
-    let planned = ($trees | get -o $scope)
+    let planned = ($trees | get -o ([$scope] | into cell-path))
     let scoped = (if $planned == null { walk-scope $root $scope } else { $planned })
     let entries = ($scoped
     | each { |p| if ($scope | is-empty) { $p } else { $p | str substring (($scope | str length) + 1).. } })
@@ -234,16 +261,26 @@ export def compute-fingerprint [
   # enumerated together (one git call set, not one per tree), and one a tree
   # above already closes over is not walked again.
   let tools = (path-tool-trees $files $project | where { |t| $t.dir not-in $seen })
-  let dep_hashes = ($dep_hashes ++ ($tools | group-by root | transpose root group | each { |g|
-    let planned = (enumerate-scopes $g.root ($g.group | each { |t| $t.dir | path relative-to $g.root }))
-    $g.group | each { |t|
-      (compute-fingerprint ["**/*"] [".task/**"] false $g.root $t.dir [] {} $planned ($seen ++ ($tools | get dir))).hash
+  mut cur_indexes = $indexes
+  mut cur_dirty = $dirty
+  mut tool_hashes = []
+  for g in ($tools | group-by root | transpose root group) {
+    let g_root = ($g.root | path expand)
+    let planned = (enumerate-scopes $g_root ($g.group | each { |t| $t.dir | path relative-to $g_root }))
+    for t in $g.group {
+      let tfp = (compute-fingerprint-pure ["**/*"] [".task/**"] false $g_root $t.dir [] {} $planned ($seen ++ ($tools | get dir)) $cur_indexes $cur_dirty)
+      $tool_hashes ++= [$tfp.hash]
+      $cur_indexes = $tfp.indexes
+      $cur_dirty = $tfp.dirty
     }
-  } | flatten))
+  }
+  let dep_hashes = ($dep_hashes ++ $tool_hashes)
 
-  let idx = if ($index | is-empty) { load-index $root } else { $index }
   let root_exp = ($root | path expand)
   let proj_exp = ($project | path expand)
+  let ri = (get-root-index $cur_indexes $root_exp $index)
+  let idx = $ri.index
+  $cur_indexes = $ri.indexes
 
   let assessed = ($files | par-each { |p|
     let full = ($proj_exp | path join $p)
@@ -260,7 +297,7 @@ export def compute-fingerprint [
     } else {
       let mtime = ($s.modified | format date '%s.%f')
       let size = ($s.size | into int)
-      let cached = ($idx | get -o $key)
+      let cached = ($idx | get -o ([$key] | into cell-path))
       if ($cached != null and ($cached.mtime? == $mtime) and ($cached.size? == $size)) {
         {path: $p, hash: $cached.hash, dirty: false, key: $key, mtime: $mtime, size: $size}
       } else {
@@ -271,11 +308,16 @@ export def compute-fingerprint [
   })
 
   let dirty = ($assessed | where dirty)
-  if not ($dirty | is-empty) {
+  let updates = if ($dirty | is-empty) {
+    {}
+  } else {
     # `into record` builds in one pass; `reduce --fold` + `insert` keeps two
     # live Arc refs to the accumulator and clones it on every file.
-    let updates = ($dirty | each { |it| {$it.key: {mtime: $it.mtime, size: $it.size, hash: $it.hash}} } | into record)
-    update-index $root $updates
+    $dirty | each { |it| {$it.key: {mtime: $it.mtime, size: $it.size, hash: $it.hash}} } | into record
+  }
+  if not ($updates | is-empty) {
+    $cur_indexes = ($cur_indexes | upsert ([$root_exp] | into cell-path) ($idx | merge $updates))
+    $cur_dirty = (merge-dirty $cur_dirty $root_exp $updates)
   }
 
   let unique = ($assessed | select path hash | uniq-by path | sort-by path)
@@ -285,7 +327,7 @@ export def compute-fingerprint [
     let file_list = ($unique | get hash | str join "\n")
     let dep_list = ($dep_hashes | sort | str join "\n")
   let hash = ($"(platform-key)\n($dep_list)\n($file_list)" | hash sha256)
-    return {hash: $hash, inputs: $inputs}
+    return {hash: $hash, inputs: $inputs, updates: $updates, indexes: $cur_indexes, dirty: $cur_dirty}
   }
 
   let xtool = (xattr-tool)
@@ -319,7 +361,24 @@ export def compute-fingerprint [
   let dep_list = ($dep_hashes | sort | str join "\n")
   let hash = ($"(platform-key)\n($dep_list)\n($file_list)" | hash sha256)
   let inputs = ($enriched | each { |it| {$it.path: ($it | reject path)} } | into record)
-  {hash: $hash, inputs: $inputs}
+  {hash: $hash, inputs: $inputs, updates: $updates, indexes: $cur_indexes, dirty: $cur_dirty}
+}
+
+export def compute-fingerprint [
+  paths: list<string>
+  excludes: list<string>
+  docker: bool = false
+  root: string = "."
+  project: string = "."
+  dep_hashes: list<string> = []
+  index: record = {}
+  trees: record = {}
+  seen: list<string> = []
+  indexes: record = {}
+]: nothing -> record {
+  let res = (compute-fingerprint-pure $paths $excludes $docker $root $project $dep_hashes $index $trees $seen $indexes {})
+  flush-indexes $res.dirty
+  $res
 }
 
 def parse-list [s: string]: nothing -> list<string> {
@@ -355,17 +414,202 @@ export def outs-present [pats: list<string>]: nothing -> bool {
 # `:X:<view>` dep is one of these, and never a file on disk.
 const synthetic_views = ["srcs" "outs" "bayt"]
 
-# Every scope the closure will name — the target's own project, its context
-# directories, and each dep's project — enumerated once before the fan-out.
-# par-each hands each branch a copy of what it closes over, so a memo filled
-# inside the fan-out would be filled once per branch; this is filled before it.
-def plan-scopes [r: record]: nothing -> record {
+def dep-stamp-trusted? [d: record, docker: bool, all_cmds: bool, walk: bool]: nothing -> bool {
+  let stamp = ($d.stamp? | default "")
+  if (not $docker) and (not $all_cmds) and (not ($stamp | is-empty)) and ($stamp | path exists) {
+    let manifest = ($d.manifest? | default "")
+    (not $walk) or (not ($manifest | is-empty) and not ($manifest | path exists))
+  } else { false }
+}
+
+def needs-own-walk [r: record]: nothing -> bool {
+  if ($r.paths? == null) { return true }
+  let proj = ($r.project | path expand)
+  $r.paths | any { |p| (is-glob $p) or ((($proj | path join $p) | path type) == "dir") }
+}
+
+def own-walk-scopes [r: record]: nothing -> list<string> {
   let rel = { |d| if ($d | path expand) == $r.root { "" } else {
     $d | path expand | str substring (($r.root | str length) + 1).. } }
-  let own = [(do $rel $r.project)]
+  let own = if (needs-own-walk $r) { [(do $rel $r.project)] } else { [] }
   let ctxs = (($r.contexts? | default []) | each { |d| do $rel ($r.root | path join $d) })
-  let deps = (($r.deps? | default []) | each { |d| $d.dir })
-  enumerate-scopes $r.root (($own ++ $ctxs ++ $deps) | uniq)
+  ($own ++ $ctxs) | uniq | where { |s| not ($s | is-empty) }
+}
+
+# Every scope a resolved target's step needs — its own project (when it has
+# glob or directory inputs), its context directories, and each un-stamped
+# direct dep's project — for ensure-root-scopes and batch callers (depot-plan)
+# that enumerate several closures up front.
+export def scope-list [r: record, docker: bool = false, all_cmds: bool = false, walk: bool = false]: nothing -> list<string> {
+  let rel = { |d| if ($d | path expand) == $r.root { "" } else {
+    $d | path expand | str substring (($r.root | str length) + 1).. } }
+  let own = if (needs-own-walk $r) { [(do $rel $r.project)] } else { [] }
+  let ctxs = (($r.contexts? | default []) | each { |d| do $rel ($r.root | path join $d) })
+  let deps = (($r.deps? | default [])
+    | where { |d| not (dep-stamp-trusted? $d $docker $all_cmds $walk) }
+    | each { |d| if $d.dir == "." { "" } else { $d.dir } })
+  ($own ++ $ctxs ++ $deps) | uniq
+}
+
+# Ensure every non-root scope `r` reads is present under its own workspace root
+# in `trees_by_root` (`{root: {trees, errors}}`). Top-level callers with Git
+# available pre-batch 1-hop dep scopes in one `git ls-files` call; transitive
+# steps and Git-free walks enumerate only `r`'s own required scopes so
+# literal-only dependencies are never walked.
+def ensure-root-scopes [
+  r: record
+  docker: bool
+  all_cmds: bool
+  walk: bool
+  legacy_trees: any
+  trees_by_root: record
+]: nothing -> record {
+  let root_exp = ($r.root | path expand)
+  let root_cp = ([$root_exp] | into cell-path)
+  let seeded = if ($legacy_trees != null) and not ($legacy_trees | is-empty) and (($trees_by_root | get -o $root_cp) == null) {
+    $trees_by_root | upsert $root_cp {trees: $legacy_trees, errors: {}}
+  } else {
+    $trees_by_root
+  }
+  let required = (own-walk-scopes $r)
+  if ($legacy_trees == null) and ($trees_by_root | is-empty) {
+    let batch_want = if (which git | is-not-empty) {
+      scope-list $r $docker $all_cmds $walk | where { |s| not ($s | is-empty) }
+    } else {
+      $required
+    }
+    let batch = (enumerate-scopes-isolated $root_exp $batch_want)
+    let next_map = ($seeded | upsert $root_cp $batch)
+    for s in $required {
+      let err = ($batch.errors | get -o ([$s] | into cell-path))
+      if $err != null { return {ok: false, err: $err, trees: $batch.trees, trees_by_root: $next_map} }
+    }
+    return {ok: true, err: "", trees: $batch.trees, trees_by_root: $next_map}
+  }
+  let entry = ($seeded | get -o $root_cp | default {trees: {}, errors: {}})
+  for s in $required {
+    let err = ($entry.errors | get -o ([$s] | into cell-path))
+    if $err != null { return {ok: false, err: $err, trees: $entry.trees, trees_by_root: $seeded} }
+  }
+  let missing = ($required | where { |s|
+    let cp = ([$s] | into cell-path)
+    (($entry.trees | get -o $cp) == null) and (($entry.errors | get -o $cp) == null)
+  })
+  let updated = if ($missing | is-empty) {
+    $entry
+  } else {
+    let batch = (enumerate-scopes-isolated $root_exp $missing)
+    {
+      trees: ($entry.trees | merge $batch.trees)
+      errors: ($entry.errors | merge $batch.errors)
+    }
+  }
+  let next_map = ($seeded | upsert $root_cp $updated)
+  for s in $required {
+    let err = ($updated.errors | get -o ([$s] | into cell-path))
+    if $err != null { return {ok: false, err: $err, trees: $updated.trees, trees_by_root: $next_map} }
+  }
+  {ok: true, err: "", trees: $updated.trees, trees_by_root: $next_map}
+}
+
+export def closure-hash-try [
+  manifest: string
+  cmd: string
+  docker: bool
+  memo: record
+  view: string = ""
+  all_cmds: bool = false
+  walk: bool = false
+  index: record = {}
+  trees: any = null
+  resolved: any = null
+  indexes: record = {}
+  trees_by_root: record = {}
+  dirty: record = {}
+]: nothing -> record {
+  let base = if ($view | is-empty) { $manifest } else { $"($manifest)!($view)" }
+  let base = if $all_cmds { $"($base)+cmds" } else { $base }
+  let key = if ($cmd | is-empty) { $base } else { $"($base)#($cmd)" }
+  let key_cp = ([$key] | into cell-path)
+  let hit = ($memo | get -o $key_cp)
+  if $hit != null {
+    return {
+      ok: true
+      err: ""
+      hash: $hit
+      memo: $memo
+      index: $index
+      indexes: $indexes
+      dirty: $dirty
+      trees_by_root: $trees_by_root
+    }
+  }
+
+  let r = if $resolved != null {
+    $resolved
+  } else {
+    let rr = (try { {ok: true, val: (resolve-manifest $manifest $cmd $view $all_cmds)} } catch { |err|
+      {ok: false, err: ($err.rendered? | default $err.msg)}
+    })
+    if not $rr.ok {
+      return {ok: false, err: $rr.err, hash: "", memo: $memo, index: $index, indexes: $indexes, dirty: $dirty, trees_by_root: $trees_by_root}
+    }
+    $rr.val
+  }
+  let prep = (try {
+    let ri = (get-root-index $indexes $r.root $index)
+    let sr = (ensure-root-scopes $r $docker $all_cmds $walk $trees $trees_by_root)
+    {ok: true, ri: $ri, sr: $sr}
+  } catch { |err|
+    {ok: false, err: ($err.rendered? | default $err.msg)}
+  })
+  if not $prep.ok {
+    return {ok: false, err: $prep.err, hash: "", memo: $memo, index: $index, indexes: $indexes, dirty: $dirty, trees_by_root: $trees_by_root}
+  }
+  let ri = $prep.ri
+  let sr = $prep.sr
+  if not $sr.ok {
+    return {ok: false, err: $sr.err, hash: "", memo: $memo, index: $ri.index, indexes: $ri.indexes, dirty: $dirty, trees_by_root: $sr.trees_by_root}
+  }
+  let dr = (try {
+    dep-hashes $r.deps $docker $memo $all_cmds $walk {} $ri.indexes $sr.trees_by_root $dirty
+  } catch { |err|
+    {ok: false, err: ($err.rendered? | default $err.msg), hashes: [], memo: $memo, indexes: $ri.indexes, dirty: $dirty, trees_by_root: $sr.trees_by_root}
+  })
+  if not $dr.ok {
+    return {ok: false, err: $dr.err, hash: "", memo: $dr.memo, index: $ri.index, indexes: $dr.indexes, dirty: $dr.dirty, trees_by_root: $dr.trees_by_root}
+  }
+  let root_trees = (($dr.trees_by_root | get ([$r.root] | into cell-path)).trees)
+  let ctx_res = (try {
+    {ok: true, ctx: (context-hashes $r.contexts $docker $r.root {} $root_trees $dr.indexes $dr.dirty)}
+  } catch { |err|
+    {ok: false, err: ($err.rendered? | default $err.msg)}
+  })
+  if not $ctx_res.ok {
+    return {ok: false, err: $ctx_res.err, hash: "", memo: $dr.memo, index: $ri.index, indexes: $dr.indexes, dirty: $dr.dirty, trees_by_root: $dr.trees_by_root}
+  }
+  let ctx = $ctx_res.ctx
+  let tail = (try {
+    let own = (compute-fingerprint-pure $r.paths $r.excludes $docker $r.root $r.project ($dr.hashes ++ $ctx.hashes ++ $r.invocation) {} $root_trees [] $ctx.indexes $ctx.dirty)
+    {ok: true, own: $own}
+  } catch { |err|
+    {ok: false, err: ($err.rendered? | default $err.msg)}
+  })
+  if not $tail.ok {
+    let cur_root_idx = ($ctx.indexes | get ([$r.root] | into cell-path))
+    return {ok: false, err: $tail.err, hash: "", memo: $dr.memo, index: $cur_root_idx, indexes: $ctx.indexes, dirty: $ctx.dirty, trees_by_root: $dr.trees_by_root}
+  }
+  let next_idx = ($tail.own.indexes | get ([$r.root] | into cell-path))
+  {
+    ok: true
+    err: ""
+    hash: $tail.own.hash
+    memo: ($dr.memo | upsert $key_cp $tail.own.hash)
+    index: $next_idx
+    indexes: $tail.own.indexes
+    dirty: $tail.own.dirty
+    trees_by_root: $dr.trees_by_root
+  }
 }
 
 # A target's fingerprint folds its deps' — see dep-hashes for where those come
@@ -384,21 +628,15 @@ export def closure-hash [
   all_cmds: bool = false
   walk: bool = false
   index: record = {}
-  trees: record = {}
+  trees: any = null
+  resolved: any = null
+  indexes: record = {}
+  trees_by_root: record = {}
 ]: nothing -> record {
-  let base = if ($view | is-empty) { $manifest } else { $"($manifest)!($view)" }
-  let base = if $all_cmds { $"($base)+cmds" } else { $base }
-  let key = if ($cmd | is-empty) { $base } else { $"($base)#($cmd)" }
-  if $key in $memo { return {hash: ($memo | get $key), memo: $memo} }
-
-  let r = (resolve-manifest $manifest $cmd $view $all_cmds)
-  let idx = if ($index | is-empty) { load-index $r.root } else { $index }
-  let tr = if ($trees | is-empty) { plan-scopes $r } else { $trees }
-  let dr = (dep-hashes $r.deps $docker $memo $all_cmds $walk $idx $tr)
-  let deps = $dr.hashes
-  let ctx = (context-hashes $r.contexts $docker $r.root $idx $tr)
-  let own = (compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx ++ $r.invocation) $idx $tr)
-  {hash: $own.hash, memo: ($dr.memo | upsert $key $own.hash)}
+  let res = (closure-hash-try $manifest $cmd $docker $memo $view $all_cmds $walk $index $trees $resolved $indexes $trees_by_root {})
+  if not $res.ok { error make { msg: $res.err } }
+  flush-indexes $res.dirty
+  $res
 }
 
 # The full key for a resolved manifest: its own inputs, chained to its deps'
@@ -409,22 +647,34 @@ export def closure-hash [
 # caller that runs before go-task has run the deps needs it: a dep's stamp is
 # only refreshed when the dep runs, so until then it can hold a hash from
 # before an edit.
-export def manifest-fingerprint [r: record, docker: bool = false, all_cmds: bool = false, walk: bool = false, index: record = {}, trees: record = {}]: nothing -> record {
-  let idx = if ($index | is-empty) { load-index $r.root } else { $index }
+export def manifest-fingerprint [r: record, docker: bool = false, all_cmds: bool = false, walk: bool = false, index: record = {}, trees: any = null, indexes: record = {}, trees_by_root: record = {}]: nothing -> record {
+  let ri = (get-root-index $indexes $r.root $index)
   # Once per invocation, above the fan-out: every dep below reads this.
-  let tr = if ($trees | is-empty) { plan-scopes $r } else { $trees }
-  let deps = (dep-hashes ($r.deps? | default []) $docker {} $all_cmds $walk $idx $tr).hashes
-  let ctx = (context-hashes ($r.contexts? | default []) $docker $r.root $idx $tr)
-  compute-fingerprint $r.paths $r.excludes $docker $r.root $r.project ($deps ++ $ctx ++ ($r.invocation? | default [])) $idx $tr
+  let sr = (ensure-root-scopes $r $docker $all_cmds $walk $trees $trees_by_root)
+  if not $sr.ok { error make { msg: $sr.err } }
+  let dr = (dep-hashes ($r.deps? | default []) $docker {} $all_cmds $walk {} $ri.indexes $sr.trees_by_root {})
+  if not $dr.ok { error make { msg: $dr.err } }
+  let root_trees = (($dr.trees_by_root | get ([$r.root] | into cell-path)).trees)
+  let ctx = (context-hashes ($r.contexts? | default []) $docker $r.root {} $root_trees $dr.indexes $dr.dirty)
+  let own = (compute-fingerprint-pure $r.paths $r.excludes $docker $r.root $r.project ($dr.hashes ++ $ctx.hashes ++ ($r.invocation? | default [])) {} $root_trees [] $ctx.indexes $ctx.dirty)
+  flush-indexes $own.dirty
+  $own
 }
 
 # Hash each context directory over its own contents. Rooted AT the directory so
 # the walk covers it and nothing else, while ignore rules still compose from the
 # repo root.
-def context-hashes [dirs: list<string>, docker: bool, root: string, index: record = {}, trees: record = {}]: nothing -> list<string> {
-  $dirs | each { |d|
-    (compute-fingerprint ["**/*"] [] $docker $root ($root | path join $d) [] $index $trees).hash
+def context-hashes [dirs: list<string>, docker: bool, root: string, index: record = {}, trees: record = {}, indexes: record = {}, dirty: record = {}]: nothing -> record {
+  mut cur_indexes = $indexes
+  mut cur_dirty = $dirty
+  mut hashes = []
+  for d in $dirs {
+    let fp = (compute-fingerprint-pure ["**/*"] [] $docker $root ($root | path join $d) [] $index $trees [] $cur_indexes $cur_dirty)
+    $hashes ++= [$fp.hash]
+    $cur_indexes = $fp.indexes
+    $cur_dirty = $fp.dirty
   }
+  {hashes: $hashes, indexes: $cur_indexes, dirty: $cur_dirty}
 }
 
 # Resolve each dep to its fingerprint. The stamp is a memo of that value, left
@@ -435,28 +685,34 @@ def context-hashes [dirs: list<string>, docker: bool, root: string, index: recor
 # Only the narrow content flavor is memoized: a stamp records whichever scope
 # wrote it, and every stamped call the generated Taskfiles emit is content-only
 # and cmd-scoped.
-def dep-hashes [nodes: list<record>, docker: bool, memo: record, all_cmds: bool = false, walk: bool = false, index: record = {}, trees: record = {}]: nothing -> record {
-  if ($nodes | is-empty) { return {hashes: [], memo: $memo} }
+def dep-hashes [nodes: list<record>, docker: bool, memo: record, all_cmds: bool = false, walk: bool = false, index: record = {}, indexes: record = {}, trees_by_root: record = {}, dirty: record = {}]: nothing -> record {
+  if ($nodes | is-empty) { return {ok: true, err: "", hashes: [], memo: $memo, indexes: $indexes, dirty: $dirty, trees_by_root: $trees_by_root} }
 
   mut cur_memo = $memo
+  mut cur_indexes = $indexes
+  mut cur_dirty = $dirty
+  mut cur_tbr = $trees_by_root
   mut hashes = []
   for d in $nodes {
-    let trusted = (not $walk) or (not ($d.manifest | path exists))
-    let cached = (if (not $docker) and (not $all_cmds) and $trusted and ($d.stamp | path exists) {
-      open $d.stamp | str trim
-    } else { "" })
+    let cached = if (dep-stamp-trusted? $d $docker $all_cmds $walk) { open $d.stamp | str trim } else { "" }
     if not ($cached | is-empty) {
       $hashes ++= [$cached]
     } else {
       if not ($d.manifest | path exists) {
-        error make { msg: $"fingerprint: dep manifest not found: ($d.manifest)" }
+        return {ok: false, err: $"fingerprint: dep manifest not found: ($d.manifest)", hashes: [], memo: $cur_memo, indexes: $cur_indexes, dirty: $cur_dirty, trees_by_root: $cur_tbr}
       }
-      let res = (closure-hash $d.manifest "" $docker $cur_memo $d.view $all_cmds $walk $index $trees)
-      $hashes ++= [$res.hash]
+      let res = (closure-hash-try $d.manifest "" $docker $cur_memo $d.view $all_cmds $walk {} null null $cur_indexes $cur_tbr $cur_dirty)
       $cur_memo = $res.memo
+      $cur_indexes = $res.indexes
+      $cur_dirty = $res.dirty
+      $cur_tbr = $res.trees_by_root
+      if not $res.ok {
+        return {ok: false, err: $res.err, hashes: [], memo: $cur_memo, indexes: $cur_indexes, dirty: $cur_dirty, trees_by_root: $cur_tbr}
+      }
+      $hashes ++= [$res.hash]
     }
   }
-  {hashes: $hashes, memo: $cur_memo}
+  {ok: true, err: "", hashes: $hashes, memo: $cur_memo, indexes: $cur_indexes, dirty: $cur_dirty, trees_by_root: $cur_tbr}
 }
 
 # resolve-manifest — concrete inputs from a .bayt/bayt.<n>.json: srcs, the

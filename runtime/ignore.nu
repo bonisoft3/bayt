@@ -214,11 +214,11 @@ def git-enumerate [root: string, subs: list<string>]: nothing -> any {
   # a byte outside ASCII as an escaped, double-quoted C string, which the walk
   # reports raw — so the two would name different files and key a target
   # differently depending on whether git answered.
-  let all = (do -i { ^git -C $root ls-files -z -co --exclude-per-directory=.gitignore ...$scope } | complete)
+  let all = (do -i { ^git --literal-pathspecs -C $root ls-files -z -co --exclude-per-directory=.gitignore ...$scope } | complete)
   if $all.exit_code != 0 { return null }
-  let ign = (do -i { ^git -C $root ls-files -z -ci --exclude-per-directory=.gitignore ...$scope } | complete)
+  let ign = (do -i { ^git --literal-pathspecs -C $root ls-files -z -ci --exclude-per-directory=.gitignore ...$scope } | complete)
   if $ign.exit_code != 0 { return null }
-  let deleted = (do -i { ^git -C $root ls-files -z --deleted ...$scope } | complete)
+  let deleted = (do -i { ^git --literal-pathspecs -C $root ls-files -z --deleted ...$scope } | complete)
   if $deleted.exit_code != 0 { return null }
   # A record, not a list: `in` over a list is linear, and at repo scope that
   # turns the subtraction into |tracked| x |ignored| comparisons.
@@ -229,7 +229,7 @@ def git-enumerate [root: string, subs: list<string>]: nothing -> any {
   # `.task/` the two paths would otherwise disagree — the fast path handing
   # back bayt's own stamps and index, which are rewritten on every run.
   $all.stdout | split row (char nul)
-    | where { |p| not ($p | is-empty) }
+    | where { |p| not ($p | is-empty) and not ($p | str ends-with "/") }
     | where { |p| ($drop | get -o $p) == null }
     | where { |p| not (($p | str starts-with ".git/") or ($p | str starts-with ".task/")
                       or ($p | str contains "/.git/") or ($p | str contains "/.task/")) }
@@ -243,6 +243,44 @@ def git-enumerate [root: string, subs: list<string>]: nothing -> any {
 # what it descends, so it descends each scope and nothing else. Either way a
 # scope is enumerated once per invocation, which is the point: a deep graph
 # otherwise names the same directory once per dependent.
+def norm-segs [s: string]: nothing -> list<string> {
+  mut st = []
+  for seg in ($s | split row "/" | where { |x| not ($x | is-empty) and $x != "." }) {
+    if $seg == ".." and (not ($st | is-empty)) and (($st | last) != "..") {
+      $st = ($st | drop 1)
+    } else {
+      $st ++= [$seg]
+    }
+  }
+  $st
+}
+
+def norm-scope [s: string]: nothing -> string {
+  norm-segs $s | str join "/"
+}
+
+def bucket-scopes [whole: list<string>, want: list<string>]: nothing -> record {
+  # Group scopes by canonical segment count so each distinct depth runs one
+  # builtin `group-by` pass and every scope resolves by direct key lookup
+  # (including `./app` spellings) instead of scanning deeper sibling keys.
+  $want
+  | each { |s| {raw: $s, norm: (norm-scope $s)} }
+  | group-by { |it| $it.norm | split row "/" | length }
+  | transpose depth_str scopes_at_depth
+  | each { |g|
+    let d = ($g.depth_str | into int)
+    let buckets = ($whole | group-by { |p|
+      let segs = ($p | split row "/")
+      if ($segs | length) > $d { $segs | first $d | str join "/" } else { "" }
+    })
+    $g.scopes_at_depth | each { |it|
+      {$it.raw: ($buckets | get -o ([$it.norm] | into cell-path) | default [])}
+    }
+  }
+  | flatten
+  | into record
+}
+
 export def enumerate-scopes [
   root: string
   scopes: list<string>
@@ -252,31 +290,78 @@ export def enumerate-scopes [
   # whole tree for it and the walk would descend it; a target scoped there
   # names literal paths (go.mod and friends) that need no enumeration, and one
   # that does not still answers through the on-demand path below.
-  let want = ($scopes | uniq | where { |s| not ($s | is-empty) })
+  let want = ($scopes | uniq | where { |s| not ((norm-scope $s) | is-empty) })
+  if ($want | is-empty) { return {} }
   # Pathspecs: git lists the scopes asked for instead of the repo, so it reads
   # less of the index and the bucketing below has less to place.
-  let whole = if $flavor == "git" { git-enumerate $root $want } else { null }
+  let whole = if $flavor == "git" { git-enumerate $root ($want | each { |s| norm-scope $s } | uniq) } else { null }
   if $whole != null {
-    # `group-by` with a closure keys the list in one builtin pass. Charging each
-    # path to every ancestor scope instead runs an interpreted closure per path
-    # per level, and flattens a record per pair.
-    let depth = ($want | each { |s| $s | split row "/" | length } | append 1 | math max)
-    let buckets = ($whole | group-by { |p| $p | split row "/" | first $depth | str join "/" })
-    let keys = ($buckets | columns)
-    return ($want | reduce --fold {} { |s, acc|
-      let own = ($buckets | get -o $s)
-      # A scope shallower than the bucket key takes every bucket beneath it,
-      # over keys rather than paths. No bucket at or under it means no files.
-      let hit = if $own != null { $own } else {
-        $keys | where { |k| $k | str starts-with $"($s)/" }
-        | each { |k| $buckets | get $k } | flatten
-      }
-      $acc | insert $s $hit
-    })
+    return (bucket-scopes $whole $want)
   }
   $want
-  | par-each --keep-order { |s| {scope: $s, paths: (walk-scope $root $s $flavor)} }
-  | reduce --fold {} { |r, acc| $acc | insert $r.scope $r.paths }
+  | par-each --keep-order { |s| {$s: (walk-scope $root $s $flavor)} }
+  | into record
+}
+
+def has-nested-git [root_exp: string, segs: list<string>]: nothing -> bool {
+  ($segs | enumerate | any { |it|
+    let rel = ($segs | first ($it.index + 1) | str join "/")
+    ($root_exp | path join $rel ".git" | path exists)
+  })
+}
+
+def in-repo-scope [root_exp: string, s: string]: nothing -> bool {
+  let segs = (norm-segs $s)
+  if ($segs | is-empty) or ($segs | any { |seg| $seg == ".." }) { return false }
+  let r_segs = ($root_exp | path split)
+  let p_segs = ($root_exp | path join ($segs | str join "/") | path expand | path split)
+  if not ((($p_segs | length) > ($r_segs | length)) and (($p_segs | first ($r_segs | length)) == $r_segs)) {
+    return false
+  }
+  not (has-nested-git $root_exp $segs)
+}
+
+# Enumerate several scopes once while isolating per-scope walk errors so a
+# batch caller (depot-plan) keeps healthy listings and records each failing
+# scope's error without walking any scope twice.
+export def enumerate-scopes-isolated [
+  root: string
+  scopes: list<string>
+  flavor: string = "git"
+]: nothing -> record {
+  let want = ($scopes | uniq | where { |s| not ((norm-scope $s) | is-empty) })
+  if ($want | is-empty) { return {trees: {}, errors: {}} }
+  let root_exp = ($root | path expand)
+  let in_repo = ($want | where { |s| in-repo-scope $root_exp $s })
+  let out_repo = ($want | where { |s| not (in-repo-scope $root_exp $s) })
+  let whole = if $flavor == "git" and not ($in_repo | is-empty) {
+    try { git-enumerate $root ($in_repo | each { |s| norm-scope $s } | uniq) } catch { null }
+  } else { null }
+  let git_trees = if $whole != null { bucket-scopes $whole $in_repo } else { {} }
+  let pending = if $whole != null { $out_repo } else { $want }
+  if ($pending | is-empty) {
+    return {trees: $git_trees, errors: {}}
+  }
+  let try_git = if ($flavor == "git") and (which git | is-not-empty) {
+    let top = (do -i { ^git -C $root rev-parse --show-toplevel } | complete)
+    ($top.exit_code == 0) and (($top.stdout | str trim) == $root)
+  } else { false }
+  let outcomes = ($pending | par-each --keep-order { |s|
+    try {
+      let paths = if $try_git and (in-repo-scope $root_exp $s) {
+        walk-scope $root $s $flavor
+      } else {
+        walk-scope $root $s $flavor --no-git
+      }
+      {scope: $s, paths: $paths, err: null}
+    } catch { |err|
+      {scope: $s, paths: null, err: ($err.rendered? | default $err.msg)}
+    }
+  })
+  {
+    trees: ($git_trees | merge ($outcomes | where { |r| $r.err == null } | each { |r| {$r.scope: $r.paths} } | into record))
+    errors: ($outcomes | where { |r| $r.err != null } | each { |r| {$r.scope: $r.err} } | into record)
+  }
 }
 
 # Enumerate a scope, in the path space of `root`. Rules are seeded from every
@@ -289,23 +374,27 @@ export def walk-scope [
   flavor: string = "git"
   --no-git                          # skip the fast path; the walk is the oracle
 ]: nothing -> list<string> {
+  let norm_segs = (norm-segs $sub)
+  if ($norm_segs | any { |seg| $seg == ".git" or $seg == ".task" }) { return [] }
+  if (not ($norm_segs | is-empty)) and (not ($norm_segs | any { |seg| $seg == ".." })) and (has-nested-git ($root | path expand) $norm_segs) { return [] }
+  let norm_sub = ($norm_segs | str join "/")
   let fast = if $flavor == "git" and (not $no_git) {
-    git-enumerate $root (if ($sub | is-empty) { [] } else { [$sub] })
+    git-enumerate $root (if ($norm_sub | is-empty) { [] } else { [$norm_sub] })
   } else { null }
   if $fast != null { return $fast }
 
   let ignore_name = if $flavor == "docker" { ".dockerignore" } else { ".gitignore" }
-  let segs = if ($sub | is-empty) { [] } else { $sub | split row "/" | where { |s| not ($s | is-empty) } }
+  let segs = $norm_segs
   # Ancestors shallowest-first, so a deeper file overrides a shallower one.
   let bases = ([""] ++ ($segs | enumerate | each { |it| $segs | first ($it.index + 1) | str join "/" }))
   let seeded = ($bases | drop 1 | prepend "" | uniq | each { |b|
     let f = if ($b | is-empty) { $"($root)/($ignore_name)" } else { $"($root)/($b)/($ignore_name)" }
     if ($f | path exists) { parse-file (open --raw $f) $b $flavor } else { [] }
   } | flatten)
-  let start = if ($sub | is-empty) { $root } else { $"($root)/($sub)" }
+  let start = if ($norm_sub | is-empty) { $root } else { $"($root)/($norm_sub)" }
   # The scope's own ignore file is read by the walk itself, so drop it here.
-  let seeded = ($seeded | where { |r| $r.base != $sub })
-  walk $start (compile-rules $seeded) $sub $flavor
+  let seeded = ($seeded | where { |r| $r.base != $norm_sub })
+  walk $start (compile-rules $seeded) $norm_sub $flavor
 }
 
 # Descend `dir`, collecting files that survive the rules. A nested ignore file
