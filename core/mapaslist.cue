@@ -50,21 +50,27 @@ import "list"
 #MapToList: {
 	in: {[string]: _}
 	let _in = in
-	_flat: [
+	_keys: [
 		for k, v in _in if v != null {
+			key:      k
 			name:     [if v.name != _|_ {v.name}, k][0]
 			priority: [if v.priority != _|_ {v.priority}, 0][0]
-			for fk, fv in v if fk != "name" && fk != "priority" {(fk): fv}
 		},
 	]
-	out: [
-		for i in list.Sort(_flat, {
+	_ordered: [
+		if len(_keys) <= 1 {_keys},
+		list.Sort(_keys, {
 			x: {}
 			y: {}
 			less: (x.priority < y.priority) ||
 				(x.priority == y.priority && x.name < y.name)
-		}) {
-			{for k, v in i if k != "priority" {(k): v}}
+		}),
+	][0]
+	out: [
+		for entry in _ordered
+		let v = _in[entry.key] {
+			name: entry.name
+			for fk, fv in v if fk != "name" && fk != "priority" {(fk): fv}
 		},
 	]
 }

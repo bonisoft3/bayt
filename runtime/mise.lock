@@ -11,36 +11,36 @@ tool-stubs = [
 ]
 
 [[tools."http:cue.toml"]]
-version = "0.18.0-rc.4"
+version = "0.18.0"
 backend = "http:cue.toml"
 
 [tools."http:cue.toml"."platforms.linux-arm64"]
-checksum = "blake3:7172801ae682af29f681d10fb65d66dfa370b3fcfa76e3994a81413c1cdf5bd5"
-url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_linux_arm64.tar.gz"
+checksum = "blake3:de21ca70abefc7c15ede732f543c62c13b7176d305e0824aad2670296f2937e3"
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0/cue_v0.18.0_linux_arm64.tar.gz"
 
 [tools."http:cue.toml"."platforms.linux-arm64-musl"]
-checksum = "blake3:7172801ae682af29f681d10fb65d66dfa370b3fcfa76e3994a81413c1cdf5bd5"
-url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_linux_arm64.tar.gz"
+checksum = "blake3:de21ca70abefc7c15ede732f543c62c13b7176d305e0824aad2670296f2937e3"
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0/cue_v0.18.0_linux_arm64.tar.gz"
 
 [tools."http:cue.toml"."platforms.linux-x64"]
-checksum = "blake3:439686f72577cb58f3be071d21cd6f5a3e9ec1d0be2a46a444af2fa383217a1b"
-url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_linux_amd64.tar.gz"
+checksum = "blake3:0c7445e941aa37f42c9ebf463dea61b271d13e53933a9e1621872b3aea46a6cc"
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0/cue_v0.18.0_linux_amd64.tar.gz"
 
 [tools."http:cue.toml"."platforms.linux-x64-musl"]
-checksum = "blake3:439686f72577cb58f3be071d21cd6f5a3e9ec1d0be2a46a444af2fa383217a1b"
-url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_linux_amd64.tar.gz"
+checksum = "blake3:0c7445e941aa37f42c9ebf463dea61b271d13e53933a9e1621872b3aea46a6cc"
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0/cue_v0.18.0_linux_amd64.tar.gz"
 
 [tools."http:cue.toml"."platforms.macos-arm64"]
-checksum = "blake3:101c216b66288a9f7a09f4556cf767a80b5c7879ec2b589762a8dda7a0e9979e"
-url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_darwin_arm64.tar.gz"
+checksum = "blake3:07d6fa8bb532bcd6ce468a0b008302961c60eea642a9ca14436f9e20c8dc742a"
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0/cue_v0.18.0_darwin_arm64.tar.gz"
 
 [tools."http:cue.toml"."platforms.macos-x64"]
-checksum = "blake3:8f6614ab538fa1ce4080495b51fb8598ec075f8e68f23f917906a254db8f0490"
-url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_darwin_amd64.tar.gz"
+checksum = "blake3:724810cb938046d37fad577dfe7f513b2395eac538d7517d89b7eb94b54293be"
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0/cue_v0.18.0_darwin_amd64.tar.gz"
 
 [tools."http:cue.toml"."platforms.windows-x64"]
-checksum = "blake3:b8bfd223ef4137d25bd847c460f97036dbb25a5c420c949b9ddda46693c002af"
-url = "https://github.com/cue-lang/cue/releases/download/v0.18.0-rc.4/cue_v0.18.0-rc.4_windows_amd64.zip"
+checksum = "blake3:377fada36e3ddfb64ffd801c7f9d0f79b8b413e586cce4bca7eef7c2a2b9816e"
+url = "https://github.com/cue-lang/cue/releases/download/v0.18.0/cue_v0.18.0_windows_amd64.zip"
 
 [[tools."http:curl.toml"]]
 version = "8.23.0"
