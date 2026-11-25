@@ -257,7 +257,10 @@ before load; process-compose's `env_cmds` reach only the processes, never the
 cannot start would pass its check, and the stack stops in reverse dependency
 order. The `process-compose` block passes
 `availability` (restart policies), the probes, `shutdown` and `working_dir`
-through; a one-shot that exits 0 is a success, and what needs it finished waits
+through. Processes with readiness or liveness probes default to a ten-second
+shutdown deadline, overridable through `shutdown.timeout_seconds`: after a
+failed probe, a service ignoring SIGTERM must terminate before its restart
+policy can recover it. A one-shot that exits 0 is a success, and what needs it finished waits
 on `"completed"`.
 
 ## Transitive walking

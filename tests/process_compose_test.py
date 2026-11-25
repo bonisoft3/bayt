@@ -120,6 +120,29 @@ out: {
         self.generate('exit 7')
         self.assertEqual(self.run_integrate().returncode, 7)
 
+    def test_readiness_failure_restarts_a_service_ignoring_sigterm(self):
+        server = dict(SERVER, entrypoint={'shell': 'sh', 'do':
+            'exec python3 -c "import signal,time; '
+            'signal.signal(signal.SIGTERM,signal.SIG_IGN); '
+            "open('starts','a').write('start\\n'); time.sleep(30)\""},
+            **{'process-compose': {
+                'availability': {'restart': 'on_failure', 'max_restarts': 1},
+                'readiness_probe': {
+                    'exec': {'command': 'python3 -c "from pathlib import Path; '
+                             "exit(0 if len(Path('starts').read_text().splitlines()) > 1 else 1)\""},
+                    'period_seconds': 1, 'failure_threshold': 2}}})
+        config = self.generate('cp starts result.txt', server=server)
+        self.assertEqual(config['processes']['server']['shutdown']['timeout_seconds'], 10)
+        result = self.run_integrate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.project / 'result.txt').read_text().splitlines(), ['start', 'start'])
+
+    def test_explicit_shutdown_deadline_is_preserved(self):
+        server = dict(SERVER, **{'process-compose': {'shutdown': {'timeout_seconds': 25}}})
+        config = self.generate('true', server=server)
+        self.assertEqual(config['processes']['server']['shutdown']['timeout_seconds'], 25)
+        self.assertNotIn('shutdown', config['processes']['integrate'])
+
     # process-compose exits 0 when the target never ran because a dependency
     # died, so a stack that cannot start would pass its check.
     def test_dependency_failure_fails_the_run(self):

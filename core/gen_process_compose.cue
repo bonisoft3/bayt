@@ -295,6 +295,11 @@ import (
 					if _pc.liveness_probe != _|_ {
 						liveness_probe: (_activated & {activate: _act, bayt: _bayt, probe: _pc.liveness_probe}).out
 					}
+					// A failed probe stops monitoring before termination. Bound shutdown
+					// so a service ignoring SIGTERM cannot strand healthy dependents.
+					if _probes[n] != null || _pc.liveness_probe != _|_ {
+						shutdown: timeout_seconds: *10 | int
+					}
 					if _pc.shutdown != _|_ {shutdown: _pc.shutdown}
 					if _pc.working_dir != _|_ {working_dir: _pc.working_dir}
 				}
