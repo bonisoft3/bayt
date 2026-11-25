@@ -1083,23 +1083,32 @@ _copyParents: {
 	}
 
 	// _clampFlatten — the shared synthetic-image skeleton. A busybox `_ctxs`
-	// stage runs `bodyLines` to assemble /monorepo, normalises the host-COPY'd
-	// subtree's mtimes to SOURCE_DATE_EPOCH, then flattens into
-	// `FROM scratch AS stage` so the synthetic has a stable digest for
-	// service-graph dedup (an inline normalise can't — the COPY layers still
-	// float). See docs/bayt-synthetic-digest-investigation.md.
+	// stage runs `bodyLines` to assemble the host-COPY'd subtree, normalises its
+	// mtimes to SOURCE_DATE_EPOCH, then flattens into `FROM scratch AS stage`
+	// so the synthetic has a stable digest for service-graph dedup (an inline
+	// normalise can't — the COPY layers still float). See
+	// docs/bayt-synthetic-digest-investigation.md.
 	//
-	// `find` is scoped to `workdir`: chained-dep content arrives via
-	// `COPY --from=<dep> /monorepo /monorepo` already at EPOCH and preserved, so
-	// only the host-COPY'd subtree floats. Ancestor dirs above workdir float too
-	// (buildkit stamps implicitly-created dirs at build time) but sit outside the
-	// scoped walk, so they are clamped explicitly.
+	// `depLines` (the chained deps' `COPY --from=<dep> /monorepo /monorepo`)
+	// land in the flattened stage, after the clamp, not in `_ctxs`: their
+	// content is already at EPOCH, and a RUN's cache key covers every layer
+	// beneath it, so a dep COPY'd before the clamp re-ran it (and every
+	// consumer's, down the chain) whenever any ancestor changed, though the
+	// walk never reads dep content. After the clamp, a dep change re-runs
+	// only the COPYs; the RUN stays cached. Own files still sit beneath the
+	// deps, as when both were COPY'd into `_ctxs`.
+	//
+	// `find` is scoped to `workdir`, the only subtree that floats. Ancestor
+	// dirs above workdir float too (buildkit stamps implicitly-created dirs at
+	// build time) but sit outside the scoped walk, so they are clamped
+	// explicitly.
 	// `BAYT_CLAMP=0` skips the clamp to measure its cost (the digest then floats).
 	_clampFlatten: {
 		ctxsStage: string
 		stage:     string
 		workdir:   string
 		bodyLines: [...string]
+		depLines:  [...string] | *[]
 		// Copy `workdir` into the RUN's own upper layer before clamping source
 		// and scaffolding trees (`_srcs` / `_bayt`), moving any xattr-bearing
 		// files into place directly so multiline/binary attributes survive
@@ -1146,6 +1155,7 @@ _copyParents: {
 				"FROM scratch AS \(stage)",
 				"COPY --from=\(ctxsStage) /monorepo /monorepo",
 			],
+			depLines,
 		]), "\n") + "\n"
 	}
 
@@ -1174,8 +1184,8 @@ _copyParents: {
 				(_copyParents & {srcs: _globs, excludes: _t.srcs.exclude}).out
 			},
 		]
-		// Non-link: the clamp normalises mtimes anyway, and a `--link`
-		// cross-stage copy re-synthesises the dest parent chain.
+		// Non-link: a `--link` cross-stage copy re-synthesises the dest
+		// parent chain.
 		_depCopies: [
 			for d in (_srcsChainDeps & {"t": _t}).out {
 				"COPY --from=\(d.project)-\(d.name)_srcs /monorepo /monorepo"
@@ -1185,7 +1195,8 @@ _copyParents: {
 			ctxsStage: _ctxsStage
 			stage:     _stage
 			workdir:   _workdir
-			bodyLines: list.Concat([_srcCopy, _depCopies])
+			bodyLines: _srcCopy
+			depLines:  _depCopies
 		}).out
 	}
 
@@ -1268,10 +1279,8 @@ _copyParents: {
 			ctxsStage: _ctxsStage
 			stage:     _stage
 			workdir:   _workdir
-			bodyLines: list.Concat([
-				["COPY --parents \(strings.Join(_files, " ")) ./"],
-				[for e in _chain {"COPY --from=\(e) /monorepo /monorepo"}],
-			])
+			bodyLines: ["COPY --parents \(strings.Join(_files, " ")) ./"]
+			depLines:  [for e in _chain {"COPY --from=\(e) /monorepo /monorepo"}]
 		}).out
 	}
 
