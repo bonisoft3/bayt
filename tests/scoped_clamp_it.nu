@@ -3,6 +3,9 @@
 # `FROM scratch` stage must have a REPRODUCIBLE digest (the identity that
 # service-graph dedup and the registry cache key rely on).
 #
+# The deps are COPY'd into the flattened stage, after the consumer's clamp, so a
+# change to a dep re-runs the consumer's COPYs but not its clamp: (4) asserts it.
+#
 # Only nested-dir projects exercise the scoping — the other integration tests
 # build root projects (workdir == /monorepo), where `find /monorepo/<dir>`
 # degenerates to the whole tree. Here a consumer at /monorepo/a/b pulls two deps
@@ -54,13 +57,13 @@ COPY --from=dep2_ctxs /monorepo /monorepo
 FROM ($BB) AS ab_ctxs
 WORKDIR /monorepo/a/b
 COPY --parents f.txt own-link ./
-COPY --from=dep1_srcs /monorepo /monorepo
-COPY --from=dep2_srcs /monorepo /monorepo
 ARG SOURCE_DATE_EPOCH
 ARG BAYT_CLAMP=1
 ($ab)
 FROM scratch AS ab_srcs
 COPY --from=ab_ctxs /monorepo /monorepo
+COPY --from=dep1_srcs /monorepo /monorepo
+COPY --from=dep2_srcs /monorepo /monorepo
 "
 }
 
@@ -127,6 +130,22 @@ def main [] {
     fail $bld $work "FAIL scoped_clamp: clamp off yet digests match — test is vacuous (host mtimes not floating, or export normalised them)."
   }
 
+  # (4) a dep's content changes → the consumer's clamp RUN stays cached (the dep
+  #     reaches ab_srcs after it), and the flattened tree holds the new content.
+  ^docker buildx build --builder $bld -f $"($work)/Dockerfile" --target ab_srcs --output type=cacheonly $work o> /dev/null e> /dev/null
+  "dep1-changed\n" | save -f $"($work)/d1.txt"
+  let rebuild = (with-env {SOURCE_DATE_EPOCH: "0"} {
+    do { ^docker buildx build --builder $bld --progress=plain -f $"($work)/Dockerfile" --target ab_srcs --output $"type=local,dest=($work)/ab-after" $work } | complete
+  })
+  let clamp_vertex = ($rebuild.stderr | lines | where {|l| $l =~ '\[ab_ctxs \d+/\d+\] RUN' } | first | parse --regex '^(?<v>#\d+) ' | get v.0)
+  let cached = ($rebuild.stderr | lines | any {|l| $l == $"($clamp_vertex) CACHED" })
+  if $rebuild.exit_code != 0 or (not $cached) {
+    fail $bld $work $"FAIL scoped_clamp: a dep-only change re-ran the consumer's clamp \(or the build failed\):\n($rebuild.stderr)"
+  }
+  if (open --raw $"($work)/ab-after/monorepo/x/dep1/d1.txt") != "dep1-changed\n" {
+    fail $bld $work "FAIL scoped_clamp: the flattened tree lost the dep's new content."
+  }
+
   # (3) dot-root (`WORKDIR /monorepo/.` and `BAYT_DIR=./`) build cleanly under
   #     normalized copy-up, and both `_srcs` (multiline file + directory `user.*`
   #     xattrs) and `_outs` (`copyUp: false`) preserve extended attributes.
@@ -191,6 +210,6 @@ RUN exp_multi=$(printf '# file: /monorepo/a/b/sub/multi.txt\nuser.bayt="first\n#
   }
 
   cleanup $bld $work
-  print "PASS scoped_clamp: nested-dir flatten digest reproducible under scoped clamp; floats without it"
+  print "PASS scoped_clamp: nested-dir flatten digest reproducible under scoped clamp; floats without it; a dep change leaves the clamp cached"
   exit 0
 }

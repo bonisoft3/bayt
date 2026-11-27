@@ -1127,3 +1127,30 @@ _d29_df: (#dockerComposeGen & {project: _d29, depManifests: {}}).dockerfiles.set
 _d29_late: strings.Contains(_d29_df, "bayt.setup.json ./.bayt/\nCOPY [l]ocal.toml ./\nRUN true\n") & true
 _d29_ctxs: strings.Contains(_d29_df, "COPY --parents a.toml [l]ocal.toml ./") & true
 _d29_view: list.Contains((#manifestGen & {project: _d29, depManifests: {}})._ownSrcGlobs.setup, "[l]ocal.toml") & true
+
+// --- D32: a synthetic's chained deps are COPY'd into the flattened stage,
+// after the clamp, never into `_ctxs`. A RUN's cache key covers every layer
+// beneath it, so a dep COPY'd before the clamp re-ran it, and each
+// consumer's clamp down the chain, whenever any ancestor's tree changed.
+_d32: #project & {
+	name: "d32"
+	dir:  "d32"
+	targets: {
+		"setup": {
+			srcs: globs: ["a.toml"]
+			cmd: "builtin": do: "true"
+			dockerfile: busybox
+		}
+		"build": {
+			deps: [":setup"]
+			srcs: globs: ["src/**"]
+			cmd: "builtin": do: "true"
+			dockerfile: busybox
+		}
+	}
+}
+_d32_df:         (#dockerComposeGen & {project: _d32, depManifests: {}}).dockerfiles.build
+_d32_srcs:       strings.Contains(_d32_df, "FROM scratch AS build_srcs\nCOPY --from=build_ctxs /monorepo /monorepo\nCOPY --from=d32-setup_srcs /monorepo /monorepo\n") & true
+_d32_bayt:       strings.Contains(_d32_df, "FROM scratch AS build_bayt\nCOPY --from=build_bayt_ctxs /monorepo /monorepo\nCOPY --from=d32-setup_bayt /monorepo /monorepo\n") & true
+_d32_ctxs:       strings.Contains(_d32_df, "ARG BAYT_CLAMP=1\nRUN if") & true
+_d32_ctxs_clean: strings.Contains(strings.Split(_d32_df, "FROM scratch AS build_srcs")[0], "COPY --from=d32-setup_srcs") & false
